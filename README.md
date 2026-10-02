@@ -159,6 +159,37 @@ npm run dev                 # http://localhost:3000
 Baixe o ZIP em `/extension.zip` ou acesse `/extensao` no sistema. Depois, na extensão:
 **⚙️ Config → cole a URL do app** (ex.: `https://SEU-APP.vercel.app`).
 
+### Atualizar a extensão (uma instalação só)
+
+O Chrome **não permite** que uma extensão instalada por "Carregar sem compactação" se
+atualize sozinha (`update_url` é ignorado e o `.crx` próprio só funciona por política
+empresarial) — isso só existe para extensões publicadas na Chrome Web Store. Então o
+fluxo é: instala uma vez pelo ZIP e, daí em diante, a própria extensão avisa e atualiza.
+
+1. **Aviso**: ao abrir o popup e a cada ~6 h, o background consulta
+   `GET /api/extensao/versao?instalada=<versão>`; havendo versão nova, o ícone 🤖 ganha
+   um `!` e a aba ⚙️ mostra as novidades.
+2. **⚙️ Config → 🔄 Verificar**: mostra a versão instalada, a publicada e o changelog.
+3. **⚡ Atualizar**: abre `atualizar.html` (página da extensão, em aba — o seletor de
+   pastas não funciona dentro do popup). Na primeira vez o usuário escolhe a pasta que
+   carregou em `chrome://extensions`; o *handle* fica guardado no IndexedDB. A página
+   baixa `/extension-files.json`, grava os arquivos na pasta (o `manifest.json` por
+   último, para nunca misturar código novo com manifesto velho) e recarrega a extensão.
+   A permissão pode precisar ser reconfirmada com `requestPermission()` depois de
+   reiniciar o navegador — a própria página faz isso no clique de atualizar.
+4. **Fallback**: `⬇️ Baixar ZIP (manual)` em `/extension.zip` — extrair sobre a pasta e
+   clicar em "Recarregar" em `chrome://extensions`.
+
+Se a versão nova **adicionar `host_permissions`** (novos endereços do ComprasNet), o Chrome
+desativa a extensão ao recarregar e pede confirmação — é o comportamento esperado; basta
+ativar de novo em `chrome://extensions`. Sem permissões novas, o recarregamento é silencioso.
+
+`public/extension-files.json` é gerado junto com o ZIP por `scripts/build-extension.mjs`
+(texto ou base64 por arquivo) e é o que permite a atualização em um clique, sem baixar
+nada na mão. Ao publicar uma versão nova, suba **os dois**: `VERSAO_EXTENSAO` em
+`src/lib/extensao.ts` (com uma entrada em `NOVIDADES_EXTENSAO`) e `version` do
+`manifest.json` — o teste `tests/extensao.test.ts` falha se eles divergirem.
+
 ### Importar os itens da página (extensão → sistema)
 
 Além de preencher o ComprasNet, a extensão lê a lista de itens publicada na página

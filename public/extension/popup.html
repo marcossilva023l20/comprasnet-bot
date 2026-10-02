@@ -242,6 +242,22 @@
 
     <!-- Page status -->
     <div class="card">
+      <div class="card-title">🔄 Manter a extensão atualizada</div>
+      <div class="text-xs" style="line-height:1.8;">
+        O app é atualizado automaticamente; a extensão avisa quando existe versão nova
+        (no ícone 🤖 e na aba ⚙️). Para atualizar:<br>
+        <strong>1.</strong> Aba ⚙️ → <strong>🔄 Verificar</strong> (mostra a versão publicada e o que mudou)<br>
+        <strong>2.</strong> <strong>⚡ Atualizar</strong> → escolha a pasta da extensão na primeira vez<br>
+        <strong>3.</strong> Pronto: nas próximas vezes é só clicar em ⚡ Atualizar.
+      </div>
+      <div class="alert alert-info mt-2" style="margin-bottom:0;">
+        O Chrome não permite que uma extensão carregada "sem compactação" se atualize sozinha.
+        A atualização em um clique grava os arquivos na pasta que você indicou — é o mais perto
+        de automático que o navegador permite sem publicar na Chrome Web Store.
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">📡 Status da Página</div>
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <span id="page-status-badge" class="status-badge status-idle">
@@ -255,6 +271,7 @@
       </div>
       <div id="page-read-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
       <div id="page-url" class="text-xs mt-2" style="color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+      <div id="update-notice" class="alert alert-warning hidden mt-2" role="status" aria-live="polite" style="cursor:pointer; margin-bottom:0;"></div>
     </div>
 
     <!-- Importar itens da página (extensão -> sistema) -->
@@ -369,6 +386,27 @@
       <div class="text-xs mt-2" style="color:#64748b;">
         Cole aqui a URL do seu app no Vercel (ou localhost:3000 para desenvolvimento).
       </div>
+    <!-- Atualizações da extensão -->
+    <div class="card">
+      <div class="card-title">🔄 Atualizações da extensão</div>
+      <div class="text-xs" style="line-height:1.7;">
+        Versão instalada: <strong id="versao-instalada">—</strong>
+        <span id="versao-publicada-wrap" class="hidden"> · publicada: <strong id="versao-publicada">—</strong></span>
+      </div>
+      <div id="update-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
+      <div id="update-novidades" class="hidden mt-2"></div>
+      <div class="grid-2 mt-2">
+        <button class="btn btn-outline btn-sm" id="btn-check-update" style="width:100%;">🔄 Verificar</button>
+        <button class="btn btn-primary btn-sm" id="btn-auto-update" style="width:100%;">⚡ Atualizar</button>
+      </div>
+      <button class="btn btn-outline btn-sm mt-2" id="btn-download-update" style="width:100%;">⬇️ Baixar ZIP (manual)</button>
+      <button class="btn btn-outline btn-sm mt-2" id="btn-reload-extension" style="width:100%;">♻️ Recarregar extensão</button>
+      <div class="text-xs mt-2">
+        O <strong>⚡ Atualizar</strong> abre uma página que grava os arquivos novos na própria pasta
+        (só pede a pasta na primeira vez). Se preferir, o ZIP manual continua disponível.
+      </div>
+    </div>
+
     </div>
 
     <div class="card">

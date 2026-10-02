@@ -34,7 +34,9 @@ export default function ExtensaoPage() {
           >
             ⬇️ Baixar comprasnet-bot.zip
           </a>
-          <p className="text-xs text-blue-300 mt-4">Compatível com Google Chrome, Microsoft Edge e Brave</p>
+          <p className="text-xs text-blue-300 mt-4">
+            Compatível com Google Chrome, Microsoft Edge e Brave · <strong>instalação única</strong>: depois disso, a própria extensão avisa e atualiza
+          </p>
         </div>
 
         {/* Install Steps */}
@@ -47,7 +49,7 @@ export default function ExtensaoPage() {
               { n: "3", title: "Abra as extensões do Chrome", desc: 'Acesse chrome://extensions ou Menu → Mais ferramentas → Extensões' },
               { n: "4", title: "Ative o Modo Desenvolvedor", desc: "Clique no toggle no canto superior direito da página" },
               { n: "5", title: 'Clique em "Carregar sem compactação"', desc: "Selecione a pasta extraída (comprasnet-bot)" },
-              { n: "6", title: "Pronto! ✅", desc: "O ícone 🤖 aparece na barra do Chrome" },
+              { n: "6", title: "Pronto! ✅", desc: "O ícone 🤖 aparece na barra do Chrome — e o ZIP nunca mais é necessário" },
             ].map((s) => (
               <div key={s.n} className="flex gap-3">
                 <span className="w-7 h-7 rounded-full bg-[#1351b4] text-white text-xs font-black flex items-center justify-center shrink-0">{s.n}</span>
@@ -81,6 +83,32 @@ export default function ExtensaoPage() {
           </div>
         </div>
 
+        {/* Como atualizar */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <h2 className="font-black text-slate-800 text-lg flex items-center gap-2">🔄 Como atualizar a extensão</h2>
+          <p className="text-sm text-slate-600">
+            Sempre que o sistema for atualizado, <strong>não é preciso baixar o ZIP outra vez</strong>. A extensão verifica a versão publicada
+            (o ícone 🤖 ganha um &quot;!&quot; quando há novidade) e atualiza em um clique:
+          </p>
+          <div className="grid md:grid-cols-3 gap-4">
+            {[
+              { n: "1", icon: "⚙️", title: "Abra o popup → ⚙️ Config", desc: 'Clique em "🔄 Verificar": a extensão mostra a versão publicada e o que mudou' },
+              { n: "2", icon: "⚡", title: 'Clique em "⚡ Atualizar"', desc: "Na primeira vez, escolha a pasta que você carregou em chrome://extensions (o Chrome pede essa permissão só uma vez)" },
+              { n: "3", icon: "♻️", title: "Recarregue", desc: "A extensão grava os arquivos novos na pasta e recarrega sozinha — pronto, está na versão mais recente" },
+            ].map((s) => (
+              <div key={s.n} className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <p className="font-bold text-slate-700 text-sm mb-1">{s.icon} {s.title}</p>
+                <p className="text-xs text-slate-500">{s.desc}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-3">
+            ℹ️ O Chrome não permite que uma extensão instalada &quot;sem compactação&quot; se atualize <em>sozinha</em> — isso só existe para extensões
+            publicadas na Chrome Web Store. Por isso o clique em <strong>⚡ Atualizar</strong> é necessário; ele grava os arquivos na sua pasta e
+            recarrega. O ZIP continua disponível como alternativa manual (baixe, extraia sobre a pasta e clique em &quot;Recarregar&quot;).
+          </p>
+        </div>
+
         {/* Config URL */}
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6">
           <h3 className="font-bold text-amber-800 mb-2 flex items-center gap-2">⚙️ Configurar URL do Sistema</h3>
@@ -110,6 +138,7 @@ export default function ExtensaoPage() {
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>
             <li>⚠️ Se aparecer CAPTCHA, resolva manualmente e continue</li>
             <li>⚠️ Se a extensão avisar que não encontrou &quot;Salvar&quot;, confira manualmente se o item foi gravado</li>
+            <li>🔄 <strong>Manter atualizada</strong>: aba ⚙️ → &quot;🔄 Verificar&quot; → &quot;⚡ Atualizar&quot; (a pasta da extensão é pedida só na primeira vez)</li>
             <li>🌐 Usando <strong>domínio próprio</strong> na Vercel? Adicione o endereço em <code className="bg-white/70 px-1 rounded">host_permissions</code> do <code className="bg-white/70 px-1 rounded">manifest.json</code> antes de carregar a extensão</li>
           </ul>
         </div>

@@ -1,0 +1,142 @@
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import {
+  NOVIDADES_EXTENSAO,
+  NOME_EXTENSAO,
+  VERSAO_EXTENSAO,
+  compararVersoes,
+  montarEstadoAtualizacao,
+  novidadesDesde,
+  versaoValida,
+} from "../src/lib/extensao";
+
+const raiz = path.join(__dirname, "..");
+const manifest = JSON.parse(
+  readFileSync(path.join(raiz, "public", "extension", "manifest.json"), "utf8"),
+) as { version: string; name: string };
+
+test("a versão do app bate com a do manifest da extensão", () => {
+  assert.equal(VERSAO_EXTENSAO, manifest.version);
+  assert.equal(NOME_EXTENSAO, manifest.name);
+  assert.ok(versaoValida(VERSAO_EXTENSAO), `versão inválida: ${VERSAO_EXTENSAO}`);
+});
+
+test("a versão mais recente tem novidades cadastradas", () => {
+  const maisRecente = [...NOVIDADES_EXTENSAO].sort((a, b) => compararVersoes(b.versao, a.versao))[0];
+  assert.equal(maisRecente.versao, VERSAO_EXTENSAO);
+  assert.ok(maisRecente.itens.length > 0);
+  for (const novidade of NOVIDADES_EXTENSAO) {
+    assert.ok(versaoValida(novidade.versao), `novidade com versão inválida: ${novidade.versao}`);
+  }
+});
+
+test("compararVersoes ordena corretamente", () => {
+  assert.equal(compararVersoes("1.4.0", "1.3.0"), 1);
+  assert.equal(compararVersoes("1.3.0", "1.4.0"), -1);
+  assert.equal(compararVersoes("1.4.0", "1.4.0"), 0);
+  // partes ausentes valem zero
+  assert.equal(compararVersoes("1.4", "1.4.0"), 0);
+  assert.equal(compararVersoes("1.10.0", "1.9.9"), 1);
+  // sufixos não numéricos são ignorados
+  assert.equal(compararVersoes("1.4.0-beta", "1.4.0"), 0);
+  // valores ausentes/inválidos contam como "muito antigos"
+  assert.equal(compararVersoes("1.0.0", null), 1);
+  assert.equal(compararVersoes(null, "1.0.0"), -1);
+  assert.equal(compararVersoes(undefined, undefined), 0);
+});
+
+test("versaoValida aceita 1 a 4 partes numéricas", () => {
+  assert.ok(versaoValida("1.4.0"));
+  assert.ok(versaoValida("2"));
+  assert.ok(versaoValida("1.4.0.0"));
+  assert.ok(!versaoValida("1.4.0-beta"));
+  assert.ok(!versaoValida("v1.4"));
+  assert.ok(!versaoValida(""));
+  assert.ok(!versaoValida(null));
+  assert.ok(!versaoValida(1.4));
+});
+
+test("novidadesDesde mostra só o que é mais novo que a versão instalada", () => {
+  const de13 = novidadesDesde("1.3.0").map((n) => n.versao);
+  assert.deepEqual(de13, ["1.4.0"]);
+
+  const de14 = novidadesDesde("1.4.0");
+  assert.equal(de14.length, 0);
+
+  // versão antiga vê o histórico inteiro, mais recente primeiro
+  const de12 = novidadesDesde("1.2.0").map((n) => n.versao);
+  assert.deepEqual(de12, ["1.4.0", "1.3.0"]);
+
+  // sem versão instalada, mostra tudo (a extensão decide o que fazer)
+  assert.equal(novidadesDesde(null).length, NOVIDADES_EXTENSAO.length);
+  assert.equal(novidadesDesde("1.9.9").length, 0);
+});
+
+test("montarEstadoAtualizacao descreve a atualização da extensão", () => {
+  const desatualizada = montarEstadoAtualizacao("1.3.0");
+  assert.equal(desatualizada.versao, VERSAO_EXTENSAO);
+  assert.equal(desatualizada.instalada, "1.3.0");
+  assert.ok(desatualizada.precisaAtualizar);
+  assert.ok(!desatualizada.adiantada);
+  assert.ok(desatualizada.novidades.length > 0);
+  assert.equal(desatualizada.zip.url, "/extension.zip");
+  assert.ok(desatualizada.zip.nome.startsWith("comprasnet-bot-extensao-"));
+  assert.equal(desatualizada.arquivosUrl, "/extension-files.json");
+
+  const emDia = montarEstadoAtualizacao(VERSAO_EXTENSAO);
+  assert.ok(!emDia.precisaAtualizar);
+  assert.ok(!emDia.adiantada);
+  assert.equal(emDia.novidades.length, 0);
+
+  const adiantada = montarEstadoAtualizacao("9.9.9");
+  assert.ok(!adiantada.precisaAtualizar);
+  assert.ok(adiantada.adiantada);
+
+  const semVersao = montarEstadoAtualizacao(null);
+  assert.equal(semVersao.instalada, null);
+  assert.ok(semVersao.precisaAtualizar);
+  assert.equal(semVersao.novidades.length, NOVIDADES_EXTENSAO.length);
+
+  const invalida = montarEstadoAtualizacao("sei-la");
+  assert.equal(invalida.instalada, null);
+  assert.ok(invalida.precisaAtualizar);
+});
+
+test("o pacote de arquivos é gerado a partir do manifest e cobre todos os arquivos da extensão", () => {
+  const pacote = JSON.parse(
+    readFileSync(path.join(raiz, "public", "extension-files.json"), "utf8"),
+  ) as { nome: string; versao: string; arquivos: { caminho: string; texto?: string; base64?: string }[] };
+
+  assert.equal(pacote.versao, VERSAO_EXTENSAO);
+  assert.equal(pacote.nome, manifest.name);
+
+  const caminhos = pacote.arquivos.map((a) => a.caminho);
+  for (const obrigatorio of ["manifest.json", "content.js", "background.js", "popup.html", "popup.js", "atualizar.html", "atualizar.js"]) {
+    assert.ok(caminhos.includes(obrigatorio), `pacote sem ${obrigatorio}`);
+  }
+  // os ícones vão em base64, os demais arquivos em texto
+  assert.ok(pacote.arquivos.find((a) => a.caminho === "icon128.png")?.base64);
+  assert.ok(pacote.arquivos.find((a) => a.caminho === "manifest.json")?.texto);
+  for (const arquivo of pacote.arquivos) {
+    assert.ok(arquivo.texto !== undefined || arquivo.base64 !== undefined, `${arquivo.caminho} sem conteúdo`);
+  }
+});
+
+test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
+  // `pretest` roda scripts/build-extension.mjs, então este arquivo existe sempre
+  // que a suíte roda — e aqui garantimos que ele não ficou desatualizado.
+  const pacote = JSON.parse(
+    readFileSync(path.join(raiz, "public", "extension-files.json"), "utf8"),
+  ) as { arquivos: { caminho: string; texto?: string; base64?: string }[] };
+
+  const publicados = readdirSync(path.join(raiz, "public", "extension")).sort();
+  assert.deepEqual(pacote.arquivos.map((a) => a.caminho).sort(), publicados);
+
+  for (const arquivo of pacote.arquivos) {
+    const real = readFileSync(path.join(raiz, "public", "extension", arquivo.caminho));
+    const noPacote = arquivo.texto !== undefined ? Buffer.from(arquivo.texto, "utf8") : Buffer.from(arquivo.base64 as string, "base64");
+    assert.ok(real.equals(noPacote), `conteúdo de ${arquivo.caminho} difere do publicado`);
+  }
+});

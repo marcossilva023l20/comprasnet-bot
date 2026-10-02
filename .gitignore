@@ -38,5 +38,6 @@ next-env.d.ts
 
 # artefatos gerados no build
 public/extension.zip
+public/extension-files.json
 
 # as migrations SQL em drizzle/ sao versionadas (usadas pelo build na Vercel)

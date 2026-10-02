@@ -15,7 +15,8 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "pretest": "node scripts/build-extension.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",

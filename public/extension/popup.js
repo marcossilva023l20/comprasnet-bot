@@ -19,6 +19,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await getCurrentTab();
   checkPage();
   loadPropostas();
+  iniciarAtualizacoes();
 });
 
 /**
@@ -44,6 +45,14 @@ function bindEvents() {
   on("btn-send-items", "click", sendItemsToApp);
   on("import-confirmar", "change", updateEnvioState);
   on("btn-save-config", "click", saveConfig);
+  on("btn-check-update", "click", () => verificarAtualizacao({ silencioso: false }));
+  on("btn-auto-update", "click", abrirAtualizador);
+  on("btn-download-update", "click", () => {
+    if (!apiUrl) { alert("Configure a URL do sistema primeiro!"); return; }
+    chrome.tabs.create({ url: `${apiUrl}/extension.zip` });
+  });
+  on("btn-reload-extension", "click", () => chrome.runtime.reload());
+  on("update-notice", "click", abrirAtualizador);
   on("btn-open-app", "click", openApp);
   on("btn-open-comprasnet", "click", openComprasNet);
   on("api-url", "keydown", (e) => {
@@ -724,4 +733,109 @@ function addLog(type, msg) {
   line.textContent = `${time} ${type === "success" ? "✓" : type === "error" ? "✗" : type === "warn" ? "⚠" : "ℹ"} ${msg}`;
   area.appendChild(line);
   area.scrollTop = area.scrollHeight;
+}
+
+// ─── Atualização da extensão ─────────────────────────────────────────────────
+// O Chrome não permite que uma extensão "sem compactação" se atualize sozinha.
+// Então o combinado é: aqui o popup avisa (e o background pinta o badge 🤖),
+// e a página atualizar.html grava os arquivos novos na pasta da extensão.
+const VERSAO_INSTALADA = chrome.runtime.getManifest().version;
+
+function setUpdateStatus(tipo, html) {
+  const el = document.getElementById("update-status");
+  if (!el) return;
+  el.className = `alert alert-${tipo} mt-2`;
+  el.innerHTML = html;
+}
+
+function renderNovidades(novidades) {
+  const el = document.getElementById("update-novidades");
+  if (!el) return;
+  if (!Array.isArray(novidades) || novidades.length === 0) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = novidades
+    .map(
+      (n) => `
+      <div class="text-xs" style="margin-bottom:8px; line-height:1.6;">
+        <strong>Novidades da v${n.versao}</strong>
+        <ul style="padding-left:16px; margin-top:2px;">${(n.itens || [])
+          .map((i) => `<li>${i}</li>`)
+          .join("")}</ul>
+      </div>`,
+    )
+    .join("");
+}
+
+function mostrarAvisoAtualizacao(info) {
+  const el = document.getElementById("update-notice");
+  if (!el) return;
+  if (info?.precisaAtualizar) {
+    el.classList.remove("hidden");
+    el.textContent = `🔄 Versão ${info.versao} disponível — clique para atualizar (você tem a ${VERSAO_INSTALADA}).`;
+  } else {
+    el.classList.add("hidden");
+  }
+}
+
+async function verificarAtualizacao({ silencioso = true } = {}) {
+  const instalada = VERSAO_INSTALADA;
+  const elInstalada = document.getElementById("versao-instalada");
+  if (elInstalada) elInstalada.textContent = instalada;
+
+  if (!apiUrl) {
+    if (!silencioso) setUpdateStatus("warning", "Configure a URL do sistema acima para verificar atualizações.");
+    return null;
+  }
+
+  if (!silencioso) setUpdateStatus("info", "Consultando a versão publicada...");
+
+  try {
+    const res = await fetch(`${apiUrl}/api/extensao/versao?instalada=${encodeURIComponent(instalada)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const info = await res.json();
+
+    const wrap = document.getElementById("versao-publicada-wrap");
+    const elPublicada = document.getElementById("versao-publicada");
+    if (wrap) wrap.classList.remove("hidden");
+    if (elPublicada) elPublicada.textContent = info.versao;
+
+    renderNovidades(info.novidades);
+    await chrome.storage.local.set({ updateInfo: { ...info, em: Date.now() } });
+    mostrarAvisoAtualizacao(info);
+
+    if (info.precisaAtualizar) {
+      setUpdateStatus("warning", `Versão <strong>${info.versao}</strong> disponível. Clique em <strong>⚡ Atualizar</strong> (ou baixe o ZIP).`);
+      chrome.action.setBadgeText({ text: "!" });
+      chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
+    } else if (info.adiantada) {
+      setUpdateStatus("info", `Sua versão (${instalada}) é mais nova que a publicada (${info.versao}).`);
+    } else {
+      setUpdateStatus("success", `Tudo em dia: versão <strong>${instalada}</strong> é a mais recente. ✅`);
+      chrome.action.setBadgeText({ text: "" });
+    }
+    return info;
+  } catch (erro) {
+    if (silencioso) {
+      const { updateInfo } = await chrome.storage.local.get(["updateInfo"]);
+      if (updateInfo?.precisaAtualizar) mostrarAvisoAtualizacao(updateInfo);
+    } else {
+      setUpdateStatus("warning", `Não consegui consultar agora (${erro.message}). Tente de novo ou baixe o ZIP.`);
+    }
+    return null;
+  }
+}
+
+async function iniciarAtualizacoes() {
+  const { updateInfo } = await chrome.storage.local.get(["updateInfo"]);
+  if (updateInfo?.precisaAtualizar) mostrarAvisoAtualizacao(updateInfo);
+  await verificarAtualizacao({ silencioso: true });
+}
+
+function abrirAtualizador() {
+  if (!apiUrl) { alert("Configure a URL do sistema primeiro!"); return; }
+  chrome.tabs.create({ url: chrome.runtime.getURL("atualizar.html") });
+  window.close();
 }

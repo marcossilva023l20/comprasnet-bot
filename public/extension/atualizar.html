@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>Atualizar extensão — ComprasNet Bot</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #f0f4f8; color: #1a202c;
+    display: flex; justify-content: center; padding: 32px 16px;
+  }
+  .wrap { width: 100%; max-width: 620px; }
+  .card {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+    padding: 20px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  h2 { font-size: 14px; margin-bottom: 10px; color: #334155; }
+  p, li { font-size: 13px; line-height: 1.65; color: #475569; }
+  ol { padding-left: 20px; }
+  .btn {
+    border: none; border-radius: 10px; padding: 12px 18px; font-size: 14px;
+    font-weight: 700; cursor: pointer; font-family: inherit; width: 100%;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin-top: 10px;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: #1351b4; color: #fff; }
+  .btn-success { background: #168821; color: #fff; }
+  .btn-outline { background: #fff; color: #1351b4; border: 1.5px solid #1351b4; }
+  .status { margin-top: 12px; padding: 12px; border-radius: 10px; font-size: 13px; line-height: 1.6; display: none; }
+  .status.show { display: block; }
+  .status-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .status-ok { background: #f0fdf4; border: 1px solid #bbf7d0; color: #14532d; }
+  .status-warn { background: #fef9c3; border: 1px solid #fde68a; color: #92400e; }
+  .status-error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+  .versao { font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 5px; }
+  .log { font-family: monospace; font-size: 12px; background: #0f172a; color: #cbd5e1;
+         border-radius: 10px; padding: 12px; margin-top: 12px; max-height: 220px; overflow: auto;
+         white-space: pre-wrap; display: none; }
+  .log.show { display: block; }
+  .muted { color: #94a3b8; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>🔄 Atualizar extensão</h1>
+      <p class="muted">
+        Versão instalada: <span class="versao" id="versao-instalada">—</span>
+        · versão publicada: <span class="versao" id="versao-publicada">—</span>
+      </p>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>Passo 1 — Conectar a pasta da extensão <span class="muted">(só na primeira vez)</span></h2>
+      <p>
+        Escolha a <strong>mesma pasta</strong> que você carregou em <code>chrome://extensions</code>
+        (a que contém o <code>manifest.json</code>). O Chrome vai pedir permissão de leitura e escrita —
+        é assim que a extensão consegue se atualizar sozinha depois.
+      </p>
+      <button class="btn btn-outline" id="btn-conectar">📂 Conectar pasta da extensão</button>
+      <p class="muted" id="pasta-atual" style="margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
+      <h2>Passo 2 — Atualizar</h2>
+      <p>
+        A extensão baixa os arquivos da versão publicada, grava na pasta conectada e recarrega
+        automaticamente. <strong>Nada mais precisa ser baixado ou descompactado.</strong>
+      </p>
+      <button class="btn btn-success" id="btn-atualizar" disabled>⚡ Atualizar agora</button>
+      <button class="btn btn-primary" id="btn-baixar" style="display:none;">⬇️ Baixar ZIP (alternativa manual)</button>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="card">
+      <h2>Se algo der errado</h2>
+      <ol>
+        <li>Desconecte/reconecte a pasta no passo 1 (o Chrome pode pedir a permissão de novo).</li>
+        <li>Ou use o <strong>⬇️ Baixar ZIP</strong>, extraia <em>sobre</em> a pasta da extensão e clique em “Recarregar” em <code>chrome://extensions</code>.</li>
+        <li>Se uma atualização <strong>adicionar permissões novas</strong> (endereços do ComprasNet, etc.), o Chrome pode desativar a extensão e mostrar um aviso: clique em <strong>“Ativar”</strong> / confirme as permissões e depois em “Recarregar”.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script src="atualizar.js"></script>
+</body>
+</html>
