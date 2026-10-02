@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.3";
+export const VERSAO_EXTENSAO = "1.5.4";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.4",
+    itens: [
+      "Botão \"📋 Copiar relatório\" no popup: envie o relatório do salvamento para o suporte",
+      "Relatório do salvamento mostra o valor que ficou em cada campo da página",
+    ],
+  },
   {
     versao: "1.5.3",
     itens: [

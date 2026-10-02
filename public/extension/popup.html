@@ -197,6 +197,7 @@
 
   .text-xs { font-size: 11px; color: #64748b; line-height: 1.5; }
   .text-center { text-align: center; }
+  .mt-1 { margin-top: 4px; }
   .mt-2 { margin-top: 8px; }
   .gap-2 { gap: 8px; }
   .flex { display: flex; }
@@ -367,6 +368,9 @@
 
       <!-- Log -->
       <div class="log-area" id="log-area" style="display:none;"></div>
+      <div class="mt-1" id="log-actions" style="display:none;">
+        <button class="btn btn-outline" id="copy-log-btn" type="button">📋 Copiar relatório</button>
+      </div>
 
       <div class="mt-2">
         <button class="btn btn-success" id="run-btn">

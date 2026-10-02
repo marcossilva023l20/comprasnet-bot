@@ -41,6 +41,7 @@ function bindEvents() {
   on("btn-clear-sel", "click", clearSel);
   on("run-btn", "click", runBot);
   on("stop-btn", "click", stopBot);
+  on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
   on("import-confirmar", "change", updateEnvioState);
@@ -770,9 +771,50 @@ function setProgress(current, total) {
     current === total ? "Concluído! ✅" : `Item ${current}/${total}`;
 }
 
+/** Copia o relatório do log (para mandar no suporte/diagnóstico). */
+async function copiarRelatorio() {
+  const area = document.getElementById("log-area");
+  const botao = document.getElementById("copy-log-btn");
+  if (!area || !botao) return;
+
+  const texto = area.innerText.trim();
+  if (!texto) return;
+
+  const avisar = (ok) => {
+    botao.textContent = ok ? "✅ Copiado!" : "⚠️ Não consegui copiar";
+    setTimeout(() => {
+      botao.textContent = "📋 Copiar relatório";
+    }, 2000);
+  };
+
+  try {
+    await navigator.clipboard.writeText(texto);
+    avisar(true);
+    return;
+  } catch (_) {
+    // popups antigos sem permissão de clipboard: cai no execCommand
+  }
+
+  try {
+    const campo = document.createElement("textarea");
+    campo.value = texto;
+    campo.style.position = "fixed";
+    campo.style.opacity = "0";
+    document.body.appendChild(campo);
+    campo.select();
+    const ok = document.execCommand("copy");
+    campo.remove();
+    avisar(ok);
+  } catch (_) {
+    avisar(false);
+  }
+}
+
 function addLog(type, msg) {
   const area = document.getElementById("log-area");
   if (!area) return;
+  const acoes = document.getElementById("log-actions");
+  if (acoes) acoes.style.display = "flex";
   const line = document.createElement("div");
   line.className = `log-${type}`;
   const time = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
