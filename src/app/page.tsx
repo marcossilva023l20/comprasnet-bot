@@ -6,22 +6,35 @@ import { NovaPropostaButton, ExcluirPropostaButton } from "@/components/Proposta
 
 export const dynamic = "force-dynamic";
 
+async function carregarPropostas() {
+  try {
+    return {
+      rows: await db
+        .select({
+          id: propostas.id,
+          numeroDispensa: propostas.numeroDispensa,
+          uasg: propostas.uasg,
+          objeto: propostas.objeto,
+          dataLimite: propostas.dataLimite,
+          status: propostas.status,
+          createdAt: propostas.createdAt,
+          totalItens: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id})`,
+          itensPreenchidos: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id} AND itens.valor_unitario IS NOT NULL AND itens.marca_fabricante IS NOT NULL AND itens.marca_fabricante <> '')`,
+          itensEnviados: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id} AND itens.enviado = true)`,
+        })
+        .from(propostas)
+        .orderBy(desc(propostas.createdAt)),
+      erro: null as string | null,
+    };
+  } catch (e) {
+    // Evita tela branca quando o banco ainda não foi configurado/migrado na Vercel.
+    console.error("Falha ao consultar o banco de dados:", e);
+    return { rows: [], erro: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export default async function HomePage() {
-  const rows = await db
-    .select({
-      id: propostas.id,
-      numeroDispensa: propostas.numeroDispensa,
-      uasg: propostas.uasg,
-      objeto: propostas.objeto,
-      dataLimite: propostas.dataLimite,
-      status: propostas.status,
-      createdAt: propostas.createdAt,
-      totalItens: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id})`,
-      itensPreenchidos: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id} AND itens.valor_unitario IS NOT NULL AND itens.marca_fabricante IS NOT NULL AND itens.marca_fabricante <> '')`,
-      itensEnviados: sql<number>`(SELECT COUNT(*) FROM itens WHERE itens.proposta_id = ${propostas.id} AND itens.enviado = true)`,
-    })
-    .from(propostas)
-    .orderBy(desc(propostas.createdAt));
+  const { rows, erro: erroBanco } = await carregarPropostas();
 
   const total = rows.length;
   const completas = rows.filter(r => Number(r.totalItens) > 0 && Number(r.totalItens) === Number(r.itensPreenchidos)).length;
@@ -100,10 +113,12 @@ export default async function HomePage() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold text-slate-800">Suas Propostas</h2>
-            <NovaPropostaButton />
+            {!erroBanco && <NovaPropostaButton />}
           </div>
 
-          {rows.length === 0 ? (
+          {erroBanco ? (
+            <DbError message={erroBanco} />
+          ) : rows.length === 0 ? (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-16 text-center">
               <div className="text-6xl mb-4">📂</div>
               <h3 className="text-lg font-bold text-slate-700 mb-2">Nenhuma proposta ainda</h3>
@@ -186,6 +201,52 @@ export default async function HomePage() {
           ComprasNet Bot · Sistema de Preenchimento Automático de Propostas · Compatível com Vercel + Neon + GitHub
         </div>
       </footer>
+    </div>
+  );
+}
+
+function DbError({ message }: { message: string }) {
+  const semUrl = /DATABASE_URL/i.test(message);
+  const tabelasFaltando = /relation|does not exist|tabela/i.test(message);
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded-2xl p-8">
+      <div className="text-4xl mb-3">🗄️</div>
+      <h3 className="text-lg font-bold text-red-800 mb-2">
+        Não foi possível consultar o banco de dados
+      </h3>
+      <p className="text-sm text-red-700 mb-4">
+        {semUrl
+          ? "A variável de ambiente DATABASE_URL não está definida neste ambiente."
+          : tabelasFaltando
+            ? "A conexão funciona, mas as tabelas ainda não existem no banco."
+            : "A conexão com o banco falhou. Confira a string de conexão do Neon."}
+      </p>
+      <ol className="text-sm text-red-800 list-decimal list-inside space-y-1.5 mb-4">
+        <li>
+          Vercel → <strong>Settings → Environment Variables</strong> → adicione{" "}
+          <code className="bg-white px-1 rounded">DATABASE_URL</code> com a string de conexão do Neon
+        </li>
+        <li>
+          Faça um <strong>Redeploy</strong> (Deployments → ⋯ → Redeploy) — o build aplica as
+          migrações automaticamente
+        </li>
+        <li>
+          Se preferir manualmente, rode{" "}
+          <code className="bg-white px-1 rounded">npm run db:migrate</code> com a mesma DATABASE_URL
+        </li>
+      </ol>
+      <pre className="bg-white border border-red-200 rounded-lg p-3 text-xs overflow-x-auto text-red-700 whitespace-pre-wrap">
+        {message}
+      </pre>
+      <div className="mt-4 flex gap-4 text-sm font-bold">
+        <Link href="/api/health" className="text-[#1351b4] hover:underline">
+          🩺 Ver /api/health
+        </Link>
+        <Link href="/deploy" className="text-[#1351b4] hover:underline">
+          📖 Tutorial de hospedagem
+        </Link>
+      </div>
     </div>
   );
 }
