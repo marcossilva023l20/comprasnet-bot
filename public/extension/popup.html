@@ -178,6 +178,9 @@
 
   /* Grid */
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .page-actions { display: flex; gap: 8px; }
+  .page-actions .btn { flex: 1; padding-left: 8px; padding-right: 8px; }
+  #page-read-status { margin-bottom: 0; }
 
   /* Stat box */
   .stat { text-align: center; background: #f8fafc; border-radius: 8px; padding: 8px; border: 1px solid #e2e8f0; }
@@ -245,8 +248,12 @@
           <span class="status-dot"></span>
           <span id="page-status-text">Verificando...</span>
         </span>
+      </div>
+      <div class="page-actions mt-2">
+        <button class="btn btn-primary btn-sm" id="btn-read-page" title="Localiza os campos de valor, marca e modelo nesta página">📖 Ler página</button>
         <button class="btn btn-outline btn-sm" id="btn-check-page">🔄 Verificar</button>
       </div>
+      <div id="page-read-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
       <div id="page-url" class="text-xs mt-2" style="color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
     </div>
 
@@ -355,20 +362,20 @@
       <div class="text-xs" style="line-height:1.8;">
         <strong>1.</strong> Configure a URL do sistema na aba ⚙️<br>
         <strong>2.</strong> No sistema, crie uma proposta e importe a planilha com os valores<br>
-        <strong>3.</strong> Acesse o ComprasNet → Cadastrar Propostas<br>
-        <strong>4.</strong> Abra este popup e selecione a proposta<br>
-        <strong>5.</strong> Clique em <strong>"Executar Bot"</strong><br>
-        <strong>6.</strong> O bot preenche automaticamente! ✅
+        <strong>3.</strong> Acesse o ComprasNet → Cadastrar Propostas e abra/expanda os itens<br>
+        <strong>4.</strong> Abra este popup, selecione a proposta e clique em <strong>"📖 Ler página"</strong><br>
+        <strong>5.</strong> Confira os campos encontrados e clique em <strong>"Executar Bot"</strong><br>
+        <strong>6.</strong> O bot preenche somente os campos identificados para cada item. ✅
       </div>
     </div>
 
     <div class="card">
       <div class="card-title">⚠️ Importante</div>
       <div class="alert alert-warning">
-        O bot preenche os campos visíveis na tela. Certifique-se de estar na página correta do ComprasNet antes de executar.
+        Antes de executar, use <strong>"Ler página"</strong> para conferir se valor, marca e modelo foram reconhecidos. O bot não preenche campos que não conseguiu associar com segurança ao item.
       </div>
       <div class="alert alert-info">
-        Se a página usar frames (iframes), role até os itens ficarem visíveis na tela antes de executar.
+        Expanda os itens antes da leitura. O leitor também verifica iframes da mesma origem; frames externos podem não ser acessíveis pelo navegador.
       </div>
     </div>
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Preenche automaticamente as propostas de licitação no ComprasNet a partir da planilha importada.",
   "permissions": [
     "activeTab",
@@ -11,7 +11,11 @@
   ],
   "host_permissions": [
     "https://www.comprasnet.gov.br/*",
+    "https://*.comprasnet.gov.br/*",
     "https://cnetmobile.estaleiro.serpro.gov.br/*",
+    "https://compras.gov.br/*",
+    "https://*.compras.gov.br/*",
+    "https://www.gov.br/compras*",
     "http://localhost:3000/*",
     "https://*.vercel.app/*",
     "https://*.neon.tech/*"
@@ -28,7 +32,11 @@
     {
       "matches": [
         "https://www.comprasnet.gov.br/*",
-        "https://cnetmobile.estaleiro.serpro.gov.br/*"
+        "https://*.comprasnet.gov.br/*",
+        "https://cnetmobile.estaleiro.serpro.gov.br/*",
+        "https://compras.gov.br/*",
+        "https://*.compras.gov.br/*",
+        "https://www.gov.br/compras*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
