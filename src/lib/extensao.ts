@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.6";
+export const VERSAO_EXTENSAO = "1.7.7";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,16 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.7",
+    itens: [
+      "O valor unitário é lançado UMA vez só: o bot parou de limpar e reescrever o campo depois de preenchido — antes, quando o portal não 'acordava' com o valor, o bot lançava de novo e o valor aparecia duas vezes",
+      "O valor agora fica sempre com 4 casas decimais no portal (ex.: 1.232,8000): o bot digita o texto completo, espera a máscara e só corrige a escala quando o campo realmente ficou com outro número",
+      "O bot confere primeiro se o campo já está com o valor certo: se estiver, ele não escreve nada — nada de relançar por cima do que já foi lançado (inclusive ao rodar a mesma proposta de novo)",
+      "Ao cutucar o campo (Backspace + redigitar) para o portal contabilizar, se o valor for apagado pela máscara, o bot devolve o mesmo texto por atribuição direta, sem redigitar dígito por dígito",
+      "Zeros à esquerda não contam mais como dígito extra em máscaras de centavos (o campo '0,01' não é lido mais como dígito a mais)",
+    ],
+  },
   {
     versao: "1.7.6",
     itens: [
