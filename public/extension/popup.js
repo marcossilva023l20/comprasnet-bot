@@ -664,16 +664,38 @@ async function runBot() {
       // Relatório do Salvar, item a item (é o que diz se o site gravou).
       for (const registro of result.salvamentos || []) {
         if (registro.clicado && registro.confirmado) {
-          addLog("success", `💾 Item ${registro.item}: salvo (botão "${registro.botao}").`);
+          const via = registro.modal?.clicado
+            ? `confirmei na janela do site ("${registro.modal.botao}")`
+            : registro.mensagemSucesso
+              ? `o site mostrou "${registro.mensagemSucesso}"`
+              : `botão "${registro.botao}"`;
+          addLog("success", `💾 Item ${registro.item}: salvo${registro.tentativas > 1 ? " na 2ª tentativa" : ""} — ${via}.`);
         } else if (registro.clicado) {
+          const valores = registro.valores
+            ? Object.entries(registro.valores)
+                .map(([campo, valor]) => `${campo}="${valor || "(vazio)"}"`)
+                .join(", ")
+            : "";
+          const detalhes = [
+            registro.botaoPistas ? `botão: ${registro.botaoPistas}` : "",
+            valores ? `na página: ${valores}` : "",
+            registro.mensagens?.length ? `site mostrou: ${registro.mensagens.join(" | ")}` : "",
+            registro.diagnostico?.camposDoItem
+              ? `campos vazios no painel: ${registro.diagnostico.camposDoItem.vazios}/${registro.diagnostico.camposDoItem.total}`
+              : "",
+            registro.modal?.texto ? `janela do site: "${registro.modal.texto}"` : "",
+            registro.botaoHtml ? `HTML do botão: ${registro.botaoHtml}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
           addLog(
             "warn",
-            `💾 Item ${registro.item}: cliquei em "${registro.botao}", mas o site não confirmou${registro.motivo ? ` — ${registro.motivo}` : ""}. Marquei como enviado; confira na página.`,
+            `💾 Item ${registro.item}: cliquei ${registro.tentativas > 1 ? "2× " : ""}em "${registro.botao}" e o site não confirmou. Marquei como enviado; confira na página.${detalhes ? ` (${detalhes})` : ""}`,
           );
         } else {
           addLog(
             "error",
-            `💾 Item ${registro.item}: NÃO salvei — ${registro.motivo || "botão Salvar não encontrado"}. Não marquei como enviado.`,
+            `💾 Item ${registro.item}: NÃO salvei — ${registro.motivo || "botão Salvar não encontrado"}. Não marquei como enviado.${registro.botaoPistas ? ` (${registro.botaoPistas})` : ""}`,
           );
         }
       }

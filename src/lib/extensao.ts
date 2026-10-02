@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.2";
+export const VERSAO_EXTENSAO = "1.5.3";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,15 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.3",
+    itens: [
+      "Preenche digitando tecla a tecla (máscaras de R$ só aceitam assim) e confirma o valor com o site antes de salvar",
+      "Se o site não reage ao primeiro Salvar, tenta de novo (e informa as 2 tentativas)",
+      "Confirma também na janela do site quando ele pede \"Confirmar\" depois de Salvar",
+      "Diário do que aconteceu no popup: botão escolhido (id/classe), mensagens que o site mostrou e campos ainda vazios no painel",
+    ],
+  },
   {
     versao: "1.5.2",
     itens: [

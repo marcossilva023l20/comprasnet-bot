@@ -8,6 +8,9 @@
  *  6) Sem botão Salvar → não clicado, com motivo (e não entra em savedItems)
  *  7) Máscara recusa o valor digitado → campo não preenchido é reportado
  *  8) Salvar é um submit de formulário → envia UMA vez (sem salvamento duplicado)
+ *  9) Primeiro clique não pega (formulário ainda atualizando) → tenta de novo e salva
+ * 10) Máscara de moeda que só aceita digitação tecla a tecla → preenche e salva
+ * 11) Site pede confirmação em janela ("Salvar" → "Confirmar") → confirma e salva
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -150,10 +153,12 @@ export async function rodarSalvar() {
   {
     const { eventos, enviar } = ambiente(pagina({ reacao: false }));
     const r = await enviar(preencher([1]));
-    checar(eventos.salvos.length === 1, "o clique aconteceu");
+    checar(eventos.salvos.length === 2, `clicou 2× (o site não reage) — cliques: ${eventos.salvos.length}`);
     checar(r.salvamentos[0].clicado === true && r.salvamentos[0].confirmado === false, "relatório: clicado, sem confirmação");
+    checar(r.salvamentos[0].tentativas === 2, "relatório: 2 tentativas");
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "entra em savedItems (o clique aconteceu)");
     checar(r.warnings.some((w) => /não confirmou/.test(w)), "avisa o usuário para conferir");
+    checar(r.salvamentos[0].botaoPistas?.includes("salvar1"), `diagnóstico traz o botão (${r.salvamentos[0].botaoPistas})`);
   }
 
   console.log("\n── 6) Sem botão Salvar nenhum ──");
@@ -224,6 +229,179 @@ export async function rodarSalvar() {
     checar(contagem.submits === 1, `o formulário foi enviado 1 vez (enviado ${contagem.submits}×)`);
     checar(r.salvamentos[0]?.clicado === true && r.salvamentos[0]?.confirmado === true, "relatório: clicado e confirmado pelo aviso");
     checar(window.document.querySelectorAll('[role="alert"]').length === 1, "não duplicou o salvamento");
+  }
+
+  console.log("\n── 9) Primeiro clique não pega (formulário recém-preenchido) ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const contagem = { cliques: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          contagem.cliques += 1;
+          if (contagem.cliques === 1) return; // 1º clique: o site ainda não estava pronto
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Proposta cadastrada com sucesso";
+          w.document.querySelector(".item").appendChild(aviso);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    checar(contagem.cliques === 2, `clicou 2× (${contagem.cliques})`);
+    checar(r.salvamentos[0]?.confirmado === true, `confirmado na 2ª tentativa (${r.salvamentos[0]?.mensagemSucesso})`);
+    checar(r.salvamentos[0]?.tentativas === 2, "relatório: 2 tentativas");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+    checar((window.document.querySelectorAll('[role="alert"]').length) === 1, "um único aviso (não duplicou)");
+  }
+
+  console.log("\n── 10) Máscara de moeda: só aceita digitação tecla a tecla ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" data-moeda="1" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvos: [] };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w, c) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+
+        // Máscara de moeda: aceita só tecla a tecla (data com um caractere);
+        // valor posto de uma vez é descartado, como nos portais com máscara.
+        const monetario = (digitos) => {
+          const n = Number(digitos || "0") / 100; // máscara de moeda: digita centavos
+          return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        };
+        w.document.querySelectorAll('input[data-moeda="1"]').forEach((input) => {
+          input.addEventListener("input", (e) => {
+            if (!e.data || e.data.length !== 1) {
+              input.value = "";
+              return;
+            }
+            const digitos = input.value.replace(/\D/g, "");
+            input.value = monetario(digitos);
+          });
+        });
+
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          const valor = w.document.getElementById("vu1").value;
+          if (!/\d/.test(valor)) return; // inválido: o site não salva
+          eventos.salvos.push(`salvar1:${valor}`);
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(aviso);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    const valor = window.document.getElementById("vu1").value;
+    checar(valor === "1.234,56", `a máscara formatou o valor digitado ("${valor}")`);
+    checar(eventos.salvos.length >= 1, `o site salvou com o valor digitado (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+  }
+
+  console.log("\n── 11) Janela de confirmação depois do Salvar ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+      <div id="modal" role="dialog" aria-modal="true" style="display:none">
+        <p>Confirma o cadastro da proposta do item 1?</p>
+        <button id="btn-cancelar-modal">Cancelar</button>
+        <button id="btn-confirmar-modal">Confirmar</button>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvos: [], cancelamentos: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w, c) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          w.document.getElementById("modal").style.display = "block";
+        });
+        w.document.getElementById("btn-cancelar-modal").addEventListener("click", () => {
+          eventos.cancelamentos += 1;
+          w.document.getElementById("modal").style.display = "none";
+        });
+        w.document.getElementById("btn-confirmar-modal").addEventListener("click", () => {
+          eventos.salvos.push("item1");
+          c.salvos.push("item1");
+          w.document.getElementById("modal").style.display = "none";
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Proposta cadastrada com sucesso";
+          w.document.querySelector(".item").appendChild(aviso);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    checar(eventos.cancelamentos === 0, "não clicou em Cancelar");
+    checar(eventos.salvos.length === 1, `confirmou na janela (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true, `relatório: confirmado (${r.salvamentos[0]?.mensagemSucesso || r.salvamentos[0]?.modal?.botao})`);
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+    checar(r.salvamentos[0]?.valores?.valorUnitario === "1234,56", `relatório traz os valores da página (${JSON.stringify(r.salvamentos[0]?.valores)})`);
   }
 
   return falhas;
