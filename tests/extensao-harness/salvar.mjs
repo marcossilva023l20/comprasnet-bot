@@ -20,6 +20,8 @@
  * 18) Valor unitário é lançado UMA vez só (não fica relançando o valor)
  * 19) Preenche na ordem do Item (1, 2, 3) e não pula item de painel devagar
  * 20) Velocidade turbo: 0,03s e o máximo (0,001s) preenchem igual e mais rápido
+ * 21) Máscara ASSÍNCRONA (Angular) em velocidade máxima: sem dígito duplicado
+ *     (1.232,8000 não pode virar 12.328,0000)
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1016,8 +1018,63 @@ export async function rodarSalvar() {
 
   console.log("\n── 20) Velocidade turbo (0,03s e 0,001s) preenche igual e mais rápido ──");
   {
+    // Página no formato do PORTAL (máscara que reage na própria tecla): é nela
+    // que a velocidade é medida, porque em campo sem máscara o bot espera um
+    // instante por dígito para não escrever antes da máscara (proteção contra
+    // o dígito duplicado do cenário 21).
+    const montarPortal = (casas) => {
+      const item = (n) => `
+        <section class="item" data-item="${n}">
+          <div class="cabecalho"><div class="numero">${n}</div><div class="titulo">ITEM ${n}</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 100,00</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes" style="display:none">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu${n}" class="entrada" placeholder="0,0000" />
+              <label>Marca/Fabricante</label><input id="mf${n}" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv${n}" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar${n}" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>`;
+      const html = `<!DOCTYPE html><html><body><h2>Itens</h2><div id="lista">${[1, 2, 3].map(item).join("\n")}</div></body></html>`;
+
+      const eventos = { salvos: [] };
+      const { window, enviar } = montarPagina(html, {
+        preparar: (w, c) => {
+          w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+            b.closest(".item").querySelector(".detalhes").style.display = "block";
+          }));
+          const formatar = (digitos) =>
+            (Number(digitos || "0") / 10 ** casas).toLocaleString("pt-BR", {
+              minimumFractionDigits: casas,
+              maximumFractionDigits: casas,
+            });
+          w.document.querySelectorAll("input[id^='vu']").forEach((campo) => {
+            campo.addEventListener("keydown", (e) => {
+              if (!/^[0-9]$/.test(e.key || "")) return;
+              campo.value = formatar((campo.value.replace(/\D/g, "") + e.key).slice(-12));
+            });
+          });
+          w.document.querySelectorAll("button[id^='salvar']").forEach((botao) => {
+            botao.addEventListener("click", () => {
+              eventos.salvos.push(botao.id);
+              c.salvos.push(botao.id);
+              const aviso = w.document.createElement("div");
+              aviso.setAttribute("role", "alert");
+              aviso.className = "alert alert-success";
+              aviso.textContent = "Item salvo com sucesso";
+              botao.closest(".item").appendChild(aviso);
+            });
+          });
+        },
+      });
+      return { window, eventos, enviar };
+    };
+
     const rodar = async (delay) => {
-      const { eventos, enviar } = ambiente(pagina({ itens: 3 }));
+      const { eventos, enviar } = montarPortal(4);
       const inicio = Date.now();
       const r = await enviar({
         action: "fill_items",
@@ -1077,6 +1134,127 @@ export async function rodarSalvar() {
       `0,001s mais rápido que 0,03s (${maximo.ms}ms vs ${turbo.ms}ms)`,
     );
     checar(maximo.ms < 3000, `0,001s rápido de verdade (${maximo.ms}ms para 3 itens)`);
+  }
+
+  console.log("\n── 21) Máscara assíncrona em velocidade máxima: um lançamento por dígito ──");
+  {
+    // Máscara do portal de verdade (Angular): ela reage à tecla de forma
+    // ASSÍNCRONA (aplicando o dígito depois, com o que está no campo). Em
+    // velocidade máxima o bot antigo inseria o dígito por conta própria antes de
+    // a máscara reagir — o dígito entrava duas vezes e 1.232,8000 virava
+    // 12.328,0000 (uma casa decimal a mais, como no print do usuário).
+    const montar = (atrasoMs) => {
+      const html = `<!DOCTYPE html><html><body>
+        <h2>Itens</h2>
+        <div id="lista">
+          <section class="item" data-item="1">
+            <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+              <div class="publicados">
+                <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">4</span></div>
+                <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 1.232,8000</span></div>
+              </div>
+              <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+            <div class="detalhes" style="display:none">
+              <div class="campos">
+                <label>Valor unitário (R$)</label><input id="vu1" class="entrada" placeholder="0,0000" />
+                <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+                <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+                <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+              </div>
+              <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+            </div>
+          </section>
+        </div>
+      </body></html>`;
+
+      const eventos = { salvos: [], recusas: 0 };
+      const { window, enviar } = montarPagina(html, {
+        preparar: (w) => {
+          w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+            b.closest(".item").querySelector(".detalhes").style.display = "block";
+          }));
+
+          const campo = w.document.getElementById("vu1");
+          const formatar = (digitos) =>
+            (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+              minimumFractionDigits: 4,
+              maximumFractionDigits: 4,
+            });
+
+          // Máscara assíncrona: a tecla é aplicada depois, em cima do que
+          // estiver no campo naquele momento (é o que duplicava o dígito quando
+          // o bot digitava por conta própria antes da máscara reagir).
+          campo.addEventListener("keydown", (e) => {
+            if (e.key === "Backspace") {
+              setTimeout(() => {
+                const digitos = campo.value.replace(/\D/g, "").slice(0, -1);
+                campo.value = formatar(digitos);
+              }, atrasoMs);
+              return;
+            }
+            if (!/^[0-9]$/.test(e.key || "")) return;
+            setTimeout(() => {
+              const digitos = campo.value.replace(/\D/g, "") + e.key;
+              campo.value = formatar(digitos.slice(-12));
+            }, atrasoMs);
+          });
+
+          w.document.getElementById("salvar1").addEventListener("click", () => {
+            const valor = campo.value;
+            if (!/\d/.test(valor) || valor.replace(/\D/g, "").length > 9) {
+              eventos.recusas += 1;
+              const erro = w.document.createElement("div");
+              erro.setAttribute("role", "alert");
+              erro.className = "alert alert-danger";
+              erro.textContent = 'O campo "Valor unitário" é inválido.';
+              w.document.querySelector(".item").appendChild(erro);
+              return;
+            }
+            eventos.salvos.push(valor);
+            const aviso = w.document.createElement("div");
+            aviso.setAttribute("role", "alert");
+            aviso.className = "alert alert-success";
+            aviso.textContent = "Item salvo com sucesso";
+            w.document.querySelector(".item").appendChild(aviso);
+          });
+        },
+      });
+      return { window, eventos, enviar };
+    };
+
+    const payload = {
+      action: "fill_items",
+      items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "Conforme TR", modeloVersao: "Conforme TR" }],
+    };
+
+    // a) velocidade máxima (0,001s)
+    {
+      const { window, eventos, enviar } = montar(0);
+      const r = await enviar({ ...payload, delay: 1 });
+      const valor = window.document.getElementById("vu1").value;
+      checar(valor === "1.232,8000", `0,001s: o campo ficou "1.232,8000" (${valor})`);
+      checar(
+        window.document.getElementById("vu1").value.replace(/\D/g, "") === "12328000",
+        `0,001s: dígitos corretos, sem dígito a mais (${window.document.getElementById("vu1").value.replace(/\D/g, "")})`,
+      );
+      checar(eventos.recusas === 0, `0,001s: o site não recusou nenhum salvamento (${eventos.recusas})`);
+      checar(eventos.salvos[0] === "1.232,8000", `0,001s: o site salvou 1.232,8000 (${JSON.stringify(eventos.salvos)})`);
+      checar(r.filled === 1 && !r.errors.length, `0,001s: item preenchido sem erro (${r.filled}; ${JSON.stringify(r.errors)})`);
+      checar(
+        r.salvamentos[0]?.lancamentos?.valorUnitario === 1,
+        `0,001s: valor lançado 1x (${JSON.stringify(r.salvamentos[0]?.lancamentos)})`,
+      );
+    }
+
+    // b) velocidade normal (1s) continua certa
+    {
+      const { window, eventos, enviar } = montar(0);
+      const r = await enviar({ ...payload, delay: 1000 });
+      const valor = window.document.getElementById("vu1").value;
+      checar(valor === "1.232,8000", `1s: o campo ficou "1.232,8000" (${valor})`);
+      checar(eventos.salvos[0] === "1.232,8000", `1s: o site salvou 1.232,8000 (${JSON.stringify(eventos.salvos)})`);
+      checar(r.filled === 1, `1s: item preenchido (${r.filled})`);
+    }
   }
 
   return falhas;

@@ -811,6 +811,77 @@ function mesmoNumero(a, b) {
   return Math.abs(a - b) < 1e-6;
 }
 
+/** Só os dígitos de um texto ("1.232,8000" → "12328000"), sem zeros à frente. */
+function digitosDoTexto(texto) {
+  return String(texto ?? "").replace(/\D/g, "").replace(/^0+/, "");
+}
+
+/** Espera o campo sair do valor atual (a máscara pode reagir depois da tecla). */
+async function esperarCampoMudar(input, valorAntes, tempoMs = ESPERA_REACAO_MASCARA) {
+  const limite = Date.now() + tempoMs;
+  while (Date.now() < limite) {
+    if (String(input.value ?? "") !== valorAntes) return true;
+    await pausaConferencia(12);
+  }
+  return String(input.value ?? "") !== valorAntes;
+}
+
+/** Espera o campo parar de mudar (a máscara terminou de aplicar a tecla). */
+async function esperarCampoParar(input, tempoMs = 150) {
+  const limite = Date.now() + tempoMs;
+  let anterior = String(input.value ?? "");
+  let iguais = 0;
+  while (Date.now() < limite) {
+    await pausaConferencia(12);
+    const agora = String(input.value ?? "");
+    if (agora === anterior) {
+      iguais += 1;
+      if (iguais >= 2) return true;
+    } else {
+      iguais = 0;
+      anterior = agora;
+    }
+  }
+  return false;
+}
+
+/**
+ * Confere se a máscara registrou exatamente os dígitos esperados até aqui.
+ *
+ * Se ela ainda não aplicou a tecla, espera. Se aplicou DUAS vezes (dígito a
+ * mais — foi o que transformou 1.232,8000 em 12.328,0000), devolve o campo ao
+ * texto certo: o que vale para a máscara é a sequência de dígitos, e ela
+ * reformata sozinha. É essa conferência que impede o lance duplicado em
+ * velocidade máxima, quando a máscara do portal reage depois da tecla.
+ */
+async function conciliarDigitos(input, textoEsperado, view) {
+  const esperados = digitosDoTexto(textoEsperado);
+  if (!esperados) return true;
+
+  const limite = Date.now() + ESPERA_REACAO_MASCARA;
+  while (Date.now() < limite) {
+    const atuais = digitosDoTexto(input.value);
+
+    if (atuais === esperados) return true;
+
+    if (atuais.length > esperados.length) {
+      // Dígito entrou duas vezes: volta ao texto certo (a máscara reformata).
+      aplicarValor(input, esperados, view);
+      disparar(input, "input", view, { data: esperados, inputType: "insertText" });
+      disparar(input, "change", view, { data: esperados });
+      await pausaConferencia(20);
+      const depois = digitosDoTexto(input.value);
+      if (depois === esperados) return true;
+      if (depois.length > esperados.length) return false;
+      continue;
+    }
+
+    await pausaConferencia(12); // a máscara ainda vai aplicar esta tecla
+  }
+
+  return digitosDoTexto(input.value) === esperados;
+}
+
 /** Valor com N casas no formato brasileiro ("44" → "44,0000"). */
 function comCasas(valor, casas) {
   const numero = typeof valor === "number" ? valor : valorNumerico(valor);
@@ -913,6 +984,9 @@ async function inserirTexto(input, texto, view) {
     const codigo = ch === " " ? "Space" : /[0-9]/.test(ch) ? `Digit${ch}` : /[a-z]/i.test(ch) ? `Key${ch.toUpperCase()}` : "";
     const tecla = { key: ch, code: codigo, char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
     const antesDaTecla = String(input.value ?? "");
+    // O que deveria estar lançado no campo depois desta tecla (guardado antes
+    // de qualquer escrita, para a conferência não usar um texto já alterado).
+    const textoEsperado = `${composto}${ch}`;
 
     disparar(input, "keydown", view, tecla);
     disparar(input, "keypress", view, tecla);
@@ -920,7 +994,18 @@ async function inserirTexto(input, texto, view) {
     // A própria máscara do site pode inserir o caractere ao ver a tecla (é o
     // caso do portal). Se o campo já mudou, NÃO inserimos de novo — era isso
     // que duplicava os dígitos (1 virava 11, 2 virava 22...).
-    if (String(input.value ?? "") === antesDaTecla) {
+    let mudou = String(input.value ?? "") !== antesDaTecla;
+
+    // Máscaras de framework (Angular) reagem DEPOIS da tecla. Em velocidade
+    // máxima inserir o dígito antes dela era o que fazia 1.232,8000 virar
+    // 12.328,0000 (um dígito a mais). Aqui damos esse tempo à máscara.
+    if (!mudou && /[0-9]/.test(ch)) {
+      // Janela curta: sai no mesmo instante se a máscara reagir. Máscaras que
+      // não reagem à tecla (só ao input) custam esta espera por dígito.
+      mudou = await esperarCampoMudar(input, antesDaTecla, ESPERA_TECLA_MASCARA);
+    }
+
+    if (!mudou) {
       let inseriu = false;
       if (podeInsertText) {
         try {
@@ -937,7 +1022,13 @@ async function inserirTexto(input, texto, view) {
     }
 
     disparar(input, "keyup", view, tecla);
+
+    // Confere o que a máscara registrou antes de mandar a próxima tecla.
+    // Se o dígito entrou duas vezes, o campo volta ao texto certo na hora.
+    const conciliou = await conciliarDigitos(input, textoEsperado, view);
     composto = String(input.value ?? composto);
+    if (!conciliou) return false;
+
     await pausaDigitacao();
   }
 
@@ -946,6 +1037,9 @@ async function inserirTexto(input, texto, view) {
 
 async function digitarDeVerdade(input, value, view) {
   limparCampo(input, view);
+  // Deixa a máscara terminar a limpeza: se a última tecla da tentativa anterior
+  // ainda estiver chegando, ela entraria no meio desta digitação.
+  await esperarCampoParar(input, 120);
   await inserirTexto(input, value, view);
   disparar(input, "change", view, { data: String(input.value ?? "") });
   return !campoVazio(input);
@@ -972,8 +1066,9 @@ async function cutucarCampo(input, view) {
   const antesDaTecla = String(input.value ?? "");
   disparar(input, "keydown", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
 
-  // Se a máscara do site já apagou ao ver a tecla, não apagamos de novo.
-  let apagou = String(input.value ?? "") !== antesDaTecla;
+  // Se a máscara do site já apagou ao ver a tecla, não apagamos de novo. Ela
+  // pode apagar DEPOIS (framework): damos esse tempo antes de mexer por conta.
+  let apagou = await esperarCampoMudar(input, antesDaTecla, 250);
   const doc = input.ownerDocument;
   if (!apagou && !input.isContentEditable && typeof doc.execCommand === "function") {
     try {
@@ -987,7 +1082,7 @@ async function cutucarCampo(input, view) {
     disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
   }
   disparar(input, "keyup", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
-  await pausa(40);
+  await esperarCampoParar(input, 150);
 
   // Redigita o caractere apagado (com as teclas reais do caractere).
   await inserirTexto(input, ultimo, view);
@@ -2962,6 +3057,8 @@ const FATOR_RITMO_MIN = 0.001; // 1000x mais rápido (pausa de 0,001s)
 const FATOR_RITMO_MAX = 4; // 4x mais devagar (≈ pausa de 4s)
 const TEXTO_LENTO = 12; // ms entre teclas na digitação (velocidade normal)
 const INTERVALO_MINIMO_CONFERENCIA = 20; // ms entre conferências do site
+const ESPERA_REACAO_MASCARA = 200; // ms de tolerância ao conciliar os dígitos
+const ESPERA_TECLA_MASCARA = 80; // ms esperando a máscara reagir (sai na hora)
 
 let fatorRitmo = 1;
 

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.5";
+export const VERSAO_EXTENSAO = "1.7.6";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.6",
+    itens: [
+      "Correção do valor unitário com uma casa a mais (1.232,8000 virava 12.328,0000): a máscara do portal reage DEPOIS da tecla e, em velocidade alta, o bot escrevia o dígito antes dela — o dígito entrava duas vezes",
+      "Agora o bot espera a máscara reagir antes de escrever e confere os dígitos a cada tecla; se o dígito entrar duas vezes, o campo é corrigido na hora",
+      "A verificação vale para qualquer velocidade, inclusive 0,001s",
+    ],
+  },
   {
     versao: "1.7.5",
     itens: [
