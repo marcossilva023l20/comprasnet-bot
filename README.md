@@ -199,8 +199,10 @@ e envia para o sistema — assim os itens deixam de ser digitados/planilhados à
 2. no popup, clique em **📥 Ler itens da página** — a extensão clica na **seta
    "mostrar detalhes"** de cada item (botões como "Favoritos" são reconhecidos e nunca
    clicados) para trazer a descrição completa; se a lista estiver atrás de um
-   **"Mostrar todos os itens"**, ela abre sozinha. A descrição resumida vem da coluna do
-   item e a detalhada, do painel que abre com a seta;
+   **"Mostrar todos os itens"**, ela abre sozinha. A descrição resumida vem da célula ao
+   lado do número do item (rótulos de botões, como "Adicionar aos favoritos", são
+   ignorados) e a detalhada, do painel que abre com a seta; quantidade, unidade e valor
+   estimado são lidos mesmo quando o rótulo e o valor ficam em áreas separadas;
 3. confira os itens lidos e o destino detectado (UASG / número da compra);
 4. marque a confirmação e clique em **⬆️ Enviar para o sistema**.
 

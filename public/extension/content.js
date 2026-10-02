@@ -683,11 +683,42 @@ const PAGE_LABELS = [
  * propósito: "PEÇA COM MARCA FABRICANTE DEFINIDA" continua sendo descrição.
  */
 const ROTULO_DE_CAMPO = new RegExp(
-  "^(?:valor\\s+unit[aá]rio(?:\\s*\\(\\s*r\\$\\s*\\))?|marca(?:\\s*\\/\\s*|\\s+)fabricante|" +
-    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|quantidade(?:\\s+solicitada)?|unidade(?:\\s+de\\s+fornecimento)?|" +
-    "descri[cç][aã]o(?:\\s+detalhada)?|termo\\s+de\\s+aceita[cç][aã]o)\\s*:?\\s*\\*?$",
+  "^(?:valor\\s+unit[aá]rio(?:\\s*\\(\\s*r\\$\\s*\\))?|valor\\s+total(?:\\s*\\(\\s*r\\$\\s*\\))?|" +
+    "valor\\s+estimado(?:\\s*\\(\\s*unit[aá]rio\\s*\\))?|marca(?:\\s*\\/\\s*|\\s+)fabricante|" +
+    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|quantidade(?:\\s+(?:solicitada|ofertada|total))?|" +
+    "unidade(?:\\s+(?:de\\s+)?(?:fornecimento|medida))?|descri[cç][aã]o(?:\\s+detalhada)?|" +
+    "termo\\s+de\\s+aceita[cç][aã]o|proposta\\s+n[aã]o\\s+cadastrada)\\s*:?\\s*\\*?$",
   "i",
 );
+
+/**
+ * Textos que são só rótulo de controle da tela (o `aria-label` do botão de
+ * coração, por exemplo, era lido como descrição do item).
+ */
+const TEXTO_DE_UI =
+  /^(?:(?:adicionar|remover|incluir|excluir|retirar)\s+(?:aos?|dos?|de)\s+(?:favoritos?|carrinho|lista)|favoritos?|(?:mostrar|ocultar|ver)\s+detalhes(?:\s+(?:do|de|da)\s+(?:item|itens))?)\.?$/i;
+
+/** Controles cujo texto/atributo é rótulo de interface, não conteúdo. */
+const CONTROLE_DE_UI =
+  'button, input, select, textarea, label, summary, svg, i, use, img, [role="button"], [role="link"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="tab"], a[href]';
+
+function ehRotuloDeUI(el) {
+  let controle;
+  try {
+    controle = el?.closest?.(CONTROLE_DE_UI) || null;
+  } catch (_) {
+    return false;
+  }
+  if (!controle) return false;
+
+  // Um link/linha que engloba o item inteiro (texto longo) pode conter a
+  // descrição — nesse caso o texto continua valendo.
+  if (controle.matches('a[href], [role="button"], [role="link"]')) {
+    const texto = (controle.textContent || "").replace(/\s+/g, " ").trim();
+    if (texto.length >= 60) return false;
+  }
+  return true;
+}
 
 /**
  * "Expandir/Mostrar todos os itens": algumas telas do ComprasNet só montam a
@@ -957,23 +988,61 @@ function findItemScope(bloco, todosOsBlocos) {
   return melhor;
 }
 
-function extractItemData(bloco, numero) {
-  const bruto = textoVisivel(bloco) || (bloco.textContent || "").replace(/\s+/g, " ").trim();
+/**
+ * Valor de um campo publicado pelo portal: procura o rótulo no DOM e lê o que
+ * vem logo depois dele (no próprio elemento, no irmão seguinte ou no pai).
+ * O texto corrido do bloco é o último recurso — o portal separa rótulo e valor
+ * em contêineres diferentes, e aí a busca por regex no texto falhava.
+ */
+function valorDoCampo(bloco, regexRotulo, regexValor) {
+  const completo = new RegExp(`${regexRotulo.source}\\s*:?\\s*(${regexValor.source})`, "i");
 
+  const rotulos = [];
+  for (const el of bloco.querySelectorAll("*")) {
+    const texto = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!texto || texto.length > 80) continue;
+    if (!regexRotulo.test(texto)) continue;
+    if (ehRotuloDeUI(el)) continue;
+    rotulos.push(el);
+  }
+  rotulos.sort((a, b) => elementDepth(b) - elementDepth(a));
+
+  for (const el of rotulos) {
+    for (const vizinho of [el, el.nextElementSibling, el.parentElement]) {
+      if (!vizinho) continue;
+      const encontrado = textoVisivel(vizinho).match(completo);
+      if (encontrado) return encontrado[1].trim();
+    }
+  }
+
+  const texto = textoVisivel(bloco) || (bloco.textContent || "").replace(/\s+/g, " ").trim();
+  const encontrado = texto.match(completo);
+  return encontrado ? encontrado[1].trim() : "";
+}
+
+function extractItemData(bloco, numero) {
   const quantidade =
-    firstMatch(bruto, /quantidade\s+solicitada\s*:?\s*([0-9][0-9.,]*)/i) || "";
+    valorDoCampo(bloco, /quantidade\s+(?:solicitada|ofertada)/i, /[0-9][0-9.,]*/) ||
+    valorDoCampo(bloco, /quantidade/i, /[0-9][0-9.,]*/);
   const unidade =
-    firstMatch(bruto, /unidade\s+(?:de\s+)?fornecimento\s*:?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24})/i) || "";
-  const valorEstimado =
-    firstMatch(bruto, /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?\s*:?\s*(R\$\s*[0-9][0-9.,]*|[0-9][0-9.,]*)/i) || "";
+    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?fornecimento/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?medida/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/);
+  const valorEstimado = valorDoCampo(
+    bloco,
+    /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?/i,
+    /(?:R\$\s*)?[0-9][0-9.,]*/,
+  );
 
   const trechos = collectCleanTexts(bloco);
   const resumo = collectCleanTexts(bloco, { ignorarDetalhes: true });
   const atributosResumo = collectAttributeTexts(bloco, { ignorarDetalhes: true });
-  const descricao = escolherDescricao(
-    resumo.length ? resumo : trechos,
-    atributosResumo.length ? atributosResumo : collectAttributeTexts(bloco),
-  );
+  const descricao =
+    descricaoDoCabecalho(bloco, numero) ||
+    escolherDescricao(
+      resumo.length ? resumo : trechos,
+      atributosResumo.length ? atributosResumo : collectAttributeTexts(bloco),
+      numero,
+    );
   const descricaoDetalhada = escolherDescricaoDetalhada(bloco, trechos, descricao);
 
   return {
@@ -1027,6 +1096,8 @@ function collectCleanTexts(bloco, { ignorarDetalhes = false } = {}) {
       if (!pai || !isVisible(pai)) continue;
       if (pai.tagName === "SCRIPT" || pai.tagName === "STYLE") continue;
       if (ignorarDetalhes && dentroDePainelDeDetalhes(pai)) continue;
+      // Rótulo de botão/ícone ("Adicionar aos favoritos") não é descrição.
+      if (ehRotuloDeUI(pai)) continue;
       adicionar(node.nodeValue);
     }
   } catch (_) {
@@ -1038,6 +1109,7 @@ function collectCleanTexts(bloco, { ignorarDetalhes = false } = {}) {
   for (const el of bloco.querySelectorAll("[title], [aria-label]")) {
     if (!isVisible(el)) continue;
     if (ignorarDetalhes && dentroDePainelDeDetalhes(el)) continue;
+    if (ehRotuloDeUI(el)) continue;
     adicionar(el.getAttribute("title"));
     adicionar(el.getAttribute("aria-label"));
   }
@@ -1051,6 +1123,7 @@ function collectAttributeTexts(el, { ignorarDetalhes = false } = {}) {
   for (const alvo of el.querySelectorAll("[title], [aria-label]")) {
     if (!isVisible(alvo)) continue;
     if (ignorarDetalhes && dentroDePainelDeDetalhes(alvo)) continue;
+    if (ehRotuloDeUI(alvo)) continue;
     for (const bruto of [alvo.getAttribute("title"), alvo.getAttribute("aria-label")]) {
       const texto = limparDescricao(bruto);
       if (!texto || texto.length < 8 || vistos.has(texto)) continue;
@@ -1073,6 +1146,7 @@ function limparDescricao(valor) {
   let texto = String(valor || "").replace(/\s+/g, " ").trim();
   if (!texto) return "";
   if (ROTULO_DE_CAMPO.test(texto)) return "";
+  if (TEXTO_DE_UI.test(texto)) return "";
 
   // Rótulos conhecidos ("Quantidade Solicitada: 4") saem, o valor fica.
   for (const regex of PAGE_LABELS) texto = texto.replace(new RegExp(regex.source, "gi"), " ");
@@ -1090,7 +1164,59 @@ function limparDescricao(valor) {
   return texto;
 }
 
-function escolherDescricao(trechos, atributos = []) {
+/** Corta o texto no primeiro rótulo conhecido ("FONE OUVIDO Quantidade..." → "FONE OUVIDO"). */
+function textoAntesDosRotulos(texto) {
+  let corte = texto.length;
+  for (const regex of PAGE_LABELS) {
+    const encontrado = new RegExp(regex.source, "i").exec(texto);
+    if (encontrado && encontrado.index < corte) corte = encontrado.index;
+  }
+  return texto.slice(0, corte);
+}
+
+/**
+ * Descrição do cabeçalho: o portal mostra o número do item numa célula e a
+ * descrição na célula seguinte ("1" | "FONE OUVIDO"). Lê pelo DOM, então
+ * funciona mesmo quando o texto corrido junta tudo.
+ */
+function descricaoDoCabecalho(bloco, numero) {
+  const alvo = String(numero || "").trim();
+  if (!/^\d{1,6}$/.test(alvo)) return "";
+
+  const soNumero = new RegExp(`^\\s*(?:item\\s*)?${alvo}\\s*[).:\\-–—]?\\s*$`, "i");
+  const numeros = [...bloco.querySelectorAll("*")].filter((el) => {
+    const texto = (el.textContent || "").replace(/\s+/g, " ").trim();
+    return texto.length <= 12 && soNumero.test(texto);
+  });
+  // O nó mais fundo é o próprio número; os ancestrais também "contêm só o número".
+  numeros.sort((a, b) => elementDepth(b) - elementDepth(a));
+
+  for (const el of numeros) {
+    let irmao = el.nextElementSibling || el.parentElement?.nextElementSibling || null;
+    for (let pulos = 0; irmao && pulos < 3; pulos += 1, irmao = irmao.nextElementSibling) {
+      if (ehRotuloDeUI(irmao)) continue;
+      const texto = limparDescricao(textoAntesDosRotulos(textoVisivel(irmao)));
+      if (!texto || texto.length < 3 || texto.length > 400) continue;
+      if (/^\d+(?:[.,]\d+)?$/.test(texto)) continue;
+      return texto;
+    }
+  }
+  return "";
+}
+
+function escolherDescricao(trechos, atributos = [], numero = "") {
+  // 1) Linha do item dentro de um único texto: "1 FONE OUVIDO".
+  const alvo = String(numero || "").trim();
+  if (/^\d{1,6}$/.test(alvo)) {
+    const daLinha = trechos
+      .map((texto) => texto.match(new RegExp(`^(?:item\\s*)?${alvo}\\s*[).:\\-–—|]*\\s+(\\S.*)$`, "i")))
+      .filter(Boolean)
+      .map((encontrado) => limparDescricao(textoAntesDosRotulos(encontrado[1].trim())))
+      .filter((texto) => texto.length >= 3 && /[A-Za-zÀ-ÿ]{3}/.test(texto))
+      .sort((a, b) => b.length - a.length)[0];
+    if (daLinha) return daLinha;
+  }
+
   const utilizaveis = trechos
     .filter((texto) => /[A-Za-zÀ-ÿ]{3}/.test(texto))
     .filter((texto) => texto.split(" ").length >= 2);

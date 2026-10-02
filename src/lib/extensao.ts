@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.0";
+export const VERSAO_EXTENSAO = "1.5.1";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.1",
+    itens: [
+      "Correção: a descrição do item não pega mais o texto de botões (\"Adicionar aos favoritos\")",
+      "Descrição lida da célula ao lado do número do item",
+      "Quantidade, unidade e valor estimado lidos mesmo quando o rótulo e o valor ficam em áreas separadas",
+    ],
+  },
   {
     versao: "1.5.0",
     itens: [
