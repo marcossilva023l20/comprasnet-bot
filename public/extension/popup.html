@@ -229,9 +229,9 @@
 
   <!-- TABS -->
   <div class="tabs">
-    <div class="tab active" id="tab-bot" onclick="showTab('bot')">🚀 Bot</div>
-    <div class="tab" id="tab-config" onclick="showTab('config')">⚙️ Config</div>
-    <div class="tab" id="tab-ajuda" onclick="showTab('ajuda')">❓ Ajuda</div>
+    <div class="tab active" id="tab-bot" data-action="tab" data-tab="bot">🚀 Bot</div>
+    <div class="tab" id="tab-config" data-action="tab" data-tab="config">⚙️ Config</div>
+    <div class="tab" id="tab-ajuda" data-action="tab" data-tab="ajuda">❓ Ajuda</div>
   </div>
 
   <!-- ══════════════════ TAB: BOT ══════════════════ -->
@@ -245,7 +245,7 @@
           <span class="status-dot"></span>
           <span id="page-status-text">Verificando...</span>
         </span>
-        <button class="btn btn-outline btn-sm" onclick="checkPage()">🔄 Verificar</button>
+        <button class="btn btn-outline btn-sm" id="btn-check-page">🔄 Verificar</button>
       </div>
       <div id="page-url" class="text-xs mt-2" style="color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
     </div>
@@ -255,7 +255,7 @@
       <div class="card-title">📋 Proposta a Preencher</div>
       <div class="field">
         <label>Selecione a Proposta</label>
-        <select id="proposta-select" onchange="loadItems()">
+        <select id="proposta-select">
           <option value="">-- Carregando propostas... --</option>
         </select>
       </div>
@@ -278,9 +278,9 @@
       <div class="card-title" style="justify-content:space-between;">
         <span>📦 Itens</span>
         <span style="display:flex;gap:4px;">
-          <button class="btn btn-outline btn-sm" onclick="selectAll()">Todos</button>
-          <button class="btn btn-outline btn-sm" onclick="selectFilled()">Prontos</button>
-          <button class="btn btn-outline btn-sm" onclick="clearSel()" style="color:#dc2626;border-color:#dc2626;">Limpar</button>
+          <button class="btn btn-outline btn-sm" id="btn-select-all">Todos</button>
+          <button class="btn btn-outline btn-sm" id="btn-select-filled">Prontos</button>
+          <button class="btn btn-outline btn-sm" id="btn-clear-sel" style="color:#dc2626;border-color:#dc2626;">Limpar</button>
         </span>
       </div>
       <div class="items-list" id="items-list"></div>
@@ -314,10 +314,10 @@
       <div class="log-area" id="log-area" style="display:none;"></div>
 
       <div class="mt-2">
-        <button class="btn btn-success" id="run-btn" onclick="runBot()">
+        <button class="btn btn-success" id="run-btn">
           🚀 Executar Bot (<span id="sel-count">0</span> itens)
         </button>
-        <button class="btn btn-danger" id="stop-btn" onclick="stopBot()" style="display:none; margin-top:8px;">
+        <button class="btn btn-danger" id="stop-btn" style="display:none; margin-top:8px;">
           ⏹ Parar
         </button>
       </div>
@@ -333,7 +333,7 @@
         <label>URL da sua instalação</label>
         <input type="url" id="api-url" placeholder="https://seu-app.vercel.app" />
       </div>
-      <button class="btn btn-primary" onclick="saveConfig()">💾 Salvar</button>
+      <button class="btn btn-primary" id="btn-save-config">💾 Salvar</button>
       <div class="text-xs mt-2" style="color:#64748b;">
         Cole aqui a URL do seu app no Vercel (ou localhost:3000 para desenvolvimento).
       </div>
@@ -342,8 +342,8 @@
     <div class="card">
       <div class="card-title">🔗 Links Rápidos</div>
       <div style="display:flex; flex-direction:column; gap:6px;">
-        <button class="btn btn-outline" onclick="openApp()">📊 Abrir Sistema</button>
-        <button class="btn btn-outline" onclick="openComprasNet()">🏛️ Abrir ComprasNet</button>
+        <button class="btn btn-outline" id="btn-open-app">📊 Abrir Sistema</button>
+        <button class="btn btn-outline" id="btn-open-comprasnet">🏛️ Abrir ComprasNet</button>
       </div>
     </div>
   </div>

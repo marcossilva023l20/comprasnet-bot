@@ -107,6 +107,7 @@ export default function ExtensaoPage() {
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>
             <li>⚠️ Se aparecer CAPTCHA, resolva manualmente e continue</li>
             <li>⚠️ Cada clique em &quot;Salvar&quot; é feito individualmente por item</li>
+            <li>🌐 Usando <strong>domínio próprio</strong> na Vercel? Adicione o endereço em <code className="bg-white/70 px-1 rounded">host_permissions</code> do <code className="bg-white/70 px-1 rounded">manifest.json</code> antes de carregar a extensão</li>
           </ul>
         </div>
       </main>

@@ -16,10 +16,37 @@ document.addEventListener("DOMContentLoaded", async () => {
   apiUrl = cfg.apiUrl || "";
   document.getElementById("api-url").value = apiUrl;
 
+  bindEvents();
   await getCurrentTab();
   checkPage();
   loadPropostas();
 });
+
+/**
+ * Manifest V3 bloqueia handlers inline (onclick="..."): a CSP da extensao
+ * so permite script-src 'self'. Entao todos os eventos sao ligados aqui.
+ */
+function bindEvents() {
+  document.querySelectorAll('[data-action="tab"]').forEach((el) => {
+    el.addEventListener("click", () => showTab(el.dataset.tab));
+  });
+
+  const on = (id, evt, fn) => document.getElementById(id)?.addEventListener(evt, fn);
+
+  on("btn-check-page", "click", checkPage);
+  on("proposta-select", "change", loadItems);
+  on("btn-select-all", "click", selectAll);
+  on("btn-select-filled", "click", selectFilled);
+  on("btn-clear-sel", "click", clearSel);
+  on("run-btn", "click", runBot);
+  on("stop-btn", "click", stopBot);
+  on("btn-save-config", "click", saveConfig);
+  on("btn-open-app", "click", openApp);
+  on("btn-open-comprasnet", "click", openComprasNet);
+  on("api-url", "keydown", (e) => {
+    if (e.key === "Enter") saveConfig();
+  });
+}
 
 async function getCurrentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -163,18 +190,37 @@ function renderItems() {
     row.className = `item-row${filled ? " filled" : ""}`;
     row.id = `item-row-${item.id}`;
     row.style.cursor = "pointer";
-    row.onclick = () => toggleItem(item.id);
+    row.addEventListener("click", () => toggleItem(item.id));
 
-    row.innerHTML = `
-      <input type="checkbox" ${sel ? "checked" : ""} onchange="toggleItem(${item.id})" onclick="event.stopPropagation()" />
-      <div class="item-num">${item.numeroItem}</div>
-      <div class="item-desc" title="${item.descricao}">${item.descricao}</div>
-      ${filled
-        ? `<div class="item-val">R$ ${parseFloat(item.valorUnitario).toFixed(2)}</div>`
-        : '<div style="font-size:10px;color:#dc2626;">sem valor</div>'
-      }
-      <div class="item-status">${filled ? "✅" : "⚠️"}</div>
-    `;
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = sel;
+    check.addEventListener("click", (e) => e.stopPropagation());
+    check.addEventListener("change", () => toggleItem(item.id));
+
+    const num = document.createElement("div");
+    num.className = "item-num";
+    num.textContent = item.numeroItem;
+
+    const desc = document.createElement("div");
+    desc.className = "item-desc";
+    desc.title = item.descricao || "";
+    desc.textContent = item.descricao || "";
+
+    const val = document.createElement("div");
+    if (filled) {
+      val.className = "item-val";
+      val.textContent = `R$ ${parseFloat(item.valorUnitario).toFixed(2)}`;
+    } else {
+      val.style.cssText = "font-size:10px;color:#dc2626;";
+      val.textContent = "sem valor";
+    }
+
+    const status = document.createElement("div");
+    status.className = "item-status";
+    status.textContent = filled ? "✅" : "⚠️";
+
+    row.append(check, num, desc, val, status);
     list.appendChild(row);
   });
 }
@@ -269,6 +315,10 @@ async function runBot() {
         result.errors.forEach((e) => addLog("error", e));
       }
       setProgress(result.filled, result.total);
+
+      // Devolve ao sistema quais itens realmente foram enviados no ComprasNet
+      const propostaId = document.getElementById("proposta-select").value;
+      await marcarEnviados(propostaId, result.filledItems || []);
     } else {
       addLog("error", result?.error || "Erro desconhecido");
     }
@@ -284,7 +334,40 @@ async function runBot() {
 
 function stopBot() {
   abortFlag = true;
-  addLog("warn", "Parando...");
+  addLog("warn", "Parando após o item atual...");
+  if (currentTab?.id) {
+    chrome.tabs.sendMessage(currentTab.id, { action: "stop" }).catch(() => {});
+  }
+}
+
+/**
+ * Marca no sistema os itens que o bot preencheu (campo `enviado`),
+ * para o painel mostrar o progresso real da proposta.
+ */
+async function marcarEnviados(propostaId, numeros) {
+  if (!propostaId || !apiUrl || !numeros?.length) return;
+
+  const alvos = allItems.filter((i) => numeros.includes(i.numeroItem) && !i.enviado);
+  if (alvos.length === 0) return;
+
+  let ok = 0;
+  for (const item of alvos) {
+    try {
+      const res = await fetch(`${apiUrl}/api/propostas/${propostaId}/itens/${item.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enviado: true }),
+      });
+      if (res.ok) {
+        item.enviado = true;
+        ok++;
+      }
+    } catch (_) {
+      // falha silenciosa: não atrapalha o resultado do preenchimento
+    }
+  }
+
+  if (ok > 0) addLog("info", `${ok} item(ns) marcado(s) como enviado(s) no sistema.`);
 }
 
 function formatValor(v) {

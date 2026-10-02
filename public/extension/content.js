@@ -3,10 +3,19 @@
  * Roda dentro das páginas do ComprasNet e preenche os campos.
  */
 
+// Flag de cancelamento (botão "Parar" do popup)
+let abortRequested = false;
+
 // Listen for messages from the popup/background
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "ping") {
     sendResponse({ ok: true, url: location.href });
+    return true;
+  }
+
+  if (msg.action === "stop") {
+    abortRequested = true;
+    sendResponse({ ok: true });
     return true;
   }
 
@@ -51,14 +60,22 @@ function detectPageItems() {
 async function fillItems(items, delayMs) {
   let filled = 0;
   const errors = [];
+  const filledItems = [];
+  abortRequested = false;
 
   showNotification(`🤖 Iniciando preenchimento de ${items.length} itens...`, "info");
 
   for (const item of items) {
+    if (abortRequested) {
+      showNotification("⏹ Parado pelo usuário.", "warning");
+      break;
+    }
+
     try {
       const ok = await fillSingleItem(item, delayMs);
       if (ok) {
         filled++;
+        filledItems.push(item.item);
         showProgressBar(filled, items.length);
       } else {
         errors.push(`Item ${item.item}: não encontrado na página`);
@@ -71,13 +88,15 @@ async function fillItems(items, delayMs) {
 
   removeProgressBar();
 
-  if (filled === items.length) {
+  if (abortRequested) {
+    showNotification(`⏹ Parado: ${filled} de ${items.length} itens preenchidos.`, "warning");
+  } else if (filled === items.length) {
     showNotification(`✅ ${filled} itens preenchidos com sucesso!`, "success");
   } else {
     showNotification(`⚠️ ${filled} de ${items.length} itens preenchidos. ${errors.length} erros.`, "warning");
   }
 
-  return { filled, total: items.length, errors };
+  return { filled, total: items.length, errors, filledItems, aborted: abortRequested };
 }
 
 // ─── Fill a single item ───────────────────────────────────────────────────────
