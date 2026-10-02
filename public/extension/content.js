@@ -2521,16 +2521,50 @@ function numerosNaPagina() {
   return numeros;
 }
 
-async function esperarListaMudar(antes, tempoMs = 5000) {
+async function esperarListaMudar(antes, tempoMs = 8000) {
   const limite = Date.now() + tempoMs;
+  let assinaturaEstavel = "";
+  let desdeEstavel = 0;
+
   while (Date.now() < limite) {
     await pausaConferencia(200);
-    if (assinaturaDaLista() !== antes) {
-      await pausaConferencia(250); // deixa o site terminar de montar os itens
-      return true;
+    const assinatura = assinaturaDaLista();
+
+    // Durante a troca de página o ComprasNet pode limpar a lista antes de
+    // buscar/montar os próximos itens. A lista vazia é uma transição, não a
+    // nova página: nunca a trate como sinal de que a navegação terminou.
+    if (!assinatura || assinatura === antes) {
+      assinaturaEstavel = "";
+      desdeEstavel = 0;
+      continue;
     }
+
+    // Aguarda a paginação terminar de inserir os cartões. Sem essa janela de
+    // estabilidade, o primeiro item da página podia ainda não estar no DOM e
+    // fillItems seguia para o próximo item, pulando-o.
+    if (assinatura !== assinaturaEstavel) {
+      assinaturaEstavel = assinatura;
+      desdeEstavel = Date.now();
+      continue;
+    }
+
+    if (Date.now() - desdeEstavel >= 400) return true;
   }
+
   return false;
+}
+
+/** Espera um item específico aparecer após a navegação para sua página. */
+async function esperarItemNaPagina(itemNumber, tempoMs = 2500) {
+  const chave = normalizeItemNumber(itemNumber);
+  if (!chave) return false;
+
+  const limite = Date.now() + tempoMs;
+  while (Date.now() < limite) {
+    if (numerosNaPagina().has(chave)) return true;
+    await pausaConferencia(150);
+  }
+  return numerosNaPagina().has(chave);
 }
 
 /** Vai para a página número `numero` (1, 2, 3...). */
@@ -2590,7 +2624,7 @@ async function irParaItem(itemNumber) {
 
   const tentarPagina = async (numero) => {
     if (!(await irParaPagina(numero))) return false;
-    return numerosNaPagina().has(chave);
+    return esperarItemNaPagina(chave);
   };
 
   // Já sabemos (ou o site informa) em que página ele estava.

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.13";
+export const VERSAO_EXTENSAO = "1.7.14";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.14",
+    itens: [
+      "Corrige a troca de página durante o preenchimento: espera os itens da próxima página aparecerem e estabilizarem antes de continuar, evitando pular o primeiro item",
+      "Ao localizar um item em uma página conhecida, aguarda o item estar presente no DOM antes de começar a preencher",
+      "Continua os itens na ordem crescente, passando da última linha de uma página para o primeiro item da seguinte",
+    ],
+  },
   {
     versao: "1.7.13",
     itens: [
