@@ -871,8 +871,18 @@ async function esperarDigitos(input, esperados, tempoMs = ESPERA_REACAO_MASCARA)
 
 /** As casas decimais que a máscara do campo usa (o portal usa 4). */
 function casasDaMascara(input) {
+  for (const atributo of ["data-casas", "data-decimals", "data-decimal-places"]) {
+    const declarado = Number(input?.getAttribute?.(atributo));
+    if (Number.isInteger(declarado) && declarado > 0 && declarado <= 6) return declarado;
+  }
+
   const doValor = casasDoTexto(input?.value) ?? casasDoTexto(input?.placeholder);
   if (Number.isFinite(doValor) && doValor > 0) return Math.min(6, doValor);
+
+  // Alguns componentes de moeda não informam as casas no placeholder, mas
+  // declaram que são moeda (normalmente duas casas).
+  const moeda = input?.getAttribute?.("data-moeda");
+  if (moeda && !/^(?:0|false|nao)$/i.test(moeda)) return 2;
   return CASAS_PADRAO;
 }
 
@@ -937,60 +947,93 @@ async function limparCampoComTeclas(input, view) {
 }
 
 /**
- * Digita o texto do valor, uma vez cada caractere, sem nunca escrever por cima.
+ * Digita o valor uma única vez e deixa a máscara do portal formatar os dígitos.
  *
- * - A máscara do portal costuma inserir o dígito ao ver a tecla; damos esse tempo
- *   a ela ANTES de escrever qualquer coisa por fora (era escrever antes dela que
- *   transformava 1.232,80 em 12.328,00).
- * - Se a máscara aplicar dígito a mais, a passada é abandonada e quem corrige é
- *   uma nova passada, do zero — nunca um remendo em cima do valor.
- * - A conferência é pelo NÚMERO quando o site formata (tem vírgula/ponto) e
- *   pelos DÍGITOS quando a máscara guarda os dígitos crus até o blur.
+ * Quando a máscara reage à tecla/input, não enviamos vírgula, ponto ou
+ * separador de milhar: nesses campos cada tecla numérica representa um dígito
+ * do valor e pontuação inserida por fora desloca a escala (por exemplo,
+ * 1,0000 podia virar 10,0000). Em campos sem máscara continuamos enviando o
+ * texto brasileiro completo.
  */
 async function digitarTextoDoValor(input, texto, alvo, view) {
-  const alvoDigitos = digitosDoTexto(texto);
+  let textoDigitado = texto;
+  let tipoMascara = null; // "keydown" ou "input", detectado na primeira tecla
   let escritas = 0;
-  let mascaraReagiu = false;
 
-  for (let i = 0; i < texto.length; i += 1) {
+  for (let i = 0; i < textoDigitado.length; i += 1) {
     if (abortRequested) {
       return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas };
     }
     await aguardarSePausado();
 
-    const ch = texto[i];
-    const esperados = digitosDoTexto(texto.slice(0, i + 1));
-    const antesDaTecla = String(input.value ?? "");
-    const tecla = { key: ch, code: /[0-9]/.test(ch) ? `Digit${ch}` : "", char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
+    const ch = textoDigitado[i];
+    const valorAntes = String(input.value ?? "");
+    const campoJaFormatado = casasDoTexto(valorAntes) !== null;
+    const mascaraOuValorFormatado = tipoMascara !== null || campoJaFormatado;
 
+    // Uma máscara de moeda só consome dígitos. Não lhe passe a pontuação do
+    // texto formatado: o próprio campo deve colocar a vírgula e os milhares.
+    if (mascaraOuValorFormatado && !/\d/.test(ch)) {
+      await pausaDigitacao();
+      continue;
+    }
+
+    const tecla = {
+      key: ch,
+      code: /[0-9]/.test(ch) ? `Digit${ch}` : "",
+      char: ch,
+      keyCode: ch.charCodeAt(0),
+      which: ch.charCodeAt(0),
+    };
     disparar(input, "keydown", view, tecla);
     disparar(input, "keypress", view, tecla);
 
-    // 1ª tecla: janela maior, para aprender como a máscara reage. Depois disso,
-    // 100ms bastam (e sai na hora quando ela reage à tecla).
-    const janela = mascaraReagiu ? ESPERA_TECLA_MASCARA : i === 0 ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA;
-    let mudou = await esperarCampoMudar(input, antesDaTecla, janela);
-    if (!mudou && i === 0) mudou = await esperarCampoMudar(input, antesDaTecla, ESPERA_TECLA_MASCARA);
-    if (mudou) mascaraReagiu = true;
+    const janela = tipoMascara ? ESPERA_TECLA_MASCARA : i === 0 ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA;
+    let mudou = await esperarCampoMudar(input, valorAntes, janela);
+    if (!mudou && i === 0) mudou = await esperarCampoMudar(input, valorAntes, ESPERA_TECLA_MASCARA);
 
-    if (!mudou) {
-      // Máscara que só reage ao evento de input: insere UMA vez, por fora.
-      let inseriu = false;
-      if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
-        try {
-          inseriu = input.ownerDocument.execCommand("insertText", false, ch);
-        } catch (_) {
-          inseriu = false;
+    if (mudou && /\d/.test(ch)) {
+      tipoMascara = "keydown";
+    } else if (!mudou) {
+      // Um zero no valor vazio/zero formatado já está representado pela
+      // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
+      const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
+      if (!zeroJaRepresentado && tipoMascara !== "keydown") {
+        let inseriu = false;
+        if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
+          try {
+            inseriu = input.ownerDocument.execCommand("insertText", false, ch);
+          } catch (_) {
+            inseriu = false;
+          }
+        }
+
+        const valorSemMascara = valorAntes + ch;
+        if (!inseriu) escreverDireto(input, valorSemMascara, view);
+        escritas += 1;
+        if (/\d/.test(ch) && String(input.value ?? "") !== valorSemMascara) {
+          tipoMascara = "input";
         }
       }
-      if (!inseriu) escreverDireto(input, antesDaTecla + ch, view);
-      escritas += 1;
     }
 
     disparar(input, "keyup", view, tecla);
 
-    // A máscara pode aplicar a tecla um pouco depois: espera ela refletir.
-    await esperarDigitos(input, esperados, mascaraReagiu ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA);
+    // Uma máscara de duas casas pode ser descoberta pelo primeiro resultado
+    // (0,01). Ajustamos a sequência antes de continuar, sem limpar/recomeçar.
+    if (i === 0 && tipoMascara) {
+      const casasVisiveis = casasDoTexto(input.value);
+      const casasPedidas = casasDoTexto(textoDigitado);
+      if (casasVisiveis && casasPedidas && casasVisiveis !== casasPedidas) {
+        const textoAjustado = comCasas(alvo, casasVisiveis);
+        if (textoAjustado[0] === textoDigitado[0] && mesmoNumero(valorNumerico(textoAjustado), alvo)) {
+          textoDigitado = textoAjustado;
+        }
+      }
+    }
+
+    const esperados = digitosDoTexto(textoDigitado.slice(0, i + 1));
+    await esperarDigitos(input, esperados, tipoMascara ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA);
 
     const atuais = digitosDoTexto(input.value);
     if (semZerosADireita(atuais).length > semZerosADireita(esperados).length) {
@@ -1008,9 +1051,10 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
   const textoFinal = String(input.value ?? "");
   const temSeparador = /\d[.,]\d/.test(textoFinal);
   const numero = valorNumerico(textoFinal);
+  const alvoDigitos = digitosDoTexto(textoDigitado);
   const ok = temSeparador
-    ? mesmoNumero(numero, alvo) // o site formatou: vale o número
-    : digitosIguais(digitosDoTexto(textoFinal), alvoDigitos) || mesmoNumero(numero, alvo); // dígitos crus (formata no blur)
+    ? mesmoNumero(numero, alvo)
+    : digitosIguais(digitosDoTexto(textoFinal), alvoDigitos) || mesmoNumero(numero, alvo);
 
   return {
     ok,
@@ -1021,58 +1065,36 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
 }
 
 /**
- * Escreve o valor no campo: UMA passada de limpeza + digitação, conferida.
- *
- * Se a máscara atrapalhar, faz no máximo mais UMA passada — sempre do zero
- * (limpa tudo com Backspace e digita de novo), nunca corrigindo por cima. É
- * isso que garante o valor lançado uma vez só, e não "lançado e relançado".
+ * Escreve e confere o valor em uma única passada. Se a máscara não aceitar a
+ * escala correta, interrompe o item em vez de apagar e lançar o valor de novo.
  */
 async function escreverValorNoCampo(input, alvo, casas, view) {
-  const digitosBase = Math.round(alvo * 10 ** casas);
-  let texto = comCasas(alvo, casas); // ex.: 1.232,80 → "1232,8000" (4 casas)
-  let ultimo = null;
-
-  for (let tentativa = 1; tentativa <= MAX_LANCAMENTOS_POR_CAMPO; tentativa += 1) {
-    const limpou = await limparCampoComTeclas(input, view);
-    if (!limpou) {
-      return {
-        ok: false,
-        motivo: "não consegui limpar o campo (nem com Backspace)",
-        tentativas: tentativa,
-        escritas: 0,
-        textoFinal: String(input.value ?? ""),
-        casasOk: false,
-      };
-    }
-
-    ultimo = await digitarTextoDoValor(input, texto, alvo, view);
-    ultimo.tentativas = tentativa;
-    contarLancamento(input);
-    if (ultimo.ok) break;
-
-    // Máscara leu os dígitos em outra escala (ex.: 2 casas em vez de 4)? Calcula
-    // os dígitos que ela espera e faz a última passada com eles.
-    const ficou = valorNumerico(ultimo.textoFinal);
-    if (tentativa === 1 && ficou !== null && alvo > 0) {
-      const potencia = Math.log10(ficou / alvo);
-      if (Math.abs(potencia) > 0.05 && Math.abs(potencia - Math.round(potencia)) < 0.05) {
-        // Dígitos crus: numa máscara de menos casas, digitar "0,4400" perderia
-        // zeros no caminho — dígito a dígito cada tecla vale um dígito.
-        texto = String(Math.round(digitosBase / 10 ** Math.round(potencia)));
-      }
-    }
+  const texto = comCasas(alvo, casas); // sem separador de milhar: "1000,0000"
+  const limpou = await limparCampoComTeclas(input, view);
+  if (!limpou) {
+    return {
+      ok: false,
+      motivo: "não consegui limpar o campo (nem com Backspace)",
+      tentativas: 1,
+      escritas: 0,
+      textoFinal: String(input.value ?? ""),
+      casasOk: false,
+    };
   }
+
+  const resultado = await digitarTextoDoValor(input, texto, alvo, view);
+  contarLancamento(input);
 
   const textoFinal = String(input.value ?? "");
   const temSeparador = /\d[.,]\d/.test(textoFinal);
   const casasFinais = casasDoTexto(textoFinal);
-
   return {
-    ...ultimo,
+    ...resultado,
+    tentativas: 1,
     textoFinal,
     casasFinais,
-    // O portal usa 4 casas. Se o campo tem separador e não fechou em 4 casas,
-    // o relatório avisa (pode ser máscara diferente da esperada).
+    // O portal usa 4 casas. Se o campo exibir outra escala, o relatório avisa;
+    // o bot não tenta reescrever o preço por cima.
     casasOk: !temSeparador || casasFinais === CASAS_PADRAO,
   };
 }
@@ -1459,7 +1481,6 @@ function lancamentosDoItem(fields) {
 }
 
 const CASAS_PADRAO = 4; // formato do portal: 44,0000
-const MAX_LANCAMENTOS_POR_CAMPO = 2; // 1 passada + no máximo 1 correção, sempre do zero
 
 async function setInputValue(input, rawValue, esperaNumero) {
   if (!input || !input.isConnected || !isFillable(input)) return false;

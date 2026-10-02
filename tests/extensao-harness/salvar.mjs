@@ -12,7 +12,7 @@
  * 10) Máscara de moeda que só aceita digitação tecla a tecla → preenche e salva
  * 11) Site pede confirmação em janela ("Salvar" → "Confirmar") → confirma e salva
  * 12) Máscara de 4 casas do portal ("44,0000") → é esse o valor que salva
- * 13) Máscara de 2 casas: o bot ajusta o formato para o valor ficar certo
+ * 13) Máscara de 2 casas: escala detectada na primeira tecla, sem relançar
  * 14) Formulário tipo Angular (ng-pristine): o reforço faz o site registrar o valor
  * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
  * 16) Portal só contabiliza com tecla real: o Backspace do bot faz o total sair de 0,0000
@@ -22,6 +22,8 @@
  * 20) Velocidade turbo: 0,03s e o máximo (0,001s) preenchem igual e mais rápido
  * 21) Máscara ASSÍNCRONA (Angular) em velocidade máxima: sem dígito duplicado
  *     (1.232,8000 não pode virar 12.328,0000)
+ * 22) Valores 1/10/100/1000/10000 mantêm quatro casas, lançam uma vez e
+ *     continuam preenchendo marca/fabricante e modelo/versão
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -880,8 +882,8 @@ export async function rodarSalvar() {
       checar(r.filled === 1, `item preenchido (${r.filled})`);
     }
 
-    // c) máscara de 2 casas: o bot corrige a escala em 1 correção (no máximo 2
-    //    lançamentos) em vez de ficar tentando formato por formato
+    // c) máscara de 2 casas: o bot identifica a escala na primeira tecla e
+    //    termina em uma única passada, sem limpar e relançar o valor.
     {
       const { window, eventos, enviar } = montar(2);
       const r = await enviar({
@@ -891,10 +893,10 @@ export async function rodarSalvar() {
       });
       const valor = window.document.getElementById("vu1").value;
       checar(valor === "1.232,80", `o valor virou "1.232,80" (${valor})`);
-      checar(eventos.limpezas === 1, `uma única correção de escala (limpezas: ${eventos.limpezas})`);
+      checar(eventos.limpezas === 0, `sem relançamento para corrigir a escala (limpezas: ${eventos.limpezas})`);
       checar(
-        r.salvamentos[0]?.lancamentos?.valorUnitario === 2,
-        `relatório: 2 lançamentos (1 + a correção da máscara) — ${JSON.stringify(r.salvamentos[0]?.lancamentos)}`,
+        r.salvamentos[0]?.lancamentos?.valorUnitario === 1,
+        `relatório: valor lançado uma vez (${JSON.stringify(r.salvamentos[0]?.lancamentos)})`,
       );
       checar(eventos.salvos[0] === "1.232,80", `o site salvou 1.232,80 (${JSON.stringify(eventos.salvos)})`);
       checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
@@ -1255,6 +1257,75 @@ export async function rodarSalvar() {
       checar(eventos.salvos[0] === "1.232,8000", `1s: o site salvou 1.232,8000 (${JSON.stringify(eventos.salvos)})`);
       checar(r.filled === 1, `1s: item preenchido (${r.filled})`);
     }
+  }
+
+  console.log("\n── 22) Valores inteiros preservam todos os dígitos e continuam nos outros campos ──");
+  {
+    const numeros = [1, 10, 100, 1000, 10000];
+    const item = (n) => `
+      <section class="item" data-item="${n}">
+        <div class="cabecalho"><div class="numero">${n}</div><div class="titulo">ITEM ${n}</div>
+          <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">1</span></div></div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes" style="display:none">
+          <label>Valor unitário (R$)</label><input id="vu${n}" placeholder="0,0000" />
+          <label>Marca/Fabricante</label><input id="mf${n}" />
+          <label>Modelo/Versão</label><input id="mv${n}" />
+          <button id="salvar${n}">Salvar</button>
+        </div>
+      </section>`;
+    const html = `<!DOCTYPE html><html><body><h2>Itens</h2><div id="lista">${numeros.map(item).join("")}</div></body></html>`;
+    const eventos = { salvos: [] };
+    const formatar = (digitos) => `${(Number(digitos || "0") / 10000).toFixed(4)}`.replace(".", ",");
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w, cliques) => {
+        w.document.querySelectorAll(".seta").forEach((botao) => botao.addEventListener("click", () => {
+          botao.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.querySelectorAll('input[id^="vu"]').forEach((campo) => campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace") {
+            campo.value = formatar(campo.value.replace(/\D/g, "").slice(0, -1));
+            return;
+          }
+          if (/^\d$/.test(event.key || "")) {
+            campo.value = formatar((campo.value.replace(/\D/g, "") + event.key).slice(-12));
+          }
+        }));
+        w.document.querySelectorAll('button[id^="salvar"]').forEach((botao) => botao.addEventListener("click", () => {
+          eventos.salvos.push(botao.closest(".item").querySelector('input[id^="vu"]').value);
+          cliques.salvos.push(botao.id);
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Item salvo com sucesso";
+          botao.closest(".item").appendChild(aviso);
+        }));
+      },
+    });
+
+    const itens = numeros.map((numero) => ({
+      item: numero,
+      valorUnitario: `${numero},0000`,
+      marcaFabricante: `Marca ${numero}`,
+      modeloVersao: `Modelo ${numero}`,
+    }));
+    const r = await enviar({ action: "fill_items", delay: 1, items: itens });
+
+    checar(r.filled === numeros.length && r.errors.length === 0, `preencheu sem erros (${r.filled}/${numeros.length}; ${JSON.stringify(r.errors)})`);
+    checar(JSON.stringify(r.savedItems) === JSON.stringify(numeros), `salvou os itens na ordem (${JSON.stringify(r.savedItems)})`);
+    checar(JSON.stringify(eventos.salvos) === JSON.stringify(numeros.map((numero) => `${numero},0000`)), `salvou os valores exatos (${JSON.stringify(eventos.salvos)})`);
+    for (const numero of numeros) {
+      const valor = window.document.getElementById(`vu${numero}`).value;
+      checar(valor === `${numero},0000`, `item ${numero}: valor unitário ${numero},0000 sem perder dígitos ("${valor}")`);
+      checar(window.document.getElementById(`vu${numero}`).value.replace(/\D/g, "") === `${numero}0000`, `item ${numero}: escala de 4 casas preservada`);
+      checar(window.document.getElementById(`mf${numero}`).value === `Marca ${numero}`, `item ${numero}: preencheu marca depois do valor`);
+      checar(window.document.getElementById(`mv${numero}`).value === `Modelo ${numero}`, `item ${numero}: preencheu modelo depois do valor`);
+    }
+    checar(
+      r.salvamentos.every((salvamento) => salvamento.lancamentos?.valorUnitario === 1),
+      `cada valor foi lançado uma única vez (${JSON.stringify(r.salvamentos.map((salvamento) => salvamento.lancamentos?.valorUnitario))})`,
+    );
   }
 
   return falhas;

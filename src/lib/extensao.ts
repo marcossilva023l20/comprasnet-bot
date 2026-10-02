@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.7";
+export const VERSAO_EXTENSAO = "1.7.8";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.8",
+    itens: [
+      "Correção da escala do valor unitário: a máscara recebe só os dígitos e mantém 4 casas (1,0000 · 10,0000 · 100,0000 · 1000,0000), sem deslocar ou duplicar números",
+      "O valor é lançado uma única vez; se a máscara não confirmar o número, o item não é salvo com valor errado",
+      "Depois do valor unitário, o preenchimento continua normalmente para marca/fabricante e modelo/versão",
+    ],
+  },
   {
     versao: "1.7.7",
     itens: [

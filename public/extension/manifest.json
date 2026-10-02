@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.7.7",
+  "version": "1.7.8",
   "description": "Lê os itens da página do ComprasNet (todas as páginas), preenche e SALVA cada item, com painel flutuante (Pausar/Parar) e atualização em um clique.",
   "permissions": [
     "activeTab",
