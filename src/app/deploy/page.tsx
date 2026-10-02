@@ -40,14 +40,15 @@ export default function DeployPage() {
         <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-2xl p-6">
           <div className="flex items-start gap-4 flex-wrap justify-between">
             <div>
-              <h2 className="text-lg font-black text-emerald-800 mb-1">✅ Opção pedida: fluxo sem PR</h2>
+              <h2 className="text-lg font-black text-emerald-800 mb-1">✅ Deploy automático sem PR</h2>
               <p className="text-sm text-emerald-700 max-w-3xl">
-                Este projeto já está configurado para <strong>publicar direto no <code>main</code></strong>.
-                Nada de pull request, nada de merge manual. O PR é pulado completamente.
+                Conecte o repositório ao Vercel e escolha a branch de produção (normalmente <code>main</code>).
+                Com a integração Git do Vercel ativa, cada push nessa branch publica uma nova versão — sem workflow
+                próprio do GitHub Actions e sem secrets extras no GitHub.
               </p>
             </div>
             <div className="bg-white border border-emerald-200 rounded-xl px-4 py-3 text-sm">
-              <p className="font-bold text-emerald-800">Depois da configuração inicial:</p>
+              <p className="font-bold text-emerald-800">Na branch de produção configurada:</p>
               <code className="text-emerald-700 font-mono text-xs">git push origin main</code>
             </div>
           </div>
@@ -194,36 +195,32 @@ git push -u origin main`}</Code>
 
         {/* Direct main flow */}
         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6">
-          <h3 className="font-bold text-emerald-800 mb-3 flex items-center gap-2">🚫 Sem PR — fluxo de publicação do zero</h3>
+          <h3 className="font-bold text-emerald-800 mb-3 flex items-center gap-2">🚫 Sem PR — deploy pela integração do Vercel</h3>
           <p className="text-emerald-700 text-sm mb-4">
-            Se o seu objetivo é <strong>nunca mais depender de PR</strong>, faça só isso uma vez:
+            Este repositório não contém um workflow de deploy do GitHub Actions. Para publicar sem PR, conecte o
+            repositório ao Vercel e defina a branch de produção em <strong>Project Settings → Git</strong>.
           </p>
 
           <div className="space-y-5">
             <div>
-              <p className="font-bold text-emerald-800 mb-2">Passo 1 — configurar o deploy automático no GitHub</p>
-              <p className="text-sm text-emerald-700 mb-2">
-                Este projeto já inclui o workflow <code>.github/workflows/deploy-main.yml</code>.
-                Você só precisa cadastrar 3 secrets no GitHub:
-              </p>
-              <Code dark={false}>{`VERCEL_TOKEN
-VERCEL_ORG_ID
-VERCEL_PROJECT_ID`}</Code>
-              <p className="text-xs text-emerald-700 mt-2">
-                Local: <strong>GitHub → Settings → Secrets and variables → Actions</strong>
+              <p className="font-bold text-emerald-800 mb-2">Passo 1 — verificar a integração Git</p>
+              <p className="text-sm text-emerald-700">
+                No painel do Vercel, confirme que o repositório está conectado e que a branch de produção está correta
+                (por exemplo, <code>main</code>). Não é preciso cadastrar <code>VERCEL_TOKEN</code>, <code>VERCEL_ORG_ID</code>
+                ou <code>VERCEL_PROJECT_ID</code> no GitHub para esse fluxo.
               </p>
             </div>
 
             <div>
-              <p className="font-bold text-emerald-800 mb-2">Passo 2 — publicar sempre direto no main</p>
+              <p className="font-bold text-emerald-800 mb-2">Passo 2 — publicar na branch configurada</p>
               <p className="text-sm text-emerald-700 mb-2">
-                Depois da configuração acima, qualquer atualização futura vira só isso:
+                Faça commit e push estando na branch de produção configurada no Vercel (o exemplo abaixo usa <code>main</code>):
               </p>
-              <Code dark={false}>{`git add .
+              <Code dark={false}>{`git add -A
 git commit -m "sua atualização"
 git push origin main`}</Code>
               <p className="text-sm text-emerald-700 mt-2">
-                Ou, se preferir, use o script já incluído no projeto:
+                O script opcional também verifica que você está na branch local <code>main</code> antes de enviar:
               </p>
               <Code dark={false}>{`bash scripts/publish-main.sh "sua atualização"`}</Code>
             </div>
@@ -234,14 +231,14 @@ git push origin main`}</Code>
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
           <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">🔄 Como Atualizar o Sistema</h3>
           <p className="text-blue-700 text-sm mb-3">
-            Com esse fluxo, toda vez que você fizer push no <code>main</code>, o GitHub Actions valida e publica em produção automaticamente.
+            Com o repositório conectado ao Vercel, cada push na branch de produção configurada inicia um deploy automaticamente.
           </p>
-          <Code dark={false}>{`git add .
+          <Code dark={false}>{`git add -A
 git commit -m "atualização"
 git push origin main
-# → GitHub Actions roda
-# → valida o projeto
-# → publica no Vercel em produção ✅`}</Code>
+# → Vercel recebe o push do Git
+# → build aplica migrações e compila o app
+# → deploy em produção ✅`}</Code>
         </div>
 
         {/* FAQ */}

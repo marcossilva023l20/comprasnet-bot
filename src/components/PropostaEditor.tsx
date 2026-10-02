@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { parseLocalizedNumber } from "@/lib/numbers";
 
 interface Item {
   id: number;
@@ -20,6 +20,25 @@ interface Item {
   updatedAt: Date;
 }
 
+interface EditItemForm {
+  numeroItem: string;
+  descricao: string;
+  descricaoDetalhada: string;
+  quantidade: string;
+  unidade: string;
+  valorEstimado: string;
+  valorUnitario: string;
+  marcaFabricante: string;
+  modeloVersao: string;
+}
+
+interface BulkItemDraft {
+  baseUpdatedAt: string;
+  valorUnitario: string;
+  marcaFabricante: string;
+  modeloVersao: string;
+}
+
 interface PropostaEditorProps {
   propostaId: number;
   initialItens: Item[];
@@ -33,6 +52,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [importLoading, setImportLoading] = useState(false);
   const [showAddItem, setShowAddItem] = useState(false);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [filter, setFilter] = useState<"all" | "filled" | "empty">("all");
@@ -58,14 +78,27 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (res.ok) {
-        const updated = await res.json();
-        setItems((p) => p.map((i) => (i.id === itemId ? updated : i)));
-        showToast("success", "Item salvo! ✓");
-      } else showToast("error", "Erro ao salvar");
-    } catch { showToast("error", "Erro de conexão"); }
-    finally { setSaving((p) => ({ ...p, [itemId]: false })); }
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        showToast("error", error?.error || "Erro ao salvar item");
+        return false;
+      }
+
+      const updated: Item = await res.json();
+      setItems((p) => p.map((i) => (i.id === itemId ? updated : i)).sort((a, b) => a.numeroItem - b.numeroItem));
+      showToast("success", "Item salvo! ✓");
+      return true;
+    } catch {
+      showToast("error", "Erro de conexão ao salvar item");
+      return false;
+    } finally {
+      setSaving((p) => ({ ...p, [itemId]: false }));
+    }
   }, [propostaId]);
+
+  const handleEditSave = async (itemId: number, data: Record<string, unknown>) => {
+    if (await handleSave(itemId, data)) setEditingItem(null);
+  };
 
   const handleDelete = async (itemId: number) => {
     if (!confirm("Excluir este item?")) return;
@@ -81,8 +114,8 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...newItem,
-        numeroItem: parseInt(newItem.numeroItem) || items.length + 1,
-        quantidade: parseFloat(newItem.quantidade) || 1,
+        numeroItem: parseInt(newItem.numeroItem, 10) || items.length + 1,
+        quantidade: newItem.quantidade,
       }),
     });
     if (res.ok) {
@@ -132,7 +165,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
     <div className="space-y-5">
       {/* Toast */}
       {toast && (
-        <div className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-xl shadow-lg text-white text-sm font-semibold flex items-center gap-2 ${toast.type === "success" ? "bg-green-600" : "bg-red-600"}`}>
+        <div className={`fixed top-5 right-5 z-[70] px-5 py-3 rounded-xl shadow-lg text-white text-sm font-semibold flex items-center gap-2 ${toast.type === "success" ? "bg-green-600" : "bg-red-600"}`}>
           {toast.type === "success" ? "✓" : "✗"} {toast.text}
         </div>
       )}
@@ -254,9 +287,19 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
         </div>
       )}
 
+      {editingItem && (
+        <EditItemModal
+          key={editingItem.id}
+          item={editingItem}
+          saving={!!saving[editingItem.id]}
+          onClose={() => setEditingItem(null)}
+          onSave={handleEditSave}
+        />
+      )}
+
       {/* Bulk Mode */}
       {bulkMode && items.length > 0 && (
-        <BulkTable items={items} propostaId={propostaId} onUpdate={setItems} onToast={showToast} />
+        <BulkTable items={items} propostaId={propostaId} onUpdate={setItems} onToast={showToast} onEdit={setEditingItem} />
       )}
 
       {/* Items List */}
@@ -291,12 +334,13 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
           ) : (
             filteredItems.map((item) => (
               <ItemCard
-                key={item.id}
+                key={`${item.id}-${item.updatedAt}`}
                 item={item}
                 isExpanded={expandedItem === item.id}
                 onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
                 onSave={handleSave}
                 onDelete={handleDelete}
+                onEdit={setEditingItem}
                 isSaving={!!saving[item.id]}
                 fmt={fmt}
               />
@@ -308,13 +352,194 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
   );
 }
 
+function EditItemModal({ item, saving, onClose, onSave }: {
+  item: Item;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (id: number, data: Record<string, unknown>) => void | Promise<void>;
+}) {
+  const [form, setForm] = useState<EditItemForm>(() => ({
+    numeroItem: String(item.numeroItem),
+    descricao: item.descricao,
+    descricaoDetalhada: item.descricaoDetalhada || "",
+    quantidade: item.quantidade,
+    unidade: item.unidade,
+    valorEstimado: item.valorEstimado || "",
+    valorUnitario: item.valorUnitario || "",
+    marcaFabricante: item.marcaFabricante || "",
+    modeloVersao: item.modeloVersao || "",
+  }));
+
+  const updateField = (field: keyof EditItemForm, value: string) =>
+    setForm((previous) => ({ ...previous, [field]: value }));
+  const inputClass = "w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white";
+
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSave(item.id, { ...form, numeroItem: Number(form.numeroItem) });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-item-title"
+        className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+      >
+        <div className="sticky top-0 z-10 bg-white border-b border-slate-100 px-5 sm:px-6 py-4 flex items-center justify-between">
+          <div>
+            <h2 id="edit-item-title" className="font-bold text-slate-800">Editar item {item.numeroItem}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Atualize os dados do item e salve as alterações.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            aria-label="Fechar edição"
+            className="text-slate-400 hover:text-slate-600 text-2xl leading-none disabled:opacity-50"
+          >
+            ×
+          </button>
+        </div>
+
+        <form onSubmit={submit} className="p-5 sm:p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="edit-item-number" className="block text-xs font-semibold text-slate-600 mb-1">Nº Item *</label>
+              <input
+                id="edit-item-number"
+                type="number"
+                min="0"
+                step="1"
+                required
+                value={form.numeroItem}
+                onChange={(event) => updateField("numeroItem", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-item-unit" className="block text-xs font-semibold text-slate-600 mb-1">Unidade *</label>
+              <input
+                id="edit-item-unit"
+                required
+                value={form.unidade}
+                onChange={(event) => updateField("unidade", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="edit-item-description" className="block text-xs font-semibold text-slate-600 mb-1">Descrição *</label>
+            <input
+              id="edit-item-description"
+              required
+              value={form.descricao}
+              onChange={(event) => updateField("descricao", event.target.value)}
+              className={inputClass}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="edit-item-detail" className="block text-xs font-semibold text-slate-600 mb-1">Descrição detalhada</label>
+            <textarea
+              id="edit-item-detail"
+              rows={3}
+              value={form.descricaoDetalhada}
+              onChange={(event) => updateField("descricaoDetalhada", event.target.value)}
+              className={`${inputClass} resize-y`}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label htmlFor="edit-item-quantity" className="block text-xs font-semibold text-slate-600 mb-1">Quantidade *</label>
+              <input
+                id="edit-item-quantity"
+                required
+                inputMode="decimal"
+                value={form.quantidade}
+                onChange={(event) => updateField("quantidade", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-item-estimated" className="block text-xs font-semibold text-slate-600 mb-1">Valor estimado (R$)</label>
+              <input
+                id="edit-item-estimated"
+                inputMode="decimal"
+                placeholder="0,00"
+                value={form.valorEstimado}
+                onChange={(event) => updateField("valorEstimado", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-item-price" className="block text-xs font-semibold text-slate-600 mb-1">Valor unitário (R$)</label>
+              <input
+                id="edit-item-price"
+                inputMode="decimal"
+                placeholder="0,00"
+                value={form.valorUnitario}
+                onChange={(event) => updateField("valorUnitario", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="edit-item-brand" className="block text-xs font-semibold text-slate-600 mb-1">Marca/Fabricante</label>
+              <input
+                id="edit-item-brand"
+                value={form.marcaFabricante}
+                onChange={(event) => updateField("marcaFabricante", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-item-model" className="block text-xs font-semibold text-slate-600 mb-1">Modelo/Versão</label>
+              <input
+                id="edit-item-model"
+                value={form.modeloVersao}
+                onChange={(event) => updateField("modeloVersao", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-6 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50"
+            >
+              {saving ? "⏳ Salvando..." : "💾 Salvar alterações"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 // ─── Item Card (ComprasNet style) ─────────────────────────────────────────────
-function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, isSaving, fmt }: {
+function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSaving, fmt }: {
   item: Item;
   isExpanded: boolean;
   onToggle: () => void;
-  onSave: (id: number, data: Record<string, unknown>) => void;
+  onSave: (id: number, data: Record<string, unknown>) => void | Promise<boolean>;
   onDelete: (id: number) => void;
+  onEdit: (item: Item) => void;
   isSaving: boolean;
   fmt: (v: string | null) => string;
 }) {
@@ -325,8 +550,9 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, isSaving, fmt 
   });
 
   const isFilled = !!(item.valorUnitario && item.marcaFabricante);
-  const valorTotal = vals.valorUnitario && item.quantidade
-    ? (parseFloat(vals.valorUnitario.replace(",", ".")) * parseFloat(item.quantidade))
+  const valorUnitarioNumerico = parseLocalizedNumber(vals.valorUnitario);
+  const valorTotal = valorUnitarioNumerico && item.quantidade
+    ? Number(valorUnitarioNumerico) * Number(item.quantidade)
     : 0;
 
   return (
@@ -345,8 +571,16 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, isSaving, fmt 
             {isFilled && <span className="text-green-600 font-semibold">R$ {parseFloat(item.valorUnitario!).toFixed(2)} · {item.marcaFabricante}</span>}
           </div>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isFilled ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={(event) => { event.stopPropagation(); onEdit(item); }}
+            className="border border-[#1351b4]/20 text-[#1351b4] hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
+            aria-label={`Editar item ${item.numeroItem}`}
+          >
+            ✏️ Editar item
+          </button>
+          <span className={`hidden sm:inline-flex text-xs font-bold px-2.5 py-1 rounded-full ${isFilled ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
             {isFilled ? "✓ Cadastrada" : "Não cadastrada"}
           </span>
           <svg className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -421,27 +655,46 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, isSaving, fmt 
 }
 
 // ─── Bulk Edit Table ──────────────────────────────────────────────────────────
-function BulkTable({ items, propostaId, onUpdate, onToast }: {
+function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
   items: Item[];
   propostaId: number;
   onUpdate: (items: Item[]) => void;
   onToast: (t: "success" | "error", msg: string) => void;
+  onEdit: (item: Item) => void;
 }) {
-  const [rows, setRows] = useState(items.map((i) => ({
-    id: i.id,
-    valorUnitario: i.valorUnitario || "",
-    marcaFabricante: i.marcaFabricante || "",
-    modeloVersao: i.modeloVersao || "",
-  })));
+  const [drafts, setDrafts] = useState<Record<number, BulkItemDraft>>({});
   const [saving, setSaving] = useState(false);
+  const rows = items.map((item) => {
+    const draft = drafts[item.id];
+    if (draft?.baseUpdatedAt === String(item.updatedAt)) return { id: item.id, ...draft };
+    return {
+      id: item.id,
+      valorUnitario: item.valorUnitario || "",
+      marcaFabricante: item.marcaFabricante || "",
+      modeloVersao: item.modeloVersao || "",
+    };
+  });
 
-  const change = (idx: number, field: string, val: string) =>
-    setRows((p) => p.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  const change = (item: Item, field: keyof Omit<BulkItemDraft, "baseUpdatedAt">, value: string) => {
+    const current = rows.find((row) => row.id === item.id);
+    if (!current) return;
+    setDrafts((previous) => ({
+      ...previous,
+      [item.id]: {
+        baseUpdatedAt: String(item.updatedAt),
+        valorUnitario: current.valorUnitario,
+        marcaFabricante: current.marcaFabricante,
+        modeloVersao: current.modeloVersao,
+        [field]: value,
+      },
+    }));
+  };
 
   const saveAll = async () => {
     setSaving(true);
     try {
       const updated = [...items];
+      let failed = 0;
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         const res = await fetch(`/api/propostas/${propostaId}/itens/${row.id}`, {
@@ -450,9 +703,15 @@ function BulkTable({ items, propostaId, onUpdate, onToast }: {
           body: JSON.stringify({ valorUnitario: row.valorUnitario || null, marcaFabricante: row.marcaFabricante || null, modeloVersao: row.modeloVersao || null }),
         });
         if (res.ok) updated[i] = await res.json();
+        else failed++;
       }
       onUpdate(updated);
-      onToast("success", `${rows.length} itens salvos!`);
+      if (failed === 0) {
+        setDrafts({});
+        onToast("success", `${rows.length} itens salvos!`);
+      } else {
+        onToast("error", `Falha ao salvar ${failed} item(ns). Confira os dados e tente novamente.`);
+      }
     } catch { onToast("error", "Erro ao salvar"); }
     finally { setSaving(false); }
   };
@@ -476,7 +735,8 @@ function BulkTable({ items, propostaId, onUpdate, onToast }: {
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-32">Valor Unitário *</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-40">Marca/Fabricante *</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-40">Modelo/Versão</th>
-              <th className="px-3 py-2.5 w-8"></th>
+              <th className="px-3 py-2.5 w-12 text-center font-semibold text-slate-500">Pronto</th>
+              <th className="px-3 py-2.5 w-32 text-center font-semibold text-slate-500">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -491,16 +751,26 @@ function BulkTable({ items, propostaId, onUpdate, onToast }: {
                   {item.valorEstimado ? parseFloat(item.valorEstimado).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(idx, "valorUnitario", e.target.value)} placeholder="0,00" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,00" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(idx, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(idx, "modeloVersao", e.target.value)} placeholder="Modelo" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(item, "modeloVersao", e.target.value)} placeholder="Modelo" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2 text-center text-base">
                   {rows[idx]?.valorUnitario && rows[idx]?.marcaFabricante ? "✅" : "⚠️"}
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => onEdit(item)}
+                    className="border border-[#1351b4]/20 text-[#1351b4] hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
+                    aria-label={`Editar item ${item.numeroItem}`}
+                  >
+                    ✏️ Editar item
+                  </button>
                 </td>
               </tr>
             ))}
