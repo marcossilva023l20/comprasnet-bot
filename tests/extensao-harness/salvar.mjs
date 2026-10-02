@@ -19,6 +19,7 @@
  * 17) Máscara que insere na própria tecla (keydown) → os dígitos NÃO duplicam
  * 18) Valor unitário é lançado UMA vez só (não fica relançando o valor)
  * 19) Preenche na ordem do Item (1, 2, 3) e não pula item de painel devagar
+ * 20) Velocidade turbo (0,03s): preenche igual e bem mais rápido que 1s
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1011,6 +1012,49 @@ export async function rodarSalvar() {
     checar(valor(1) === "11,0000", `item 1 ficou com o valor do item 1 (${valor(1)})`);
     checar(valor(2) === "22,0000", `item 2 ficou com o valor do item 2 (${valor(2)})`);
     checar(valor(3) === "33,0000", `item 3 ficou com o valor do item 3 (${valor(3)})`);
+  }
+
+  console.log("\n── 20) Velocidade turbo (0,03s) preenche igual e bem mais rápido ──");
+  {
+    const rodar = async (delay) => {
+      const { eventos, enviar } = ambiente(pagina({ itens: 3 }));
+      const inicio = Date.now();
+      const r = await enviar({
+        action: "fill_items",
+        delay,
+        items: [1, 2, 3].map((n) => ({
+          item: n,
+          valorUnitario: "1234,56",
+          marcaFabricante: "MICHELIN",
+          modeloVersao: "PRIMACY 4",
+        })),
+      });
+      return { r, eventos, ms: Date.now() - inicio };
+    };
+
+    const normal = await rodar(1000);
+    const turbo = await rodar(30);
+
+    checar(normal.r.filled === 3 && turbo.r.filled === 3, `as duas velocidades preenchem 3/3 (normal ${normal.r.filled}, turbo ${turbo.r.filled})`);
+    checar(
+      JSON.stringify(turbo.r.savedItems) === JSON.stringify([1, 2, 3]),
+      `turbo salva os 3 itens na ordem (${JSON.stringify(turbo.r.savedItems)})`,
+    );
+    checar(turbo.eventos.salvos.length === 3, `turbo clicou no Salvar dos 3 (${turbo.eventos.salvos.length})`);
+    checar(
+      turbo.r.salvamentos.every((s) => s.clicado && s.confirmado && !s.recusado),
+      "turbo: todos salvos e confirmados pelo site",
+    );
+    checar(
+      turbo.r.salvamentos.every((s) => s.lancamentos?.valorUnitario === 1),
+      `turbo: valor lançado 1x por item (${JSON.stringify(turbo.r.salvamentos.map((s) => s.lancamentos?.valorUnitario))})`,
+    );
+    // A velocidade tem que valer para o item inteiro, não só para a pausa.
+    checar(
+      turbo.ms < normal.ms * 0.6,
+      `turbo bem mais rápido que 1s (${turbo.ms}ms vs ${normal.ms}ms)`,
+    );
+    checar(turbo.ms < 4000, `turbo rápido de verdade (${turbo.ms}ms para 3 itens)`);
   }
 
   return falhas;

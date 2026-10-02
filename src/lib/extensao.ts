@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.3";
+export const VERSAO_EXTENSAO = "1.7.4";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.4",
+    itens: [
+      "Velocidade configurável de 0,01s a 5s: digite o valor em segundos ou use os presets (🚀 0,03s) — a velocidade vale para a digitação, as esperas e a conferência de cada item, não só para a pausa entre itens",
+      "O painel na página usa a mesma velocidade escolhida no popup",
+    ],
+  },
   {
     versao: "1.7.3",
     itens: [

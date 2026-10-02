@@ -84,7 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === "fill_items") {
-    fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || 800)
+    fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || DELAY_PADRAO_MS)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -447,6 +447,8 @@ function getLeadingItemNumber(text) {
 // ─── Preenchimento ────────────────────────────────────────────────────────────
 
 async function fillItems(items, delayMs) {
+  definirRitmo(delayMs);
+
   let filled = 0;
   const errors = [];
   const warnings = [];
@@ -609,7 +611,7 @@ async function fillSingleItem(item, allowUnassignedFields) {
       if (field.required) missing.push(`${FIELD_LABELS[field.key]}${detalhe}`);
       else warnings.push(`Item ${itemNumber}: não foi possível preencher ${FIELD_LABELS[field.key]}${detalhe}.`);
     }
-    await sleep(120);
+    await pausa(120, 25);
   }
 
   const lancamentos = lancamentosDoItem(fields);
@@ -624,7 +626,7 @@ async function fillSingleItem(item, allowUnassignedFields) {
   }
 
   // Dá tempo para o site validar/computar (valor total, máscara) antes de salvar.
-  await sleep(500);
+  await pausa(500, 120);
   showNotification(`💾 Item ${itemNumber}: salvando...`, "info");
   const salvamento = await salvarItem(itemNumber, allowUnassignedFields, fields);
 
@@ -721,7 +723,7 @@ async function localizarCamposDoItem(itemNumber, allowUnassignedFields) {
 
   // A seta de “mostrar detalhes” é o que monta o painel de preenchimento.
   await tryExpandItem(itemNumber);
-  await sleep(300);
+  await pausa(300, 80);
 
   for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
     if (abortRequested) return null;
@@ -735,7 +737,7 @@ async function localizarCamposDoItem(itemNumber, allowUnassignedFields) {
     }
 
     await tryExpandItem(itemNumber);
-    await sleep(350);
+    await pausa(350, 90);
   }
 
   scanPage();
@@ -749,7 +751,7 @@ async function esperarPaginaEstavel(tempoMs = 1500) {
   let estavel = 0;
   while (Date.now() < limite) {
     if (abortRequested) return false;
-    await sleep(150);
+    await pausa(150, 40);
     scanPage();
     const agora = `${assinaturaDaLista()}|${latestScanState?.result?.recognizedFields ?? 0}`;
     if (agora === anterior) {
@@ -797,7 +799,7 @@ async function tryExpandItem(itemNumber) {
   } catch (_) {
     return false;
   }
-  await sleep(400);
+  await pausa(400, 100);
   return true;
 }
 
@@ -952,7 +954,7 @@ async function inserirTexto(input, texto, view) {
 
     disparar(input, "keyup", view, tecla);
     composto = String(input.value ?? composto);
-    await sleep(12);
+    await pausaDigitacao();
   }
 
   return !campoVazio(input);
@@ -1001,12 +1003,12 @@ async function cutucarCampo(input, view) {
     disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
   }
   disparar(input, "keyup", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
-  await sleep(40);
+  await pausa(40, 15);
 
   // Redigita o caractere apagado (com as teclas reais do caractere).
   await inserirTexto(input, ultimo, view);
   disparar(input, "change", view, { data: String(input.value ?? "") });
-  await sleep(60);
+  await pausa(60, 20);
 
   const depois = String(input.value ?? "");
   const numeroDepois = valorNumerico(depois);
@@ -1085,7 +1087,7 @@ async function reforcarValor(input, view) {
   aplicarValor(input, texto, view);
   disparar(input, "beforeinput", view, { data: texto, inputType: "insertText" });
   disparar(input, "input", view, { data: texto, inputType: "insertText" });
-  await sleep(80);
+  await pausa(80, 25);
   if (campoVazio(input)) return restaurar();
 
   const final = String(input.value ?? texto);
@@ -1094,7 +1096,7 @@ async function reforcarValor(input, view) {
   aplicarValor(input, final, view);
   disparar(input, "input", view, { data: final, inputType: "insertText" });
   disparar(input, "change", view, { data: final });
-  await sleep(80);
+  await pausa(80, 25);
   if (campoVazio(input)) return restaurar();
 
   disparar(input, "blur", view, {});
@@ -1104,7 +1106,7 @@ async function reforcarValor(input, view) {
   } catch (_) {
     // opcional
   }
-  await sleep(60);
+  await pausa(60, 20);
   return true;
 }
 
@@ -1149,14 +1151,14 @@ async function preencherCampo(input, value, view) {
 async function garantirRegistroDoCampo(input, view, numerico) {
   if (numerico) {
     await cutucarCampo(input, view);
-    await sleep(80);
+    await pausa(80, 25);
   }
 
   if (pistasDeFramework(input)) {
     const estado = estadoDeValidacao(input);
     if (estado.pristine || estado.invalido) {
       await reforcarValor(input, view); // último recurso: reenvia o texto formatado
-      await sleep(80);
+      await pausa(80, 25);
       const depois = estadoDeValidacao(input);
       return !depois.pristine && !depois.invalido;
     }
@@ -1262,7 +1264,7 @@ async function setInputValue(input, rawValue, esperaNumero) {
     disparar(input, "input", view, { data: option.value, inputType: "insertText" });
     disparar(input, "change", view, { data: option.value });
     input.blur();
-    await sleep(100);
+    await pausa(100, 30);
     return true;
   }
 
@@ -1445,7 +1447,7 @@ async function esperarHabilitar(botao, tempoMs = 2500) {
   while (Date.now() < limite) {
     if (!botao.isConnected) return false;
     if (!botao.disabled && botao.getAttribute("aria-disabled") !== "true") return true;
-    await sleep(150);
+    await pausa(150, 40);
   }
   return !botao.disabled;
 }
@@ -1745,7 +1747,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     relatorio.clicado = true;
 
     // O site costuma responder rápido (toast), mas pode demorar um pouco.
-    await sleep(800);
+    await pausa(800, 180);
 
     const limite = Date.now() + (tentativa === 1 ? 2600 : 2200);
     while (Date.now() < limite) {
@@ -1789,7 +1791,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
         break;
       }
 
-      await sleep(250);
+      await pausa(250, 60);
     }
 
     if (relatorio.recusado) break; // o site respondeu: não vale insistir
@@ -1811,7 +1813,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     const aindaDisponivel =
       botao.isConnected && !botao.disabled && botao.getAttribute("aria-disabled") !== "true";
     if (!aindaDisponivel) break;
-    await sleep(700);
+    await pausa(700, 160);
   }
 
   // O que a página realmente tem nos campos agora (máscara pode ter remontado).
@@ -1915,7 +1917,7 @@ async function responderModalDeConfirmacao() {
     const alvo = botoes[0];
     const rotulo = normalizeText(alvo.textContent || alvo.value || "");
     if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
-    await sleep(900);
+    await pausa(900, 200);
     return { texto, clicado: true, botao: rotulo };
   }
   return null;
@@ -2964,6 +2966,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ─── Ritmo (velocidade escolhida no popup) ───────────────────────────────────
+//
+// O usuário escolhe a pausa entre itens (de 0,03s a 5s). Ela vale para TUDO:
+// digitação, esperas e conferência. Assim "0,03s" fica realmente rápido — se
+// ficasse só a pausa entre itens, as esperas internas (mais de 2s por item)
+// dominariam e a velocidade escolhida não mudaria quase nada na prática.
+
+const DELAY_PADRAO_MS = 1000; // velocidade "Normal" (1s) — fator 1
+const FATOR_RITMO_MIN = 0.1; // 10x mais rápido (≈ pausa de 0,1s)
+const FATOR_RITMO_MAX = 4; // 4x mais devagar (≈ pausa de 4s)
+const TEXTO_LENTO = 12; // ms entre teclas na digitação (velocidade normal)
+
+let fatorRitmo = 1;
+
+/** Ajusta o ritmo a partir da pausa pedida (em ms) e devolve o fator. */
+function definirRitmo(delayMs) {
+  const pedido = Number(delayMs);
+  const base = Number.isFinite(pedido) && pedido > 0 ? pedido : DELAY_PADRAO_MS;
+  fatorRitmo = Math.min(FATOR_RITMO_MAX, Math.max(FATOR_RITMO_MIN, base / DELAY_PADRAO_MS));
+  return fatorRitmo;
+}
+
+/** Pausa proporcional à velocidade escolhida (com piso para não quebrar). */
+function pausa(ms, minimo = 20) {
+  return sleep(Math.max(minimo, Math.round(ms * fatorRitmo)));
+}
+
+/** Intervalo entre teclas na digitação (no turbo digita bem mais rápido). */
+function pausaDigitacao() {
+  return sleep(Math.max(2, Math.round(TEXTO_LENTO * fatorRitmo)));
+}
+
+/** Velocidade escolhida no popup (⚙️ Config/painel usam a mesma). */
+async function lerVelocidadeSalva() {
+  try {
+    const cfg = await chrome.storage.local.get(["delayMs"]);
+    const valor = Number(cfg?.delayMs);
+    if (Number.isFinite(valor) && valor > 0) return valor;
+  } catch (_) {
+    // sem preferência salva: usa a padrão
+  }
+  return DELAY_PADRAO_MS;
+}
+
 // ─── Painel flutuante na página (não fecha junto com o popup) ────────────────
 //
 // O popup do Chrome fecha quando o usuário clica fora. Este painel vive na
@@ -3310,10 +3356,13 @@ async function iniciarPeloPainel() {
   abortRequested = false;
   botPausado = false;
   atualizarPainel();
-  registrarNoPainel(`🚀 Iniciando ${itens.length} item(ns) de ${proposta?.numeroDispensa || `proposta ${propostaId}`}...`);
+  const velocidade = await lerVelocidadeSalva();
+  registrarNoPainel(
+    `🚀 Iniciando ${itens.length} item(ns) de ${proposta?.numeroDispensa || `proposta ${propostaId}`}... (velocidade ${(velocidade / 1000).toFixed(2).replace(".", ",")}s)`,
+  );
 
   try {
-    const resultado = await fillItems(itens, 800);
+    const resultado = await fillItems(itens, velocidade);
     const salvos = new Set(resultado.savedItems || []);
 
     // Marca como enviado no sistema só o que foi realmente salvo na página.

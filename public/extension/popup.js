@@ -11,9 +11,10 @@ let currentTab = null;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
-  const cfg = await chrome.storage.local.get(["apiUrl"]);
+  const cfg = await chrome.storage.local.get(["apiUrl", "delayMs"]);
   apiUrl = cfg.apiUrl || "";
   document.getElementById("api-url").value = apiUrl;
+  aplicarVelocidadeNaTela(cfg.delayMs);
 
   bindEvents();
   await getCurrentTab();
@@ -54,6 +55,21 @@ function bindEvents() {
   on("proposta-select", "change", loadItems);
   on("btn-select-all", "click", selectAll);
   on("btn-select-filled", "click", selectFilled);
+
+  // Velocidade: presets (0,03s etc.) e digitação livre.
+  document.querySelectorAll("[data-delay]").forEach((botao) => {
+    botao.addEventListener("click", async () => {
+      const ms = aplicarVelocidadeNaTela(Number(botao.dataset.delay) * 1000);
+      await salvarVelocidade(ms);
+      addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens (vale para digitação e esperas).`);
+    });
+  });
+  const campoDelay = document.getElementById("delay-input");
+  campoDelay?.addEventListener("change", async () => {
+    const ms = aplicarVelocidadeNaTela(delayDaTela());
+    await salvarVelocidade(ms);
+    addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens.`);
+  });
   on("btn-clear-sel", "click", clearSel);
   on("run-btn", "click", runBot);
   on("stop-btn", "click", stopBot);
@@ -477,6 +493,46 @@ function setImportStatus(type, message) {
   element.textContent = message;
 }
 
+// ─── Velocidade (segundos → ms) ──────────────────────────────────────────────
+//
+// A pausa entre itens pode ir de 0,01s a 5s. Ela é enviada para a página como
+// "ritmo": o bot escala digitação, esperas e conferência por ela, então 0,03s é
+// rápido de verdade (não só a pausa entre um item e outro).
+
+const DELAY_PADRAO_MS = 1000;
+const DELAY_MINIMO_MS = 10;
+const DELAY_MAXIMO_MS = 5000;
+
+function delayDaTela() {
+  const campo = document.getElementById("delay-input");
+  const segundos = Number(String(campo?.value ?? "").replace(",", "."));
+  if (!Number.isFinite(segundos) || segundos <= 0) return DELAY_PADRAO_MS;
+  return Math.min(DELAY_MAXIMO_MS, Math.max(DELAY_MINIMO_MS, Math.round(segundos * 1000)));
+}
+
+function formatarSegundos(ms) {
+  return `${(ms / 1000).toFixed(2).replace(".", ",")}s`;
+}
+
+/** Mostra na tela a velocidade salva (ex.: 30 → "0.03"). */
+function aplicarVelocidadeNaTela(delayMs) {
+  const valor = Number(delayMs);
+  const ms = Number.isFinite(valor) && valor > 0
+    ? Math.min(DELAY_MAXIMO_MS, Math.max(DELAY_MINIMO_MS, valor))
+    : DELAY_PADRAO_MS;
+  const campo = document.getElementById("delay-input");
+  if (campo) campo.value = String(Number((ms / 1000).toFixed(2)));
+  return ms;
+}
+
+async function salvarVelocidade(delayMs) {
+  try {
+    await chrome.storage.local.set({ delayMs });
+  } catch (_) {
+    // sem preferência salva: o popup continua mandando a velocidade na mensagem
+  }
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 async function saveConfig() {
   apiUrl = document.getElementById("api-url").value.trim().replace(/\/$/, "");
@@ -665,7 +721,8 @@ async function runBot() {
   document.getElementById("progress-wrap").style.display = "block";
   document.getElementById("log-area").style.display = "block";
 
-  const delay = parseInt(document.getElementById("delay-select").value, 10);
+  const delay = delayDaTela();
+  await salvarVelocidade(delay);
   const payload = toFill.map((i) => ({
     item: i.numeroItem,
     valorUnitario: formatValor(i.valorUnitario),
@@ -673,7 +730,7 @@ async function runBot() {
     modeloVersao: i.modeloVersao || "",
   }));
 
-  addLog("info", `Iniciando: ${payload.length} itens, delay ${delay}ms`);
+  addLog("info", `Iniciando: ${payload.length} itens · velocidade ${formatarSegundos(delay)} entre itens`);
   setProgress(0, payload.length);
 
   try {
