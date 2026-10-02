@@ -6,6 +6,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+
+  // Ponte de API: o content script roda na página do ComprasNet e não pode
+  // fazer fetch para o sistema (CORS). Aqui, no contexto da extensão (que tem
+  // permissão de host), a chamada funciona e o resultado volta pelo canal.
+  if (msg.action === "api_request") {
+    (async () => {
+      try {
+        const resposta = await fetch(msg.url, {
+          method: msg.method || "GET",
+          headers: msg.headers || undefined,
+          body: msg.body || undefined,
+        });
+
+        const texto = await resposta.text();
+        let dados = null;
+        try {
+          dados = texto ? JSON.parse(texto) : null;
+        } catch (_) {
+          dados = texto;
+        }
+        sendResponse({ ok: resposta.ok, status: resposta.status, dados });
+      } catch (erro) {
+        sendResponse({ ok: false, error: erro.message });
+      }
+    })();
+    return true;
+  }
 });
 
 // ─── Aviso de atualização disponível ─────────────────────────────────────────

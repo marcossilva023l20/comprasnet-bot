@@ -805,26 +805,32 @@ async function inserirTexto(input, texto, view) {
   for (const ch of [...String(texto)]) {
     const codigo = ch === " " ? "Space" : /[0-9]/.test(ch) ? `Digit${ch}` : /[a-z]/i.test(ch) ? `Key${ch.toUpperCase()}` : "";
     const tecla = { key: ch, code: codigo, char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
+    const antesDaTecla = String(input.value ?? "");
+
     disparar(input, "keydown", view, tecla);
     disparar(input, "keypress", view, tecla);
 
-    let inseriu = false;
-    if (podeInsertText) {
-      try {
-        inseriu = doc.execCommand("insertText", false, ch);
-      } catch (_) {
-        inseriu = false;
+    // A própria máscara do site pode inserir o caractere ao ver a tecla (é o
+    // caso do portal). Se o campo já mudou, NÃO inserimos de novo — era isso
+    // que duplicava os dígitos (1 virava 11, 2 virava 22...).
+    if (String(input.value ?? "") === antesDaTecla) {
+      let inseriu = false;
+      if (podeInsertText) {
+        try {
+          inseriu = doc.execCommand("insertText", false, ch);
+        } catch (_) {
+          inseriu = false;
+        }
+      }
+      if (!inseriu) {
+        composto = antesDaTecla + ch;
+        aplicarValor(input, composto, view);
+        disparar(input, "input", view, { data: ch, inputType: "insertText" });
       }
     }
-    if (!inseriu) {
-      composto = composto + ch;
-      aplicarValor(input, composto, view);
-      disparar(input, "input", view, { data: ch, inputType: "insertText" });
-    }
-    disparar(input, "keyup", view, tecla);
 
-    // A máscara pode ter reformatado o campo: parte do valor realmente aceito.
-    if (inseriu) composto = String(input.value ?? "");
+    disparar(input, "keyup", view, tecla);
+    composto = String(input.value ?? composto);
     await sleep(12);
   }
 
@@ -856,11 +862,13 @@ async function cutucarCampo(input, view) {
   const semUltimo = antes.slice(0, -1);
   const ultimo = antes.slice(-1);
 
+  const antesDaTecla = String(input.value ?? "");
   disparar(input, "keydown", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
 
-  let apagou = false;
+  // Se a máscara do site já apagou ao ver a tecla, não apagamos de novo.
+  let apagou = String(input.value ?? "") !== antesDaTecla;
   const doc = input.ownerDocument;
-  if (!input.isContentEditable && typeof doc.execCommand === "function") {
+  if (!apagou && !input.isContentEditable && typeof doc.execCommand === "function") {
     try {
       apagou = doc.execCommand("delete", false, null); // apaga a seleção/último caractere
     } catch (_) {
@@ -2925,6 +2933,44 @@ function mostrarPainel() {
 let propostasDoPainel = [];
 let rodandoPeloPainel = false;
 
+/**
+ * Chama a API do sistema.
+ *
+ * O content script roda DENTRO da página do ComprasNet, então um fetch direto
+ * esbarra em CORS ("Failed to fetch"). O caminho normal é pedir ao service
+ * worker da extensão (que tem permissão de host) e receber o JSON de volta.
+ * O fetch direto fica como reserva para ambientes onde a ponte não existe.
+ */
+async function chamarApi(url, { method = "GET", body, headers } = {}) {
+  try {
+    const ponte = await chrome.runtime.sendMessage({
+      action: "api_request",
+      url,
+      method,
+      headers: headers || (body ? { "Content-Type": "application/json" } : undefined),
+      body,
+    });
+    if (ponte && (typeof ponte.status === "number" || ponte.ok)) {
+      return { ok: Boolean(ponte.ok), status: ponte.status ?? 0, dados: ponte.dados, via: "extensão" };
+    }
+  } catch (_) {
+    // sem ponte: tenta direto
+  }
+
+  const resposta = await fetch(url, {
+    method,
+    headers: headers || (body ? { "Content-Type": "application/json" } : undefined),
+    body,
+  });
+  let dados = null;
+  try {
+    dados = await resposta.json();
+  } catch (_) {
+    dados = null;
+  }
+  return { ok: resposta.ok, status: resposta.status, dados, via: "página" };
+}
+
 /** URL do sistema configurada no popup (⚙️ Config). */
 async function lerApiUrl() {
   try {
@@ -2950,11 +2996,13 @@ async function carregarPropostasNoPainel() {
 
   select.innerHTML = '<option value="">Carregando propostas…</option>';
   try {
-    const resposta = await fetch(`${apiUrl}/api/propostas`);
+    const resposta = await chamarApi(`${apiUrl}/api/propostas`);
     if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-    const propostas = await resposta.json();
+    const propostas = resposta.dados;
 
-    propostasDoPainel = Array.isArray(propostas) ? propostas : [];
+    propostasDoPainel = (Array.isArray(propostas) ? propostas : []).sort(
+      (a, b) => (b.itensPreenchidos || 0) - (a.itensPreenchidos || 0),
+    );
     if (propostasDoPainel.length === 0) {
       select.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
       definirStatusDoPainel("Nenhuma proposta no sistema ainda.");
@@ -2972,11 +3020,27 @@ async function carregarPropostasNoPainel() {
       })
       .join("");
 
-    if (anterior && propostasDoPainel.some((p) => String(p.id) === anterior)) select.value = anterior;
-    definirStatusDoPainel(`${propostasDoPainel.length} proposta(s) no sistema.`);
+    // Se o usuário já escolheu uma, mantém; senão abre na primeira que tem itens
+    // preenchidos (é a "proposta preenchida" que ele quer enviar).
+    const pronta = propostasDoPainel.find((p) => (p.itensPreenchidos || 0) > 0);
+    if (anterior && propostasDoPainel.some((p) => String(p.id) === anterior)) {
+      select.value = anterior;
+    } else if (pronta) {
+      select.value = String(pronta.id);
+    }
+
+    const total = propostasDoPainel.length;
+    const comItens = propostasDoPainel.filter((p) => (p.itensPreenchidos || 0) > 0).length;
+    definirStatusDoPainel(
+      comItens
+        ? `${total} proposta(s) no sistema · ${comItens} com itens preenchidos (selecionada a primeira).`
+        : `${total} proposta(s) no sistema, nenhuma com itens preenchidos ainda.`,
+    );
   } catch (erro) {
     select.innerHTML = '<option value="">Erro ao carregar propostas</option>';
-    definirStatusDoPainel(`Não consegui ler as propostas: ${erro.message}`);
+    definirStatusDoPainel(
+      `Não consegui ler as propostas (${erro.message}). Confira a URL do sistema em ⚙️ Config, se o site está no ar e se a extensão foi recarregada.`,
+    );
   }
   atualizarPainel();
 }
@@ -3013,9 +3077,9 @@ async function iniciarPeloPainel() {
 
   let dados;
   try {
-    const resposta = await fetch(`${apiUrl}/api/propostas/${propostaId}/script`);
+    const resposta = await chamarApi(`${apiUrl}/api/propostas/${propostaId}/script`);
     if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
-    dados = await resposta.json();
+    dados = resposta.dados;
   } catch (erro) {
     definirStatusDoPainel(`Não consegui ler os itens: ${erro.message}`);
     atualizarPainel();
@@ -3044,9 +3108,8 @@ async function iniciarPeloPainel() {
     let marcados = 0;
     for (const item of paraMarcar) {
       try {
-        const resposta = await fetch(`${apiUrl}/api/propostas/${propostaId}/itens/${item.id}`, {
+        const resposta = await chamarApi(`${apiUrl}/api/propostas/${propostaId}/itens/${item.id}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enviado: true }),
         });
         if (resposta.ok) marcados += 1;

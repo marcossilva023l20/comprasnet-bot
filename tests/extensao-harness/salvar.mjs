@@ -16,6 +16,7 @@
  * 14) Formulário tipo Angular (ng-pristine): o reforço faz o site registrar o valor
  * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
  * 16) Portal só contabiliza com tecla real: o Backspace do bot faz o total sair de 0,0000
+ * 17) Máscara que insere na própria tecla (keydown) → os dígitos NÃO duplicam
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -694,6 +695,71 @@ export async function rodarSalvar() {
     checar(eventos.teclas.includes("Backspace"), `o bot apertou Backspace (${JSON.stringify(eventos.teclas.slice(-3))})`);
     checar(/4\.939,?\d*/i.test(total.replace("R$ ", "")) || total !== "R$ 0,0000", `o total saiu de 0,0000 (${total})`);
     checar(eventos.salvos.length === 1, `o site salvou (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true && !r.salvamentos[0]?.recusado, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+  }
+
+  console.log("\n── 17) Máscara que insere na própria tecla: não duplica dígitos ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">4</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvos: [] };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+
+        const campo = w.document.getElementById("vu1");
+        // Máscara do portal: ela MESMA insere o dígito ao ver a tecla (keydown)
+        // e reformata como moeda de 4 casas.
+        campo.addEventListener("keydown", (e) => {
+          if (!/^[0-9]$/.test(e.key || "")) return;
+          const digitos = (campo.value.replace(/\D/g, "") + e.key).slice(-9);
+          campo.value = (Number(digitos) / 10000).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          });
+        });
+
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(aviso);
+        });
+      },
+    });
+
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "Conforme TR", modeloVersao: "Conforme TR" }],
+    });
+
+    const valor = window.document.getElementById("vu1").value;
+    checar(valor === "1.232,8000", `o valor ficou "1.232,8000" (${valor})`);
+    checar(!/11|22|33|232232|8888/.test(valor), "nenhum dígito duplicado");
+    checar(eventos.salvos[0] === "1.232,8000", `o site salvou o valor certo (${JSON.stringify(eventos.salvos)})`);
     checar(r.salvamentos[0]?.confirmado === true && !r.salvamentos[0]?.recusado, "relatório: salvo e confirmado");
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
   }

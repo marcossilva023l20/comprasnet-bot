@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.0";
+export const VERSAO_EXTENSAO = "1.7.1";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.1",
+    itens: [
+      "Correção: o valor unitário não duplica mais os dígitos (11.223.322,088000 → 1.232,8000)",
+      "Correção do painel: \"Proposta a preencher\" carrega as propostas do sistema mesmo com a página aberta (não dá mais \"Failed to fetch\")",
+      "A lista de propostas já seleciona a primeira que tem itens preenchidos",
+    ],
+  },
   {
     versao: "1.7.0",
     itens: [

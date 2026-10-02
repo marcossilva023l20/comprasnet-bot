@@ -3,6 +3,20 @@ import { db } from "@/db";
 import { propostas, itens } from "@/db/schema";
 import { desc, sql } from "drizzle-orm";
 
+/**
+ * A extensão (e o painel na página do ComprasNet) lê esta lista de fora do
+ * domínio do app — precisa liberar CORS.
+ */
+const CABECALHOS_CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { headers: CABECALHOS_CORS });
+}
+
 export async function GET() {
   try {
     const rows = await db
@@ -21,10 +35,10 @@ export async function GET() {
       })
       .from(propostas)
       .orderBy(desc(propostas.createdAt));
-    return NextResponse.json(rows);
+    return NextResponse.json(rows, { headers: CABECALHOS_CORS });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ error: "Erro interno" }, { status: 500 });
+    return NextResponse.json({ error: "Erro interno" }, { status: 500, headers: CABECALHOS_CORS });
   }
 }
 
