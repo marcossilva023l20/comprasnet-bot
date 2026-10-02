@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db } from "@/db";
 import { propostas } from "@/db/schema";
 import { desc, sql } from "drizzle-orm";
-import { NovaPropostaButton, ExcluirPropostaButton } from "@/components/PropostaActions";
+import { NovaPropostaButton, ExcluirPropostaButton, ExcluirTodasPropostasButton } from "@/components/PropostaActions";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,7 @@ export default async function HomePage() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Top bar */}
-      <header className="bg-[#1351b4] text-white shadow-lg shadow-blue-900/30">
+      <header className="bg-[#6d28d9] text-white shadow-lg shadow-purple-900/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="bg-white/15 rounded-xl p-2.5">
@@ -54,7 +54,7 @@ export default async function HomePage() {
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight">ComprasNet Bot</h1>
-              <p className="text-blue-200 text-xs">Preenchedor Automático de Propostas</p>
+              <p className="text-purple-200 text-xs">Preenchedor Automático de Propostas</p>
             </div>
           </div>
           <nav className="flex items-center gap-2 flex-wrap justify-end">
@@ -74,17 +74,17 @@ export default async function HomePage() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8 space-y-8">
         {/* Hero banner */}
-        <div className="bg-gradient-to-r from-[#1351b4] to-[#0c326f] rounded-2xl p-6 text-white flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+        <div className="bg-gradient-to-r from-[#6d28d9] to-[#4c1d95] rounded-2xl p-6 text-white flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
             <h2 className="text-xl font-bold mb-1">Como funciona?</h2>
-            <p className="text-blue-200 text-sm max-w-xl">
+            <p className="text-purple-200 text-sm max-w-xl">
               Importe sua planilha Excel → preencha valores, marcas e modelos →
               instale a extensão Chrome → abra o ComprasNet → clique <strong className="text-white">Executar Bot</strong>.
               A extensão preenche todos os itens automaticamente! 🚀
             </p>
           </div>
           <div className="flex gap-3 flex-shrink-0">
-            <Link href="/extensao" className="bg-white text-[#1351b4] hover:bg-blue-50 font-bold px-5 py-2.5 rounded-xl text-sm transition shadow-lg whitespace-nowrap flex items-center gap-2">
+            <Link href="/extensao" className="bg-white text-[#6d28d9] hover:bg-purple-50 font-bold px-5 py-2.5 rounded-xl text-sm transition shadow-lg whitespace-nowrap flex items-center gap-2">
               🧩 Baixar Extensão
             </Link>
             <Link href="/deploy" className="bg-white/20 hover:bg-white/30 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition whitespace-nowrap">
@@ -96,7 +96,7 @@ export default async function HomePage() {
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { label: "Total de Propostas", value: total, color: "text-[#1351b4]", bg: "bg-blue-50", icon: "📋" },
+            { label: "Total de Propostas", value: total, color: "text-[#6d28d9]", bg: "bg-purple-50", icon: "📋" },
             { label: "Completas", value: completas, color: "text-green-600", bg: "bg-green-50", icon: "✅" },
             { label: "Em Andamento", value: emAndamento, color: "text-amber-600", bg: "bg-amber-50", icon: "⏳" },
             { label: "Rascunhos", value: total - completas - emAndamento, color: "text-slate-600", bg: "bg-slate-50", icon: "📝" },
@@ -111,9 +111,12 @@ export default async function HomePage() {
 
         {/* Proposals */}
         <div>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <h2 className="text-lg font-bold text-slate-800">Suas Propostas</h2>
-            {!erroBanco && <NovaPropostaButton />}
+            <div className="flex items-center gap-2 flex-wrap">
+              {!erroBanco && rows.length > 0 && <ExcluirTodasPropostasButton total={rows.length} />}
+              {!erroBanco && <NovaPropostaButton />}
+            </div>
           </div>
 
           {erroBanco ? (
@@ -142,7 +145,7 @@ export default async function HomePage() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 flex-wrap mb-1">
-                            <Link href={`/proposta/${p.id}`} className="font-bold text-[#1351b4] hover:underline text-base truncate">
+                            <Link href={`/proposta/${p.id}`} className="font-bold text-[#6d28d9] hover:underline text-base truncate">
                               Dispensa Eletrônica Nº {p.numeroDispensa}
                             </Link>
                             <span className={`shrink-0 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
@@ -159,11 +162,11 @@ export default async function HomePage() {
                             {p.dataLimite && <span>📅 Prazo: {p.dataLimite}</span>}
                             <span>📦 {total} itens</span>
                             <span className="text-green-600 font-medium">✓ {preenchidos} preenchidos</span>
-                            {enviados > 0 && <span className="text-blue-600 font-medium">🚀 {enviados} enviados</span>}
+                            {enviados > 0 && <span className="text-purple-600 font-medium">🚀 {enviados} enviados</span>}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <Link href={`/proposta/${p.id}`} className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-4 py-2 rounded-xl text-sm font-semibold transition whitespace-nowrap">
+                          <Link href={`/proposta/${p.id}`} className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-4 py-2 rounded-xl text-sm font-semibold transition whitespace-nowrap">
                             Editar
                           </Link>
                           <Link href={`/api/propostas/${p.id}/exportar`} className="border border-slate-200 hover:bg-slate-50 text-slate-600 px-3 py-2 rounded-xl text-sm transition" title="Exportar Excel">
@@ -181,7 +184,7 @@ export default async function HomePage() {
                           </div>
                           <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${isComplete ? "bg-green-500" : "bg-[#1351b4]"}`}
+                              className={`h-full rounded-full transition-all ${isComplete ? "bg-green-500" : "bg-[#6d28d9]"}`}
                               style={{ width: `${pct}%` }}
                             />
                           </div>
@@ -240,10 +243,10 @@ function DbError({ message }: { message: string }) {
         {message}
       </pre>
       <div className="mt-4 flex gap-4 text-sm font-bold">
-        <Link href="/api/health" className="text-[#1351b4] hover:underline">
+        <Link href="/api/health" className="text-[#6d28d9] hover:underline">
           🩺 Ver /api/health
         </Link>
-        <Link href="/deploy" className="text-[#1351b4] hover:underline">
+        <Link href="/deploy" className="text-[#6d28d9] hover:underline">
           📖 Tutorial de hospedagem
         </Link>
       </div>

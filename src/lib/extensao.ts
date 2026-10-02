@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.1";
+export const VERSAO_EXTENSAO = "1.7.2";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.2",
+    itens: [
+      "Extensão e painel na página agora usam o roxo do sistema (mesma identidade visual)",
+      "Sistema: opção \"🗑️ Excluir todas\" as propostas com confirmação digitada",
+    ],
+  },
   {
     versao: "1.7.1",
     itens: [

@@ -42,6 +42,45 @@ export async function GET() {
   }
 }
 
+/**
+ * Apaga TODAS as propostas e os itens delas.
+ *
+ * É uma ação sem volta, por isso o corpo precisa confirmar explicitamente
+ * (`confirmar: "EXCLUIR"`) — assim um DELETE acidental não destrói os dados.
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    let corpo: { confirmar?: string } = {};
+    try {
+      corpo = await req.json();
+    } catch (_) {
+      corpo = {};
+    }
+
+    if (String(corpo?.confirmar || "").trim().toUpperCase() !== "EXCLUIR") {
+      return NextResponse.json(
+        { error: 'Confirmação obrigatória: envie { "confirmar": "EXCLUIR" }.' },
+        { status: 400, headers: CABECALHOS_CORS },
+      );
+    }
+
+    const [{ total }] = await db
+      .select({ total: sql<number>`COUNT(*)` })
+      .from(propostas);
+
+    await db.delete(itens);
+    await db.delete(propostas);
+
+    return NextResponse.json(
+      { success: true, removidas: Number(total) || 0 },
+      { headers: CABECALHOS_CORS },
+    );
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: "Erro interno" }, { status: 500, headers: CABECALHOS_CORS });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { numeroDispensa, uasg, objeto, dataLimite } = await req.json();

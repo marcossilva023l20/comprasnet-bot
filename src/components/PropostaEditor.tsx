@@ -189,7 +189,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
               <span className="text-slate-400">/{items.length} preenchidos</span>
             </div>
             <div className="w-28 bg-slate-100 rounded-full h-2.5">
-              <div className={`h-2.5 rounded-full transition-all ${pct === 100 ? "bg-green-500" : "bg-[#1351b4]"}`} style={{ width: `${pct}%` }} />
+              <div className={`h-2.5 rounded-full transition-all ${pct === 100 ? "bg-green-500" : "bg-[#6d28d9]"}`} style={{ width: `${pct}%` }} />
             </div>
             <span className="text-xs font-bold text-slate-500">{pct}%</span>
           </div>
@@ -197,7 +197,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
           {/* Filter */}
           <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
             {(["all", "filled", "empty"] as const).map((f) => (
-              <button key={f} onClick={() => setFilter(f)} className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${filter === f ? "bg-white shadow text-[#1351b4]" : "text-slate-500 hover:text-slate-700"}`}>
+              <button key={f} onClick={() => setFilter(f)} className={`px-2.5 py-1 rounded-md text-xs font-semibold transition ${filter === f ? "bg-white shadow text-[#6d28d9]" : "text-slate-500 hover:text-slate-700"}`}>
                 {f === "all" ? "Todos" : f === "filled" ? "✓ Prontos" : "✗ Pendentes"}
               </button>
             ))}
@@ -208,7 +208,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="🔍 Buscar item..."
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 w-40"
+            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50 w-40"
           />
         </div>
 
@@ -218,7 +218,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
             href={`/api/propostas/${propostaId}/exportar`}
             download
             title="Baixa a planilha com Item, Descrição, Quantidade, Valor Estimado, Valor Unitário, Marca e Modelo — edite no Excel e importe de volta"
-            className="bg-white text-[#1351b4] border border-[#1351b4] hover:bg-blue-50 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+            className="bg-white text-[#6d28d9] border border-[#6d28d9] hover:bg-purple-50 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
           >
             📤 Exportar Planilha
           </a>
@@ -231,7 +231,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
           </button>
           <button
             onClick={() => setShowAddItem(true)}
-            className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+            className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
           >
             + Adicionar Item
           </button>
@@ -246,7 +246,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
 
       {/* Dica do ciclo planilha ↔ sistema */}
       {items.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 text-xs text-blue-800 flex items-start gap-2">
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3 text-xs text-purple-800 flex items-start gap-2">
           <span>💡</span>
           <span>
             <strong>Exportar → editar no Excel → Importar:</strong> a planilha exportada traz os itens com a coluna{" "}
@@ -269,48 +269,48 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Nº Item</label>
-                  <input type="number" value={newItem.numeroItem} onChange={(e) => setNewItem({ ...newItem, numeroItem: e.target.value })} placeholder={String(items.length + 1)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="number" value={newItem.numeroItem} onChange={(e) => setNewItem({ ...newItem, numeroItem: e.target.value })} placeholder={String(items.length + 1)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Unidade</label>
-                  <input type="text" value={newItem.unidade} onChange={(e) => setNewItem({ ...newItem, unidade: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.unidade} onChange={(e) => setNewItem({ ...newItem, unidade: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Descrição *</label>
-                <input type="text" value={newItem.descricao} onChange={(e) => setNewItem({ ...newItem, descricao: e.target.value })} required className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                <input type="text" value={newItem.descricao} onChange={(e) => setNewItem({ ...newItem, descricao: e.target.value })} required className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Descrição Detalhada</label>
-                <textarea value={newItem.descricaoDetalhada} onChange={(e) => setNewItem({ ...newItem, descricaoDetalhada: e.target.value })} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 resize-none" />
+                <textarea value={newItem.descricaoDetalhada} onChange={(e) => setNewItem({ ...newItem, descricaoDetalhada: e.target.value })} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50 resize-none" />
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Quantidade</label>
-                  <input type="text" value={newItem.quantidade} onChange={(e) => setNewItem({ ...newItem, quantidade: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.quantidade} onChange={(e) => setNewItem({ ...newItem, quantidade: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Val. Estimado (R$)</label>
-                  <input type="text" value={newItem.valorEstimado} onChange={(e) => setNewItem({ ...newItem, valorEstimado: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.valorEstimado} onChange={(e) => setNewItem({ ...newItem, valorEstimado: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Val. Unitário (R$)</label>
-                  <input type="text" value={newItem.valorUnitario} onChange={(e) => setNewItem({ ...newItem, valorUnitario: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.valorUnitario} onChange={(e) => setNewItem({ ...newItem, valorUnitario: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Marca/Fabricante</label>
-                  <input type="text" value={newItem.marcaFabricante} onChange={(e) => setNewItem({ ...newItem, marcaFabricante: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.marcaFabricante} onChange={(e) => setNewItem({ ...newItem, marcaFabricante: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Modelo/Versão</label>
-                  <input type="text" value={newItem.modeloVersao} onChange={(e) => setNewItem({ ...newItem, modeloVersao: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50" />
+                  <input type="text" value={newItem.modeloVersao} onChange={(e) => setNewItem({ ...newItem, modeloVersao: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
               </div>
               <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
                 <button type="button" onClick={() => setShowAddItem(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition">Cancelar</button>
-                <button type="submit" className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-6 py-2 rounded-xl text-sm font-bold transition">Adicionar</button>
+                <button type="submit" className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-6 py-2 rounded-xl text-sm font-bold transition">Adicionar</button>
               </div>
             </form>
           </div>
@@ -351,7 +351,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
                   <p className="text-slate-500 text-sm mb-5">Importe uma planilha ou adicione itens manualmente</p>
                   <div className="flex gap-3 justify-center">
                     <button onClick={() => fileInputRef.current?.click()} className="bg-[#168821] text-white px-5 py-2 rounded-xl text-sm font-bold transition hover:bg-[#0e5716]">📥 Importar Planilha</button>
-                    <button onClick={() => setShowAddItem(true)} className="bg-[#1351b4] text-white px-5 py-2 rounded-xl text-sm font-bold transition hover:bg-[#0c326f]">+ Adicionar Item</button>
+                    <button onClick={() => setShowAddItem(true)} className="bg-[#6d28d9] text-white px-5 py-2 rounded-xl text-sm font-bold transition hover:bg-[#4c1d95]">+ Adicionar Item</button>
                   </div>
                 </>
               ) : (
@@ -402,7 +402,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
 
   const updateField = (field: keyof EditItemForm, value: string) =>
     setForm((previous) => ({ ...previous, [field]: value }));
-  const inputClass = "w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white";
+  const inputClass = "w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white";
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -551,7 +551,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
             <button
               type="submit"
               disabled={saving}
-              className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-6 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50"
+              className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-6 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50"
             >
               {saving ? "⏳ Salvando..." : "💾 Salvar alterações"}
             </button>
@@ -589,7 +589,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
     <div className={`bg-white rounded-2xl border-2 transition-all shadow-sm hover:shadow-md ${isFilled ? "border-green-200" : "border-slate-200"}`}>
       {/* Header */}
       <div className="px-5 py-4 cursor-pointer flex items-center gap-3" onClick={onToggle}>
-        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${isFilled ? "bg-green-500 text-white" : "bg-[#1351b4] text-white"}`}>
+        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${isFilled ? "bg-green-500 text-white" : "bg-[#6d28d9] text-white"}`}>
           {item.numeroItem}
         </span>
         <div className="flex-1 min-w-0">
@@ -605,7 +605,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
           <button
             type="button"
             onClick={(event) => { event.stopPropagation(); onEdit(item); }}
-            className="border border-[#1351b4]/20 text-[#1351b4] hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
+            className="border border-[#6d28d9]/20 text-[#6d28d9] hover:bg-purple-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
             aria-label={`Editar item ${item.numeroItem}`}
           >
             ✏️ Editar item
@@ -634,7 +634,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
                 value={vals.valorUnitario}
                 onChange={(e) => setVals({ ...vals, valorUnitario: e.target.value })}
                 placeholder="0,0000"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white"
               />
             </div>
             <div>
@@ -657,7 +657,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
                 value={vals.marcaFabricante}
                 onChange={(e) => setVals({ ...vals, marcaFabricante: e.target.value })}
                 placeholder="Ex: LORENZETTI"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white"
               />
             </div>
             <div>
@@ -667,7 +667,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
                 value={vals.modeloVersao}
                 onChange={(e) => setVals({ ...vals, modeloVersao: e.target.value })}
                 placeholder="Ex: ADVANCED TURBO"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white"
               />
             </div>
           </div>
@@ -678,7 +678,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
             <button
               onClick={() => onSave(item.id, { valorUnitario: vals.valorUnitario || null, marcaFabricante: vals.marcaFabricante || null, modeloVersao: vals.modeloVersao || null })}
               disabled={isSaving}
-              className="bg-[#1351b4] hover:bg-[#0c326f] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50 flex items-center gap-2"
+              className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50 flex items-center gap-2"
             >
               {isSaving ? <><span className="animate-spin">⚙</span> Salvando...</> : "💾 Salvar"}
             </button>
@@ -778,7 +778,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
             {items.map((item, idx) => (
               <tr key={item.id} className="hover:bg-slate-50/50">
                 <td className="px-3 py-2">
-                  <span className="w-6 h-6 rounded-full bg-[#1351b4] text-white text-xs font-bold flex items-center justify-center">{item.numeroItem}</span>
+                  <span className="w-6 h-6 rounded-full bg-[#6d28d9] text-white text-xs font-bold flex items-center justify-center">{item.numeroItem}</span>
                 </td>
                 <td className="px-3 py-2 font-medium text-slate-700 uppercase max-w-[160px] truncate">{item.descricao}</td>
                 <td className="px-3 py-2 text-slate-500">{parseFloat(item.quantidade)}</td>
@@ -786,13 +786,13 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
                   {item.valorEstimado ? parseFloat(item.valorEstimado).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(item, "modeloVersao", e.target.value)} placeholder="Modelo" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(item, "modeloVersao", e.target.value)} placeholder="Modelo" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2 text-center text-base">
                   {rows[idx]?.valorUnitario && rows[idx]?.marcaFabricante ? "✅" : "⚠️"}
@@ -801,7 +801,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
                   <button
                     type="button"
                     onClick={() => onEdit(item)}
-                    className="border border-[#1351b4]/20 text-[#1351b4] hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
+                    className="border border-[#6d28d9]/20 text-[#6d28d9] hover:bg-purple-50 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap"
                     aria-label={`Editar item ${item.numeroItem}`}
                   >
                     ✏️ Editar item

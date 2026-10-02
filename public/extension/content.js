@@ -2801,7 +2801,7 @@ function atualizarPainel() {
     // Pausar fica sempre disponível: dá para deixar o bot já pausado antes de
     // iniciar (ele espera você mandar continuar).
     pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
-    pausar.style.background = botPausado ? "#168821" : "#1351b4";
+    pausar.style.background = botPausado ? "#168821" : "#6d28d9";
   }
   const parar = document.getElementById(`${PAINEL_ID}_parar`);
   if (parar) {
@@ -2855,7 +2855,7 @@ function mostrarPainel() {
   }
 
   painel.innerHTML = `
-    <div id="${PAINEL_ID}_topo" style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#1351b4;color:#fff;cursor:move;">
+    <div id="${PAINEL_ID}_topo" style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#6d28d9;color:#fff;cursor:move;">
       <strong style="flex:1;font-size:12px;">🤖 ComprasNet Bot</strong>
       <button id="${PAINEL_ID}_fechar" title="Fechar painel" style="background:transparent;border:0;color:#fff;cursor:pointer;font-size:14px;">✕</button>
     </div>
@@ -2870,7 +2870,7 @@ function mostrarPainel() {
       <div id="${PAINEL_ID}_status" style="font-weight:600;margin-bottom:8px;">Pronto.</div>
       <div style="display:flex;gap:6px;">
         <button id="${PAINEL_ID}_iniciar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#168821;color:#fff;font:inherit;font-weight:700;cursor:pointer;">▶ Iniciar</button>
-        <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#1351b4;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
+        <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#6d28d9;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
         <button id="${PAINEL_ID}_parar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#e52207;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏹ Parar</button>
       </div>
       <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:11px;line-height:1.4;color:#475569;"></pre>
@@ -3163,7 +3163,7 @@ function showNotification(message, type = "info") {
   removeNotification();
 
   const colors = {
-    info: "#1351b4",
+    info: "#6d28d9",
     success: "#168821",
     warning: "#FFCD07",
     error: "#E52207",
@@ -3210,7 +3210,7 @@ function showProgressBar(current, total) {
     left: 0;
     right: 0;
     z-index: 999999;
-    background: #1351b4;
+    background: #6d28d9;
     height: 4px;
   `;
 

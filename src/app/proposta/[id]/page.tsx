@@ -18,9 +18,9 @@ export default async function PropostaPage({ params }: { params: Promise<{ id: s
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
-      <header className="bg-[#1351b4] text-white shadow-lg shadow-blue-900/30">
+      <header className="bg-[#6d28d9] text-white shadow-lg shadow-purple-900/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <nav className="flex items-center gap-2 text-xs text-blue-200 mb-2">
+          <nav className="flex items-center gap-2 text-xs text-purple-200 mb-2">
             <Link href="/" className="hover:text-white transition">🏠 Início</Link>
             <span>›</span>
             <span>Cadastrar propostas</span>
@@ -30,7 +30,7 @@ export default async function PropostaPage({ params }: { params: Promise<{ id: s
               <h1 className="text-lg font-bold">
                 Dispensa Eletrônica Nº {proposta.numeroDispensa}
               </h1>
-              {proposta.uasg && <p className="text-blue-200 text-sm">{proposta.uasg}</p>}
+              {proposta.uasg && <p className="text-purple-200 text-sm">{proposta.uasg}</p>}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Link href={`/api/propostas/${proposta.id}/exportar`} className="bg-white/15 hover:bg-white/25 text-white px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5">
@@ -53,7 +53,7 @@ export default async function PropostaPage({ params }: { params: Promise<{ id: s
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-start gap-6 flex-wrap text-sm">
             {proposta.objeto && (
               <div>
-                <span className="font-semibold text-[#1351b4]">Objeto: </span>
+                <span className="font-semibold text-[#6d28d9]">Objeto: </span>
                 <span className="text-slate-600">{proposta.objeto}</span>
               </div>
             )}
@@ -71,7 +71,7 @@ export default async function PropostaPage({ params }: { params: Promise<{ id: s
 
       {/* Extension CTA */}
       {itensList.length > 0 && preenchidos > 0 && (
-        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-b border-purple-100">
+        <div className="bg-gradient-to-r from-purple-50 to-purple-50 border-b border-purple-100">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
               <span className="text-xl">🧩</span>

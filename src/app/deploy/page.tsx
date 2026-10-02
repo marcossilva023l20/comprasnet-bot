@@ -3,11 +3,11 @@ import Link from "next/link";
 export default function DeployPage() {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="bg-[#1351b4] text-white shadow-lg">
+      <header className="bg-[#6d28d9] text-white shadow-lg">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/" className="text-blue-200 hover:text-white text-sm">← Voltar</Link>
-            <span className="text-blue-300">›</span>
+            <Link href="/" className="text-purple-200 hover:text-white text-sm">← Voltar</Link>
+            <span className="text-purple-300">›</span>
             <h1 className="font-bold">🚀 Como Hospedar (GitHub + Neon + Vercel)</h1>
           </div>
         </div>
@@ -37,7 +37,7 @@ export default function DeployPage() {
         </div>
 
         {/* No PR flow */}
-        <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-2xl p-6">
+        <div className="bg-gradient-to-r from-emerald-50 to-purple-50 border border-emerald-200 rounded-2xl p-6">
           <div className="flex items-start gap-4 flex-wrap justify-between">
             <div>
               <h2 className="text-lg font-black text-emerald-800 mb-1">✅ Deploy automático sem PR</h2>
@@ -60,7 +60,7 @@ export default function DeployPage() {
             <p className="text-slate-300">Primeiro, publique o código no GitHub.</p>
 
             <Step n="1.1" title="Crie um repositório no GitHub">
-              <p>Acesse <a href="https://github.com/new" target="_blank" rel="noopener" className="text-blue-400 hover:underline">github.com/new</a>, crie um repositório privado chamado <code className="bg-white/10 px-1 rounded">comprasnet-bot</code></p>
+              <p>Acesse <a href="https://github.com/new" target="_blank" rel="noopener" className="text-purple-400 hover:underline">github.com/new</a>, crie um repositório privado chamado <code className="bg-white/10 px-1 rounded">comprasnet-bot</code></p>
             </Step>
 
             <Step n="1.2" title="Faça o push do código">
@@ -128,7 +128,7 @@ git push -u origin main`}</Code>
             <p className="text-slate-300">Vercel detecta automaticamente projetos Next.js e faz o deploy.</p>
 
             <Step n="3.1" title="Crie uma conta no Vercel">
-              <p>Acesse <a href="https://vercel.com" target="_blank" rel="noopener" className="text-blue-400 hover:underline">vercel.com</a> → <strong>Sign up</strong> → escolha <strong>Continue with GitHub</strong></p>
+              <p>Acesse <a href="https://vercel.com" target="_blank" rel="noopener" className="text-purple-400 hover:underline">vercel.com</a> → <strong>Sign up</strong> → escolha <strong>Continue with GitHub</strong></p>
             </Step>
 
             <Step n="3.2" title="Importe o repositório">
@@ -228,9 +228,9 @@ git push origin main`}</Code>
         </div>
 
         {/* Updates */}
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
-          <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">🔄 Como Atualizar o Sistema</h3>
-          <p className="text-blue-700 text-sm mb-3">
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-6">
+          <h3 className="font-bold text-purple-800 mb-3 flex items-center gap-2">🔄 Como Atualizar o Sistema</h3>
+          <p className="text-purple-700 text-sm mb-3">
             Com o repositório conectado ao Vercel, cada push na branch de produção configurada inicia um deploy automaticamente.
           </p>
           <Code dark={false}>{`git add -A
@@ -265,7 +265,7 @@ git push origin main
         </div>
 
         <div className="text-center pb-4">
-          <Link href="/" className="inline-flex items-center gap-2 bg-[#1351b4] hover:bg-[#0c326f] text-white px-8 py-3 rounded-xl font-bold transition">
+          <Link href="/" className="inline-flex items-center gap-2 bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-8 py-3 rounded-xl font-bold transition">
             ← Ir para o Sistema
           </Link>
         </div>

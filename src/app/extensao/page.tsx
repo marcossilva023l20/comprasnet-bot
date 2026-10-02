@@ -3,11 +3,11 @@ import Link from "next/link";
 export default function ExtensaoPage() {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="bg-[#1351b4] text-white shadow-lg">
+      <header className="bg-[#6d28d9] text-white shadow-lg">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Link href="/" className="text-blue-200 hover:text-white text-sm">← Voltar</Link>
-            <span className="text-blue-300">›</span>
+            <Link href="/" className="text-purple-200 hover:text-white text-sm">← Voltar</Link>
+            <span className="text-purple-300">›</span>
             <h1 className="font-bold">🧩 Extensão Chrome</h1>
           </div>
         </div>
@@ -24,17 +24,17 @@ export default function ExtensaoPage() {
         </div>
 
         {/* Download */}
-        <div className="bg-gradient-to-br from-[#1351b4] to-[#0c326f] rounded-2xl p-8 text-white text-center shadow-xl shadow-blue-900/30">
+        <div className="bg-gradient-to-br from-[#6d28d9] to-[#4c1d95] rounded-2xl p-8 text-white text-center shadow-xl shadow-purple-900/30">
           <h2 className="text-xl font-bold mb-2">📦 Baixar Extensão</h2>
-          <p className="text-blue-200 text-sm mb-6">Arquivo ZIP pronto para instalar no Chrome</p>
+          <p className="text-purple-200 text-sm mb-6">Arquivo ZIP pronto para instalar no Chrome</p>
           <a
             href="/extension.zip"
             download
-            className="inline-flex items-center gap-3 bg-white text-[#1351b4] font-black px-8 py-3.5 rounded-xl hover:bg-blue-50 transition text-base shadow-lg"
+            className="inline-flex items-center gap-3 bg-white text-[#6d28d9] font-black px-8 py-3.5 rounded-xl hover:bg-purple-50 transition text-base shadow-lg"
           >
             ⬇️ Baixar comprasnet-bot.zip
           </a>
-          <p className="text-xs text-blue-300 mt-4">
+          <p className="text-xs text-purple-300 mt-4">
             Compatível com Google Chrome, Microsoft Edge e Brave · <strong>instalação única</strong>: depois disso, a própria extensão avisa e atualiza
           </p>
         </div>
@@ -52,7 +52,7 @@ export default function ExtensaoPage() {
               { n: "6", title: "Pronto! ✅", desc: "O ícone 🤖 aparece na barra do Chrome — e o ZIP nunca mais é necessário" },
             ].map((s) => (
               <div key={s.n} className="flex gap-3">
-                <span className="w-7 h-7 rounded-full bg-[#1351b4] text-white text-xs font-black flex items-center justify-center shrink-0">{s.n}</span>
+                <span className="w-7 h-7 rounded-full bg-[#6d28d9] text-white text-xs font-black flex items-center justify-center shrink-0">{s.n}</span>
                 <div>
                   <p className="font-bold text-slate-700 text-sm">{s.title}</p>
                   <p className="text-xs text-slate-500">{s.desc}</p>
@@ -128,9 +128,9 @@ export default function ExtensaoPage() {
         </div>
 
         {/* Tips */}
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
-          <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">💡 Dicas importantes</h3>
-          <ul className="space-y-2 text-sm text-blue-700">
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-6">
+          <h3 className="font-bold text-purple-800 mb-3 flex items-center gap-2">💡 Dicas importantes</h3>
+          <ul className="space-y-2 text-sm text-purple-700">
             <li>✅ <strong>Expanda os itens</strong> e use &quot;Ler página&quot; antes de executar; confira se valor, marca e modelo foram encontrados</li>
             <li>📥 <strong>Ler itens da página</strong> traz número, descrição, quantidade, unidade e valor estimado direto do ComprasNet — e <strong>substitui</strong> os itens da proposta correspondente (UASG + nº da compra)</li>
             <li>✅ O bot só preenche campos que conseguiu associar com segurança a um item</li>
