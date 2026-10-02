@@ -50,8 +50,7 @@ Opcionais:
   2. aplica as migrações SQL (`npm run db:migrate`),
   3. roda o `next build`.
 
-Deploy automático a cada push no `main` já vem pronto em `.github/workflows/deploy-main.yml`
-(cadastre os secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID` e `VERCEL_PROJECT_ID` no GitHub).
+Este repositório não inclui um workflow próprio do GitHub Actions. Para deploy automático, conecte o repositório ao Vercel e configure a branch de produção em **Project Settings → Git**. Depois, cada push nessa branch (normalmente `main`) inicia um deploy; não é necessário cadastrar secrets do Vercel no GitHub.
 
 ### 4. Verificação
 
@@ -92,7 +91,7 @@ npm run dev                 # http://localhost:3000
 | `npm run db:generate` | gera uma nova migração a partir de `src/db/schema.ts` |
 | `npm run db:push` | envia o schema direto (atalho, sem arquivo de migração) |
 | `npm run db:studio` | abre o Drizzle Studio |
-| `npm run typecheck` / `npm run lint` | validação |
+| `npm run typecheck` / `npm run lint` / `npm test` | validações e testes automatizados |
 
 ## Extensão Chrome
 

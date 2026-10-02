@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { parseLocalizedNumber } from "@/lib/numbers";
 
 interface Item {
   id: number;
@@ -81,8 +81,8 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...newItem,
-        numeroItem: parseInt(newItem.numeroItem) || items.length + 1,
-        quantidade: parseFloat(newItem.quantidade) || 1,
+        numeroItem: parseInt(newItem.numeroItem, 10) || items.length + 1,
+        quantidade: newItem.quantidade,
       }),
     });
     if (res.ok) {
@@ -325,8 +325,9 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, isSaving, fmt 
   });
 
   const isFilled = !!(item.valorUnitario && item.marcaFabricante);
-  const valorTotal = vals.valorUnitario && item.quantidade
-    ? (parseFloat(vals.valorUnitario.replace(",", ".")) * parseFloat(item.quantidade))
+  const valorUnitarioNumerico = parseLocalizedNumber(vals.valorUnitario);
+  const valorTotal = valorUnitarioNumerico && item.quantidade
+    ? Number(valorUnitarioNumerico) * Number(item.quantidade)
     : 0;
 
   return (
