@@ -56,7 +56,7 @@ function bindEvents() {
   on("btn-select-all", "click", selectAll);
   on("btn-select-filled", "click", selectFilled);
 
-  // Velocidade: presets (0,03s etc.) e digitação livre.
+  // Velocidade: presets (0,001s, 0,03s...) e digitação livre.
   document.querySelectorAll("[data-delay]").forEach((botao) => {
     botao.addEventListener("click", async () => {
       const ms = aplicarVelocidadeNaTela(Number(botao.dataset.delay) * 1000);
@@ -500,7 +500,7 @@ function setImportStatus(type, message) {
 // rápido de verdade (não só a pausa entre um item e outro).
 
 const DELAY_PADRAO_MS = 1000;
-const DELAY_MINIMO_MS = 10;
+const DELAY_MINIMO_MS = 1; // 0,001s — o mais rápido que o navegador entrega
 const DELAY_MAXIMO_MS = 5000;
 
 function delayDaTela() {
@@ -511,7 +511,9 @@ function delayDaTela() {
 }
 
 function formatarSegundos(ms) {
-  return `${(ms / 1000).toFixed(2).replace(".", ",")}s`;
+  // 0,001s · 0,03s · 0,3s · 1s · 2,5s (sem zeros à toa no fim)
+  const texto = (ms / 1000).toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  return `${texto.replace(".", ",")}s`;
 }
 
 /** Mostra na tela a velocidade salva (ex.: 30 → "0.03"). */
@@ -521,7 +523,7 @@ function aplicarVelocidadeNaTela(delayMs) {
     ? Math.min(DELAY_MAXIMO_MS, Math.max(DELAY_MINIMO_MS, valor))
     : DELAY_PADRAO_MS;
   const campo = document.getElementById("delay-input");
-  if (campo) campo.value = String(Number((ms / 1000).toFixed(2)));
+  if (campo) campo.value = String(Number((ms / 1000).toFixed(3)));
   return ms;
 }
 

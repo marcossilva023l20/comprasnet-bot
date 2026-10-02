@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.4";
+export const VERSAO_EXTENSAO = "1.7.5";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.5",
+    itens: [
+      "Velocidade máxima agora é 0,001s (1 milissegundo — o limite do próprio navegador): preset 🏎️ 0,001s no popup e campo aceitando de 0,001s a 5s",
+      "No máximo o piso das pausas também cai, então TUDO acelera junto: digitação, esperas e conferência de cada item",
+      "Correção: no turbo o bot não pula mais item de painel lento — o prazo para esperar o painel do item abrir continua fixo (só o intervalo entre as tentativas acelera)",
+    ],
+  },
   {
     versao: "1.7.4",
     itens: [

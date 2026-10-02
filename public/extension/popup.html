@@ -350,11 +350,12 @@
       <div class="field">
         <label>Velocidade — pausa entre itens (segundos)</label>
         <div style="display:flex;align-items:center;gap:6px;">
-          <input id="delay-input" type="number" min="0.01" max="5" step="0.01" value="1"
+          <input id="delay-input" type="number" min="0.001" max="5" step="0.001" value="1"
                  inputmode="decimal" style="flex:1;" />
           <span style="font-size:12px;color:#64748b;font-weight:600;">s</span>
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+          <button type="button" class="btn btn-outline btn-sm" data-delay="0.001">🏎️ 0,001s</button>
           <button type="button" class="btn btn-outline btn-sm" data-delay="0.03">🚀 0,03s</button>
           <button type="button" class="btn btn-outline btn-sm" data-delay="0.1">⚡ 0,1s</button>
           <button type="button" class="btn btn-outline btn-sm" data-delay="0.3">0,3s</button>
@@ -363,8 +364,9 @@
           <button type="button" class="btn btn-outline btn-sm" data-delay="2">2s</button>
         </div>
         <p style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5;">
-          Vale para tudo: digitação, pausas e conferência de cada item. Muito rápido
-          (0,03s) pode falhar em página lenta — se algum item não salvar, aumente.
+          Vale para tudo: digitação, pausas e conferência de cada item. No máximo
+          (0,001s) o bot vai o mais rápido que o navegador deixa; se o site for
+          lento e algum item não salvar, suba para 0,03s ou 0,1s.
         </p>
       </div>
 

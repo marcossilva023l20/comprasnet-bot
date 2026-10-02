@@ -19,7 +19,7 @@
  * 17) Máscara que insere na própria tecla (keydown) → os dígitos NÃO duplicam
  * 18) Valor unitário é lançado UMA vez só (não fica relançando o valor)
  * 19) Preenche na ordem do Item (1, 2, 3) e não pula item de painel devagar
- * 20) Velocidade turbo (0,03s): preenche igual e bem mais rápido que 1s
+ * 20) Velocidade turbo: 0,03s e o máximo (0,001s) preenchem igual e mais rápido
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1014,7 +1014,7 @@ export async function rodarSalvar() {
     checar(valor(3) === "33,0000", `item 3 ficou com o valor do item 3 (${valor(3)})`);
   }
 
-  console.log("\n── 20) Velocidade turbo (0,03s) preenche igual e bem mais rápido ──");
+  console.log("\n── 20) Velocidade turbo (0,03s e 0,001s) preenche igual e mais rápido ──");
   {
     const rodar = async (delay) => {
       const { eventos, enviar } = ambiente(pagina({ itens: 3 }));
@@ -1055,6 +1055,28 @@ export async function rodarSalvar() {
       `turbo bem mais rápido que 1s (${turbo.ms}ms vs ${normal.ms}ms)`,
     );
     checar(turbo.ms < 4000, `turbo rápido de verdade (${turbo.ms}ms para 3 itens)`);
+
+    // Velocidade máxima: 0,001s (1ms de pausa) — o piso de 1ms não pode quebrar
+    // nada: os 3 itens continuam sendo preenchidos, salvos e conferidos.
+    const maximo = await rodar(1);
+    checar(maximo.r.filled === 3, `0,001s: preencheu 3/3 (${maximo.r.filled})`);
+    checar(
+      JSON.stringify(maximo.r.savedItems) === JSON.stringify([1, 2, 3]),
+      `0,001s: salvou os 3 itens na ordem (${JSON.stringify(maximo.r.savedItems)})`,
+    );
+    checar(
+      maximo.r.salvamentos.every((s) => s.clicado && s.confirmado && !s.recusado),
+      "0,001s: todos salvos e confirmados pelo site",
+    );
+    checar(
+      maximo.r.salvamentos.every((s) => s.lancamentos?.valorUnitario === 1),
+      `0,001s: valor lançado 1x por item (${JSON.stringify(maximo.r.salvamentos.map((s) => s.lancamentos?.valorUnitario))})`,
+    );
+    checar(
+      maximo.ms < turbo.ms,
+      `0,001s mais rápido que 0,03s (${maximo.ms}ms vs ${turbo.ms}ms)`,
+    );
+    checar(maximo.ms < 3000, `0,001s rápido de verdade (${maximo.ms}ms para 3 itens)`);
   }
 
   return falhas;

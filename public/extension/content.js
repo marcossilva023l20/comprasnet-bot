@@ -611,7 +611,7 @@ async function fillSingleItem(item, allowUnassignedFields) {
       if (field.required) missing.push(`${FIELD_LABELS[field.key]}${detalhe}`);
       else warnings.push(`Item ${itemNumber}: não foi possível preencher ${FIELD_LABELS[field.key]}${detalhe}.`);
     }
-    await pausa(120, 25);
+    await pausa(120);
   }
 
   const lancamentos = lancamentosDoItem(fields);
@@ -626,7 +626,7 @@ async function fillSingleItem(item, allowUnassignedFields) {
   }
 
   // Dá tempo para o site validar/computar (valor total, máscara) antes de salvar.
-  await pausa(500, 120);
+  await pausa(500);
   showNotification(`💾 Item ${itemNumber}: salvando...`, "info");
   const salvamento = await salvarItem(itemNumber, allowUnassignedFields, fields);
 
@@ -709,60 +709,44 @@ function camposDoBloco(bloco) {
 }
 
 /**
- * Acha os campos do item esperando a página ficar quieta.
+ * Acha os campos do item, insistindo até o painel aparecer.
  *
  * Depois de salvar um item o portal redesenha a lista — procurar os campos do
- * item seguinte nesse instante é o que fazia o bot “pular” um item. Aqui a
- * leitura é repetida (e o item é aberto/expandido de novo, se preciso) antes
- * de desistir.
+ * item seguinte nesse instante é o que fazia o bot “pular” um item. O PRAZO
+ * desta espera é fixo (não acelera junto com a velocidade): o que a velocidade
+ * muda é o intervalo entre as tentativas. Assim, mesmo a 0,001s, um item de
+ * painel lento é esperado em vez de ser dado como perdido — e, quando o painel
+ * responde rápido, o retorno é imediato.
  */
 async function localizarCamposDoItem(itemNumber, allowUnassignedFields) {
   scanPage();
   let fields = getFieldsForItem(itemNumber, allowUnassignedFields);
   if (fields?.get("valorUnitario")) return fields;
 
-  // A seta de “mostrar detalhes” é o que monta o painel de preenchimento.
-  await tryExpandItem(itemNumber);
-  await pausa(300, 80);
+  const prazo = Date.now() + Math.max(2000, Math.round(3000 * fatorRitmo));
+  let ultimaTentativaDeAbrir = 0;
 
-  for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+  while (Date.now() < prazo) {
     if (abortRequested) return null;
+    await aguardarSePausado();
+
+    // A seta de “mostrar detalhes” é o que monta o painel; se o primeiro
+    // clique caiu num item que ainda estava redesenhando, tenta de novo.
+    if (Date.now() - ultimaTentativaDeAbrir > 700) {
+      await tryExpandItem(itemNumber);
+      await pausa(300);
+      ultimaTentativaDeAbrir = Date.now();
+    }
+
     scanPage();
     fields = getFieldsForItem(itemNumber, allowUnassignedFields);
     if (fields?.get("valorUnitario")) return fields;
 
-    if (tentativa === 1) {
-      await esperarPaginaEstavel(1500);
-      continue;
-    }
-
-    await tryExpandItem(itemNumber);
-    await pausa(350, 90);
+    await pausaConferencia(150);
   }
 
   scanPage();
   return getFieldsForItem(itemNumber, allowUnassignedFields);
-}
-
-/** Espera a lista da página parar de mudar (o portal redesenha após salvar). */
-async function esperarPaginaEstavel(tempoMs = 1500) {
-  const limite = Date.now() + tempoMs;
-  let anterior = "";
-  let estavel = 0;
-  while (Date.now() < limite) {
-    if (abortRequested) return false;
-    await pausa(150, 40);
-    scanPage();
-    const agora = `${assinaturaDaLista()}|${latestScanState?.result?.recognizedFields ?? 0}`;
-    if (agora === anterior) {
-      estavel += 1;
-      if (estavel >= 2) return true;
-    } else {
-      estavel = 0;
-      anterior = agora;
-    }
-  }
-  return false;
 }
 
 async function tryExpandItem(itemNumber) {
@@ -799,7 +783,7 @@ async function tryExpandItem(itemNumber) {
   } catch (_) {
     return false;
   }
-  await pausa(400, 100);
+  await pausa(400);
   return true;
 }
 
@@ -1003,12 +987,12 @@ async function cutucarCampo(input, view) {
     disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
   }
   disparar(input, "keyup", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
-  await pausa(40, 15);
+  await pausa(40);
 
   // Redigita o caractere apagado (com as teclas reais do caractere).
   await inserirTexto(input, ultimo, view);
   disparar(input, "change", view, { data: String(input.value ?? "") });
-  await pausa(60, 20);
+  await pausa(60);
 
   const depois = String(input.value ?? "");
   const numeroDepois = valorNumerico(depois);
@@ -1087,7 +1071,7 @@ async function reforcarValor(input, view) {
   aplicarValor(input, texto, view);
   disparar(input, "beforeinput", view, { data: texto, inputType: "insertText" });
   disparar(input, "input", view, { data: texto, inputType: "insertText" });
-  await pausa(80, 25);
+  await pausa(80);
   if (campoVazio(input)) return restaurar();
 
   const final = String(input.value ?? texto);
@@ -1096,7 +1080,7 @@ async function reforcarValor(input, view) {
   aplicarValor(input, final, view);
   disparar(input, "input", view, { data: final, inputType: "insertText" });
   disparar(input, "change", view, { data: final });
-  await pausa(80, 25);
+  await pausa(80);
   if (campoVazio(input)) return restaurar();
 
   disparar(input, "blur", view, {});
@@ -1106,7 +1090,7 @@ async function reforcarValor(input, view) {
   } catch (_) {
     // opcional
   }
-  await pausa(60, 20);
+  await pausa(60);
   return true;
 }
 
@@ -1151,14 +1135,14 @@ async function preencherCampo(input, value, view) {
 async function garantirRegistroDoCampo(input, view, numerico) {
   if (numerico) {
     await cutucarCampo(input, view);
-    await pausa(80, 25);
+    await pausa(80);
   }
 
   if (pistasDeFramework(input)) {
     const estado = estadoDeValidacao(input);
     if (estado.pristine || estado.invalido) {
       await reforcarValor(input, view); // último recurso: reenvia o texto formatado
-      await pausa(80, 25);
+      await pausa(80);
       const depois = estadoDeValidacao(input);
       return !depois.pristine && !depois.invalido;
     }
@@ -1264,7 +1248,7 @@ async function setInputValue(input, rawValue, esperaNumero) {
     disparar(input, "input", view, { data: option.value, inputType: "insertText" });
     disparar(input, "change", view, { data: option.value });
     input.blur();
-    await pausa(100, 30);
+    await pausa(100);
     return true;
   }
 
@@ -1447,7 +1431,7 @@ async function esperarHabilitar(botao, tempoMs = 2500) {
   while (Date.now() < limite) {
     if (!botao.isConnected) return false;
     if (!botao.disabled && botao.getAttribute("aria-disabled") !== "true") return true;
-    await pausa(150, 40);
+    await pausaConferencia(150);
   }
   return !botao.disabled;
 }
@@ -1747,7 +1731,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     relatorio.clicado = true;
 
     // O site costuma responder rápido (toast), mas pode demorar um pouco.
-    await pausa(800, 180);
+    await pausa(800);
 
     const limite = Date.now() + (tentativa === 1 ? 2600 : 2200);
     while (Date.now() < limite) {
@@ -1791,7 +1775,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
         break;
       }
 
-      await pausa(250, 60);
+      await pausaConferencia(250);
     }
 
     if (relatorio.recusado) break; // o site respondeu: não vale insistir
@@ -1813,7 +1797,7 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     const aindaDisponivel =
       botao.isConnected && !botao.disabled && botao.getAttribute("aria-disabled") !== "true";
     if (!aindaDisponivel) break;
-    await pausa(700, 160);
+    await pausa(700);
   }
 
   // O que a página realmente tem nos campos agora (máscara pode ter remontado).
@@ -1917,7 +1901,7 @@ async function responderModalDeConfirmacao() {
     const alvo = botoes[0];
     const rotulo = normalizeText(alvo.textContent || alvo.value || "");
     if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
-    await pausa(900, 200);
+    await pausa(900);
     return { texto, clicado: true, botao: rotulo };
   }
   return null;
@@ -2044,9 +2028,9 @@ function numerosNaPagina() {
 async function esperarListaMudar(antes, tempoMs = 5000) {
   const limite = Date.now() + tempoMs;
   while (Date.now() < limite) {
-    await sleep(200);
+    await pausaConferencia(200);
     if (assinaturaDaLista() !== antes) {
-      await sleep(250); // deixa o site terminar de montar os itens
+      await pausaConferencia(250); // deixa o site terminar de montar os itens
       return true;
     }
   }
@@ -2974,9 +2958,10 @@ function sleep(ms) {
 // dominariam e a velocidade escolhida não mudaria quase nada na prática.
 
 const DELAY_PADRAO_MS = 1000; // velocidade "Normal" (1s) — fator 1
-const FATOR_RITMO_MIN = 0.1; // 10x mais rápido (≈ pausa de 0,1s)
+const FATOR_RITMO_MIN = 0.001; // 1000x mais rápido (pausa de 0,001s)
 const FATOR_RITMO_MAX = 4; // 4x mais devagar (≈ pausa de 4s)
 const TEXTO_LENTO = 12; // ms entre teclas na digitação (velocidade normal)
+const INTERVALO_MINIMO_CONFERENCIA = 20; // ms entre conferências do site
 
 let fatorRitmo = 1;
 
@@ -2988,9 +2973,27 @@ function definirRitmo(delayMs) {
   return fatorRitmo;
 }
 
-/** Pausa proporcional à velocidade escolhida (com piso para não quebrar). */
-function pausa(ms, minimo = 20) {
-  return sleep(Math.max(minimo, Math.round(ms * fatorRitmo)));
+/**
+ * Pausa proporcional à velocidade escolhida.
+ *
+ * O piso é só 1ms: em 0,001s TUDO acelera junto (digitação, esperas e
+ * conferência), que é o que o usuário pediu. O que garante o salvamento não é
+ * a espera fixa, e sim a conferência: o bot só considera salvo quando o site
+ * responde, e continua observando por até alguns segundos quando precisa.
+ */
+function pausa(ms) {
+  return sleep(Math.max(1, Math.round(ms * fatorRitmo)));
+}
+
+/**
+ * Pausa dos laços de conferência (esperar o site responder).
+ *
+ * Aqui existe um piso de verdade (20ms): sem ele, em velocidade máxima o bot
+ * ficaria releitura da página a cada milissegundo e travaria o navegador — e
+ * o site não teria tempo nenhum para responder entre uma checagem e outra.
+ */
+function pausaConferencia(ms) {
+  return sleep(Math.max(INTERVALO_MINIMO_CONFERENCIA, Math.round(ms * fatorRitmo)));
 }
 
 /** Intervalo entre teclas na digitação (no turbo digita bem mais rápido). */
