@@ -40,6 +40,9 @@ function bindEvents() {
   on("btn-clear-sel", "click", clearSel);
   on("run-btn", "click", runBot);
   on("stop-btn", "click", stopBot);
+  on("btn-read-items", "click", readItemsFromPage);
+  on("btn-send-items", "click", sendItemsToApp);
+  on("import-confirmar", "change", updateEnvioState);
   on("btn-save-config", "click", saveConfig);
   on("btn-open-app", "click", openApp);
   on("btn-open-comprasnet", "click", openComprasNet);
@@ -192,6 +195,242 @@ function setStatus(type, msg) {
   if (!badge || !text) return;
   badge.className = `status-badge status-${type}`;
   text.textContent = msg;
+}
+
+// ─── Importar itens da página (extensão → sistema) ────────────────────────────
+//
+// Fluxo: lê os itens publicados na página do ComprasNet, mostra o que foi lido,
+// confere no sistema qual proposta corresponde à página e, com confirmação
+// explícita, envia os itens (substituindo os itens atuais daquela proposta).
+
+let itensLidos = null;
+let destinoLido = null;
+let identificacaoLida = null;
+
+async function readItemsFromPage() {
+  if (!currentTab?.id) {
+    setImportStatus("warning", "Não encontrei uma aba ativa para ler.");
+    return;
+  }
+  if (!isComprasNetPage(currentTab.url || "")) {
+    setImportStatus("warning", "Abra primeiro a página de cadastro de propostas do ComprasNet.");
+    return;
+  }
+
+  const expandir = document.getElementById("import-expandir")?.checked !== false;
+  const button = document.getElementById("btn-read-items");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "⏳ Lendo itens...";
+  }
+  setImportStatus("info", expandir ? "Lendo e expandindo cada item da página..." : "Lendo os itens da página...");
+  document.getElementById("import-preview")?.classList.add("hidden");
+  document.getElementById("import-envio")?.classList.add("hidden");
+  document.getElementById("import-destino")?.classList.add("hidden");
+  itensLidos = null;
+  destinoLido = null;
+  identificacaoLida = null;
+
+  try {
+    const result = await chrome.tabs.sendMessage(currentTab.id, {
+      action: "read_comprasnet_items",
+      expandir,
+      delay: 450,
+    });
+
+    if (!result?.ok) throw new Error(result?.error || "A página não respondeu à leitura.");
+    if (!Array.isArray(result.itens) || result.itens.length === 0) {
+      throw new Error("Não encontrei itens nesta página. Confira se a lista de itens está visível.");
+    }
+
+    itensLidos = result.itens;
+    identificacaoLida = result.identificacao || {};
+    renderImportPreview(result);
+    await previewDestino(identificacaoLida);
+
+    const avisos = result.avisos?.length ? ` ${result.avisos.join(" ")}` : "";
+    setImportStatus(
+      result.avisos?.length ? "warning" : "success",
+      `Li ${result.itens.length} item(ns)${result.expandidos ? ` (${result.expandidos} expandido(s))` : ""}. Confira abaixo e confirme para enviar.${avisos}`,
+    );
+    document.getElementById("import-envio")?.classList.remove("hidden");
+    updateEnvioState();
+  } catch (e) {
+    setImportStatus("warning", e.message || "Não consegui ler os itens desta página.");
+    addLog("error", `Leitura de itens: ${e.message}`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "📥 Ler itens da página";
+    }
+  }
+}
+
+function renderImportPreview(result) {
+  const ident = result.identificacao || {};
+  const resumo = document.getElementById("import-destino");
+  if (resumo) {
+    resumo.className = "text-xs mt-2";
+    resumo.innerHTML = "";
+    const linhas = [
+      ident.uasg ? `UASG: ${ident.uasg}` : null,
+      ident.numeroCompra ? `Compra/processo: ${ident.numeroCompra}` : null,
+      ident.objeto ? `Objeto: ${ident.objeto}` : null,
+      ident.dataLimite ? `Data limite: ${ident.dataLimite}` : null,
+    ].filter(Boolean);
+
+    const titulo = document.createElement("div");
+    titulo.style.fontWeight = "700";
+    titulo.textContent = "Página identificada";
+    resumo.appendChild(titulo);
+    linhas.forEach((linha) => {
+      const div = document.createElement("div");
+      div.textContent = linha;
+      resumo.appendChild(div);
+    });
+  }
+
+  const lista = document.getElementById("import-list");
+  if (!lista) return;
+  lista.innerHTML = "";
+
+  result.itens.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "item-row";
+
+    const num = document.createElement("div");
+    num.className = "item-num";
+    num.textContent = item.numeroItem;
+
+    const desc = document.createElement("div");
+    desc.className = "item-desc";
+    desc.title = item.descricaoDetalhada || item.descricao || "";
+    desc.textContent = item.descricao || "(sem descrição)";
+
+    const val = document.createElement("div");
+    val.className = "item-val";
+    val.textContent = `${item.quantidade || "?"} ${item.unidade || ""}${item.valorEstimado ? ` · ${item.valorEstimado}` : ""}`;
+
+    row.append(num, desc, val);
+    lista.appendChild(row);
+  });
+
+  document.getElementById("import-preview")?.classList.remove("hidden");
+}
+
+async function previewDestino(identificacao) {
+  if (!apiUrl) {
+    setImportStatus("warning", "Configure a URL do sistema na aba ⚙️ Config antes de enviar.");
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams();
+    if (identificacao.uasg) params.set("uasg", identificacao.uasg);
+    if (identificacao.numeroCompra) params.set("numeroCompra", identificacao.numeroCompra);
+
+    const res = await fetch(`${apiUrl}/api/propostas/localizar?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    destinoLido = data;
+
+    const bloco = document.getElementById("import-destino");
+    const aviso = document.createElement("div");
+    aviso.className = data.encontrada ? "alert alert-info mt-2" : "alert alert-success mt-2";
+    aviso.textContent = data.encontrada
+      ? `🎯 Proposta correspondente: nº ${data.proposta.numeroDispensa} (${data.proposta.totalItens} item(ns) hoje). Motivo: ${data.motivo}.`
+      : `🆕 Nenhuma proposta corresponde a esta página: uma nova será criada ao enviar. (${data.motivo})`;
+    bloco?.appendChild(aviso);
+  } catch (e) {
+    const bloco = document.getElementById("import-destino");
+    const aviso = document.createElement("div");
+    aviso.className = "alert alert-warning mt-2";
+    aviso.textContent = `Não consegui consultar o sistema agora (${e.message}). Você ainda pode enviar; o sistema decide o destino no envio.`;
+    bloco?.appendChild(aviso);
+  }
+}
+
+function updateEnvioState() {
+  const confirmado = document.getElementById("import-confirmar")?.checked === true;
+  const pronto = Boolean(apiUrl) && Array.isArray(itensLidos) && itensLidos.length > 0 && confirmado;
+  const botao = document.getElementById("btn-send-items");
+  if (botao) botao.disabled = !pronto;
+}
+
+async function sendItemsToApp() {
+  if (!Array.isArray(itensLidos) || itensLidos.length === 0) {
+    setImportStatus("warning", "Leia os itens da página antes de enviar.");
+    return;
+  }
+  if (!apiUrl) {
+    setImportStatus("warning", "Configure a URL do sistema na aba ⚙️ Config.");
+    return;
+  }
+  if (document.getElementById("import-confirmar")?.checked !== true) {
+    setImportStatus("warning", "Marque a confirmação de substituição antes de enviar.");
+    return;
+  }
+
+  const button = document.getElementById("btn-send-items");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "⏳ Enviando...";
+  }
+  setImportStatus("info", `Enviando ${itensLidos.length} item(ns) para o sistema...`);
+
+  try {
+    const res = await fetch(`${apiUrl}/api/propostas/importar-pagina`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identificacao: identificacaoLida || {},
+        itens: itensLidos,
+        confirmarSubstituicao: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      const detalhes = (data.itensIgnorados || []).map((i) => `item ${i.indice}: ${i.motivo}`).join("; ");
+      throw new Error(`${data.error || `HTTP ${res.status}`}${detalhes ? ` (${detalhes})` : ""}`);
+    }
+
+    const avisos = data.avisos?.length ? ` ${data.avisos.join(" ")}` : "";
+    setImportStatus(
+      "success",
+      `✅ ${data.itensInseridos} item(ns) gravados na proposta nº ${data.proposta?.numeroDispensa ?? data.proposta?.id}` +
+        `${data.criada ? " (proposta criada agora)" : ` — ${data.itensSubstituidos} item(ns) anterior(es) substituído(s)`}.${avisos}`,
+    );
+    addLog("success", `Itens enviados: proposta ${data.proposta?.id} (${data.itensInseridos} itens).`);
+
+    const abrir = document.getElementById("btn-open-proposta");
+    if (abrir) abrir.remove();
+    if (data.proposta?.id) {
+      const link = document.createElement("button");
+      link.className = "btn btn-outline mt-2";
+      link.id = "btn-open-proposta";
+      link.textContent = "📊 Abrir proposta no sistema";
+      link.addEventListener("click", () => chrome.tabs.create({ url: `${apiUrl}/proposta/${data.proposta.id}` }));
+      document.getElementById("import-envio")?.appendChild(link);
+    }
+
+    const confirmar = document.getElementById("import-confirmar");
+    if (confirmar) confirmar.checked = false;
+    await loadPropostas();
+  } catch (e) {
+    setImportStatus("warning", `Não foi possível enviar: ${e.message}`);
+    addLog("error", `Envio de itens: ${e.message}`);
+  } finally {
+    if (button) button.textContent = "⬆️ Enviar para o sistema";
+    updateEnvioState();
+  }
+}
+
+function setImportStatus(type, message) {
+  const element = document.getElementById("import-status");
+  if (!element) return;
+  element.className = `alert alert-${type} mt-2`;
+  element.textContent = message;
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────

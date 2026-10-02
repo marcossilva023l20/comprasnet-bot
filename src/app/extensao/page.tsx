@@ -62,12 +62,13 @@ export default function ExtensaoPage() {
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
             <h2 className="font-black text-slate-800 text-lg flex items-center gap-2">🚀 Como Usar</h2>
             {[
-              { n: "1", icon: "📋", title: "Crie a proposta no sistema", desc: "Adicione os itens com valores, marcas e modelos preenchidos" },
-              { n: "2", icon: "🏛️", title: "Acesse o ComprasNet", desc: "Faça login e vá em Dispensa Eletrônica → Cadastrar Propostas" },
-              { n: "3", icon: "🧩", title: "Abra a extensão", desc: 'Clique no ícone 🤖 na barra do Chrome, vá em "⚙️ Config" e cole a URL do sistema' },
-              { n: "4", icon: "📦", title: "Selecione a proposta e itens", desc: "Escolha quais itens preencher (só os com dados completos aparecerão)" },
-              { n: "5", icon: "📖", title: 'Clique "Ler página"', desc: "Expanda os itens no ComprasNet e confira se valor, marca e modelo foram encontrados" },
-              { n: "6", icon: "🚀", title: 'Clique "Executar Bot"', desc: "O bot preenche os campos reconhecidos para cada item! ✨" },
+              { n: "1", icon: "📥", title: "Importe os itens da página", desc: "No popup, use \"Ler itens da página\" e envie: o sistema cria a proposta e grava os itens lidos" },
+              { n: "2", icon: "📋", title: "Complete valor, marca e modelo", desc: "Abra a proposta no sistema e preencha o que o ComprasNet não mostra" },
+              { n: "3", icon: "🏛️", title: "Acesse o ComprasNet", desc: "Faça login e vá em Dispensa Eletrônica → Cadastrar Propostas" },
+              { n: "4", icon: "🧩", title: "Abra a extensão", desc: 'Clique no ícone 🤖 na barra do Chrome, vá em "⚙️ Config" e cole a URL do sistema' },
+              { n: "5", icon: "📦", title: "Selecione a proposta e itens", desc: "Escolha quais itens preencher (só os com dados completos aparecerão)" },
+              { n: "6", icon: "📖", title: 'Clique "Ler página"', desc: "Expanda os itens no ComprasNet e confira se valor, marca e modelo foram encontrados" },
+              { n: "7", icon: "🚀", title: 'Clique "Executar Bot"', desc: "O bot preenche os campos reconhecidos para cada item! ✨" },
             ].map((s) => (
               <div key={s.n} className="flex gap-3">
                 <span className="w-7 h-7 rounded-full bg-green-500 text-white text-xs font-black flex items-center justify-center shrink-0">{s.n}</span>
@@ -103,6 +104,7 @@ export default function ExtensaoPage() {
           <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">💡 Dicas importantes</h3>
           <ul className="space-y-2 text-sm text-blue-700">
             <li>✅ <strong>Expanda os itens</strong> e use &quot;Ler página&quot; antes de executar; confira se valor, marca e modelo foram encontrados</li>
+            <li>📥 <strong>Ler itens da página</strong> traz número, descrição, quantidade, unidade e valor estimado direto do ComprasNet — e <strong>substitui</strong> os itens da proposta correspondente (UASG + nº da compra)</li>
             <li>✅ O bot só preenche campos que conseguiu associar com segurança a um item</li>
             <li>✅ Use <strong>delay &quot;Lento&quot;</strong> se o site estiver demorando para responder</li>
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>

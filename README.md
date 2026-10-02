@@ -159,6 +159,33 @@ npm run dev                 # http://localhost:3000
 Baixe o ZIP em `/extension.zip` ou acesse `/extensao` no sistema. Depois, na extensão:
 **⚙️ Config → cole a URL do app** (ex.: `https://SEU-APP.vercel.app`).
 
+### Importar os itens da página (extensão → sistema)
+
+Além de preencher o ComprasNet, a extensão lê a lista de itens publicada na página
+e envia para o sistema — assim os itens deixam de ser digitados/planilhados à mão:
+
+1. abra a página de cadastro de propostas do ComprasNet com os itens visíveis;
+2. no popup, clique em **📥 Ler itens da página** (a extensão pode expandir cada
+   item — "mostrar detalhes" — para trazer a descrição completa);
+3. confira os itens lidos e o destino detectado (UASG / número da compra);
+4. marque a confirmação e clique em **⬆️ Enviar para o sistema**.
+
+Como o destino é decidido (endpoint `GET /api/propostas/localizar`):
+
+| Situação | O que acontece |
+| --- | --- |
+| Já existe proposta com o mesmo número de compra | Os itens são gravados nela |
+| Não existe | Uma proposta nova é criada com UASG, objeto e data limite da página |
+| Várias propostas com a mesma UASG e sem número de compra | Usa a atualizada mais recentemente e avisa na tela |
+
+O envio (`POST /api/propostas/importar-pagina`) **substitui** os itens da proposta
+pelos itens lidos — nada é duplicado e nada é apagado sem confirmação: a API exige
+`confirmarSubstituicao: true` e recusa lista vazia. A troca é feita em **uma única
+instrução SQL** (DELETE + INSERT na mesma query), então uma falha no meio deixa os
+itens anteriores intactos (o driver HTTP do Neon não suporta transações, e esta
+solução não depende delas). Linhas que o ComprasNet não mostra (valor unitário,
+marca e modelo) ficam em branco, prontas para o preenchimento pelo bot.
+
 ## Como usar
 
 1. Crie uma proposta e importe a planilha Excel com os itens

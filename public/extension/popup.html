@@ -257,6 +257,31 @@
       <div id="page-url" class="text-xs mt-2" style="color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
     </div>
 
+    <!-- Importar itens da página (extensão -> sistema) -->
+    <div class="card">
+      <div class="card-title">📥 Itens da página → sistema</div>
+      <div class="field">
+        <label style="display:flex; align-items:flex-start; gap:6px; font-weight:600;">
+          <input type="checkbox" id="import-expandir" checked style="width:auto; margin-top:1px;" />
+          <span>Expandir cada item antes de ler (descrição completa; mais lento)</span>
+        </label>
+      </div>
+      <button class="btn btn-outline" id="btn-read-items">📥 Ler itens da página</button>
+      <div id="import-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
+      <div id="import-destino" class="hidden mt-2"></div>
+      <div id="import-preview" class="hidden mt-2">
+        <div class="card-title" style="margin-bottom:6px;">Itens lidos na página</div>
+        <div class="items-list" id="import-list"></div>
+      </div>
+      <div id="import-envio" class="hidden mt-2">
+        <label style="display:flex; align-items:flex-start; gap:6px; font-weight:600;">
+          <input type="checkbox" id="import-confirmar" style="width:auto; margin-top:1px;" />
+          <span>Entendi que os itens atuais da proposta serão <b>substituídos</b> pelos itens lidos.</span>
+        </label>
+        <button class="btn btn-primary mt-2" id="btn-send-items" disabled>⬆️ Enviar para o sistema</button>
+      </div>
+    </div>
+
     <!-- Proposta selector -->
     <div class="card">
       <div class="card-title">📋 Proposta a Preencher</div>
@@ -366,6 +391,19 @@
         <strong>4.</strong> Abra este popup, selecione a proposta e clique em <strong>"📖 Ler página"</strong><br>
         <strong>5.</strong> Confira os campos encontrados e clique em <strong>"Executar Bot"</strong><br>
         <strong>6.</strong> O bot preenche somente os campos identificados para cada item. ✅
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📥 Importar itens da página</div>
+      <div class="text-xs" style="line-height:1.8;">
+        <strong>1.</strong> Abra a página de cadastro de propostas do ComprasNet com os itens visíveis<br>
+        <strong>2.</strong> Clique em <strong>"📥 Ler itens da página"</strong> (o leitor pode expandir cada item para pegar a descrição completa)<br>
+        <strong>3.</strong> Confira os itens lidos e o destino detectado (UASG / número da compra)<br>
+        <strong>4.</strong> Marque a confirmação e clique em <strong>"⬆️ Enviar para o sistema"</strong>
+      </div>
+      <div class="alert alert-warning mt-2" style="margin-bottom:0;">
+        O envio <strong>substitui</strong> os itens da proposta correspondente pelos itens lidos na página. Se a proposta não existir, ela é criada automaticamente.
       </div>
     </div>
 

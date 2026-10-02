@@ -36,6 +36,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "read_comprasnet_items") {
+    readPageItems({
+      expandir: msg.expandir !== false,
+      delay: Number(msg.delay) || 400,
+    })
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
   if (msg.action === "fill_items") {
     fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || 800)
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -612,6 +622,406 @@ async function clickSalvar(itemNumber, allowUnassignedFields) {
   button.click();
   await sleep(600);
   return true;
+}
+
+// ─── Leitura dos itens da página (extensão → sistema) ────────────────────────
+//
+// Diferente de scanPage() (que procura CAMPOS para preencher), esta leitura
+// extrai os DADOS dos itens já publicados pelo ComprasNet: número, descrição,
+// quantidade, unidade e valor estimado. Opcionalmente expande cada item
+// ("mostrar detalhes") para pegar a descrição completa.
+
+const PAGE_LABELS = [
+  /quantidade\s+solicitada/i,
+  /unidade\s+(?:de\s+)?fornecimento/i,
+  /valor\s+estimado/i,
+  /proposta\s+n[aã]o\s+cadastrada/i,
+  /descri[cç][aã]o\s+detalhada/i,
+  /termo\s+de\s+aceita[cç][aã]o/i,
+  /declara[cç][aã]o/i,
+];
+
+async function readPageItems({ expandir = true, delay = 400 } = {}) {
+  const avisos = [];
+  const identificacao = readPageIdentificacao();
+
+  const blocos = findItemBlocks();
+  if (blocos.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Não encontrei a lista de itens nesta página. Abra a página de cadastro de propostas do ComprasNet com os itens visíveis e tente novamente.",
+      identificacao,
+    };
+  }
+
+  const itens = [];
+  let expandidos = 0;
+  abortRequested = false;
+
+  if (expandir) showProgressBar(0, blocos.length);
+
+  for (const [index, bloco] of blocos.entries()) {
+    if (abortRequested) {
+      avisos.push("Leitura interrompida antes do fim da lista.");
+      break;
+    }
+
+    const numero = itemNumberFromBlock(bloco) || String(index + 1);
+
+    if (expandir) {
+      const abriu = await expandItemBlock(bloco, delay);
+      if (abriu) expandidos += 1;
+    }
+
+    // Depois de expandir, o painel de detalhes pode estar num irmão do bloco:
+    // amplia o escopo enquanto ele não engolir outro item da lista.
+    const escopo = findItemScope(bloco, blocos);
+    const dados = extractItemData(escopo, numero);
+    if (!dados.descricao) {
+      avisos.push(`Item ${numero}: não consegui ler a descrição; confira na página antes de enviar.`);
+    }
+    itens.push(dados);
+
+    if (expandir) showProgressBar(index + 1, blocos.length);
+  }
+
+  if (expandir) removeProgressBar();
+
+  return {
+    ok: true,
+    url: location.href,
+    identificacao,
+    itens,
+    total: itens.length,
+    expandidos,
+    avisos,
+  };
+}
+
+/** Cabeçalho da página: UASG, número da compra/processo, objeto e data limite. */
+function readPageIdentificacao() {
+  let texto = "";
+  try {
+    texto = (document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").trim();
+  } catch (_) {
+    texto = "";
+  }
+
+  const uasg =
+    firstMatch(texto, /uasg\s*:?\s*(\d{5,6})\b/i) ||
+    firstMatch(texto, /\buasg\b[^\d]{0,30}(\d{5,6})\b/i) ||
+    "";
+
+  const numeroCompra =
+    firstMatch(texto, /(?:n[ºo°.]?\s*(?:da\s*)?compra|n[uú]mero\s+da\s+compra)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
+    firstMatch(texto, /(?:processo|n[ºo°.]?\s*processo)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
+    firstMatch(texto, /\b(\d{15,20})\b/) ||
+    numeroCompraDaUrl();
+
+  const objeto =
+    firstMatch(
+      texto,
+      /objeto\s*:?\s*(.{10,400}?)(?:\s*(?:data\s+limite|uasg|n[ºo°.]?\s*(?:da\s*)?compra|processo)\b|$)/i,
+    ) || "";
+
+  const dataLimite =
+    firstMatch(texto, /data\s+limite[^:]{0,60}:?\s*(\d{2}\/\d{2}\/\d{4}(?:\s*\d{1,2}:\d{2})?)/i) || "";
+
+  return {
+    uasg,
+    numeroCompra,
+    objeto,
+    dataLimite,
+    url: location.href,
+  };
+}
+
+function numeroCompraDaUrl() {
+  try {
+    const url = new URL(location.href);
+    for (const [chave, valor] of url.searchParams.entries()) {
+      if (/compra|processo|num|numero/i.test(chave)) {
+        const digitos = String(valor).replace(/\D+/g, "");
+        if (digitos.length >= 6) return String(valor);
+      }
+    }
+    const doCaminho = url.pathname.match(/\d{10,20}/);
+    if (doCaminho) return doCaminho[0];
+  } catch (_) {
+    // URL inesperada: segue sem número da compra.
+  }
+  return "";
+}
+
+/**
+ * Encontra os blocos de item. Um bloco é o menor elemento visível que:
+ *   - começa com o número do item;
+ *   - contém "Quantidade solicitada";
+ *   - contém "Valor estimado" ou um valor em R$.
+ * Blocos repetidos (contêineres maiores que envolvem os itens) são descartados.
+ */
+function findItemBlocks() {
+  const candidatos = [];
+
+  for (const doc of collectDocuments()) {
+    const elementos = doc.querySelectorAll('tr, li, section, article, div, [role="row"], [data-item]');
+
+    for (const el of elementos) {
+      if (!isVisible(el)) continue;
+      const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!bruto || bruto.length > 3000) continue;
+      if (!/quantidade\s+solicitada/i.test(bruto)) continue;
+      if (!/valor\s+estimado/i.test(bruto) && !/r\$/i.test(bruto)) continue;
+
+      const numero = itemNumberFromBlock(el);
+      if (!numero) continue;
+
+      candidatos.push({ el, numero, profundidade: elementDepth(el), tamanho: bruto.length });
+    }
+  }
+
+  // Mais profundo (menor contêiner) primeiro; em empate, o texto menor.
+  candidatos.sort((a, b) => b.profundidade - a.profundidade || a.tamanho - b.tamanho);
+
+  const escolhidos = [];
+  for (const candidato of candidatos) {
+    if (escolhidos.some((e) => e.numero === candidato.numero)) continue;
+    // Descarta contêineres que englobam um item já escolhido.
+    if (escolhidos.some((e) => candidato.el.contains(e.el))) continue;
+    escolhidos.push(candidato);
+  }
+
+  return escolhidos
+    .sort((a, b) => Number(a.numero) - Number(b.numero))
+    .map((escolhido) => escolhido.el);
+}
+
+function elementDepth(el) {
+  let profundidade = 0;
+  let node = el;
+  while (node && node.parentElement && profundidade < 50) {
+    profundidade += 1;
+    node = node.parentElement;
+  }
+  return profundidade;
+}
+
+function itemNumberFromBlock(el) {
+  const porAtributo = getItemNumberFromAttributes(el);
+  if (porAtributo) return porAtributo;
+
+  const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
+  const porTexto = getLeadingItemNumber(bruto);
+  if (porTexto) return porTexto;
+
+  // Fallback: "Item 3" em algum lugar do bloco.
+  return getExplicitItemNumbers(bruto)[0] || "";
+}
+
+function findItemScope(bloco, todosOsBlocos) {
+  let node = bloco.parentElement;
+  let melhor = bloco;
+
+  for (let nivel = 0; node && nivel < 6; nivel += 1, node = node.parentElement) {
+    if (node === node.ownerDocument.body) break;
+    // Nunca misturar itens: para antes de englobar o bloco de outro item.
+    if (todosOsBlocos.some((outro) => outro !== bloco && node.contains(outro))) break;
+    if ((node.textContent || "").length > 4000) break;
+    melhor = node;
+  }
+
+  return melhor;
+}
+
+function extractItemData(bloco, numero) {
+  const bruto = (bloco.textContent || "").replace(/\s+/g, " ").trim();
+
+  const quantidade =
+    firstMatch(bruto, /quantidade\s+solicitada\s*:?\s*([0-9][0-9.,]*)/i) || "";
+  const unidade =
+    firstMatch(bruto, /unidade\s+(?:de\s+)?fornecimento\s*:?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24})/i) || "";
+  const valorEstimado =
+    firstMatch(bruto, /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?\s*:?\s*(R\$\s*[0-9][0-9.,]*|[0-9][0-9.,]*)/i) || "";
+
+  const trechos = collectCleanTexts(bloco);
+  const descricao = escolherDescricao(trechos, collectAttributeTexts(bloco));
+  const descricaoDetalhada = escolherDescricaoDetalhada(bloco, trechos, descricao);
+
+  return {
+    numeroItem: numero,
+    descricao,
+    descricaoDetalhada,
+    quantidade,
+    unidade,
+    valorEstimado,
+  };
+}
+
+function firstMatch(texto, regex) {
+  const match = String(texto || "").match(regex);
+  return match ? String(match[1]).trim() : "";
+}
+
+/** Texto de cada nó do bloco, já sem rótulos, números soltos e ruído de UI. */
+function collectCleanTexts(bloco) {
+  const textos = [];
+  const vistos = new Set();
+
+  const adicionar = (valor) => {
+    const texto = limparDescricao(valor);
+    if (!texto || texto.length < 8) return;
+    if (vistos.has(texto)) return;
+    vistos.add(texto);
+    textos.push(texto);
+  };
+
+  try {
+    const walker = bloco.ownerDocument.createTreeWalker(bloco, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const pai = node.parentElement;
+      if (!pai || !isVisible(pai)) continue;
+      if (pai.tagName === "SCRIPT" || pai.tagName === "STYLE") continue;
+      adicionar(node.nodeValue);
+    }
+  } catch (_) {
+    // TreeWalker indisponível: usa o texto do bloco inteiro.
+    adicionar(bloco.textContent);
+  }
+
+  // Títulos/atributos costumam guardar o texto completo que a célula corta.
+  for (const el of bloco.querySelectorAll("[title], [aria-label]")) {
+    if (!isVisible(el)) continue;
+    adicionar(el.getAttribute("title"));
+    adicionar(el.getAttribute("aria-label"));
+  }
+
+  return textos;
+}
+
+function collectAttributeTexts(el) {
+  const textos = [];
+  const vistos = new Set();
+  for (const alvo of el.querySelectorAll("[title], [aria-label]")) {
+    if (!isVisible(alvo)) continue;
+    for (const bruto of [alvo.getAttribute("title"), alvo.getAttribute("aria-label")]) {
+      const texto = limparDescricao(bruto);
+      if (!texto || texto.length < 8 || vistos.has(texto)) continue;
+      vistos.add(texto);
+      textos.push(texto);
+    }
+  }
+  return textos;
+}
+
+/**
+ * Limpa um trecho para uso como DESCRIÇÃO.
+ *
+ * Importante: não remove números — descrições de licitação costumam trazê-los
+ * ("PNEU 175/70 R13", "CABO 2,5MM"). Só descarta valores monetários, frases de
+ * situação e o texto do botão de expandir. Trechos sem nenhuma letra (números
+ * soltos da tela) são descartados.
+ */
+function limparDescricao(valor) {
+  let texto = String(valor || "").replace(/\s+/g, " ").trim();
+  if (!texto) return "";
+  if (PAGE_LABELS.some((regex) => regex.test(texto))) return "";
+
+  texto = texto
+    .replace(/r\$\s*[0-9][0-9.,]*/gi, " ")
+    .replace(/proposta\s+n[aã]o\s+cadastrada/gi, " ")
+    .replace(/(?:mostrar|ocultar|ver)\s+detalhes/gi, " ")
+    .replace(/\bdetalhes?\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  texto = texto.replace(/^[\s:;,.(\-–—/|]+|[\s:;,.(\-–—/|]+$/g, "");
+  if (!/[A-Za-zÀ-ÿ]/.test(texto)) return "";
+  return texto;
+}
+
+function escolherDescricao(trechos, atributos = []) {
+  const utilizaveis = trechos
+    .filter((texto) => /[A-Za-zÀ-ÿ]{3}/.test(texto))
+    .filter((texto) => texto.split(" ").length >= 2);
+
+  // O `title` da célula costuma ter a descrição completa que a tela corta com "…".
+  const porAtributo = atributos
+    .filter((texto) => /[A-Za-zÀ-ÿ]{3}/.test(texto))
+    .filter((texto) => texto.split(" ").length >= 2)
+    .sort((a, b) => b.length - a.length)[0];
+  if (porAtributo) return porAtributo;
+
+  const curtas = utilizaveis.filter((texto) => texto.length <= 400);
+  const candidatos = curtas.length ? curtas : utilizaveis;
+  if (candidatos.length === 0) return "";
+  return candidatos.sort((a, b) => b.length - a.length)[0];
+}
+
+function escolherDescricaoDetalhada(bloco, trechos, descricao) {
+  const seletores = [
+    '[class*="detalh"]',
+    '[class*="detail"]',
+    '[class*="collapse"]',
+    '[class*="accordion"]',
+    '[class*="content"]',
+  ];
+
+  const candidatos = [];
+  for (const el of bloco.querySelectorAll(seletores.join(","))) {
+    if (!isVisible(el)) continue;
+    for (const texto of collectCleanTexts(el)) candidatos.push(texto);
+  }
+
+  const todos = [...candidatos, ...trechos]
+    .filter((texto) => texto && texto !== descricao)
+    .filter((texto) => texto.length >= 30);
+
+  if (todos.length === 0) return "";
+
+  const melhor = todos.sort((a, b) => b.length - a.length)[0];
+  if (descricao && melhor.length <= descricao.length + 15) return "";
+  return melhor.slice(0, 4000);
+}
+
+function findExpandButton(bloco) {
+  const candidatos = [...bloco.querySelectorAll('button, a, [role="button"], [aria-expanded]')].filter(isVisible);
+  if (candidatos.length === 0) return null;
+
+  const porEstado = candidatos.find((el) => el.getAttribute("aria-expanded") === "false");
+  if (porEstado) return porEstado;
+
+  const porAtributo = candidatos.find((el) => {
+    const pistas = `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${
+      typeof el.className === "string" ? el.className : ""
+    }`;
+    return /detalh|detalhe|expand|mostrar|chevron|toggle|abrir/i.test(pistas);
+  });
+  if (porAtributo) return porAtributo;
+
+  const porTexto = candidatos.find((el) => /detalh|mostrar|ocultar|expandir/i.test(normalizeText(el.textContent || "")));
+  if (porTexto) return porTexto;
+
+  // Botão só com ícone (chevron) dentro do item.
+  return candidatos.find((el) => !normalizeText(el.textContent || "").trim() && el.querySelector("svg, i, img")) || null;
+}
+
+async function expandItemBlock(bloco, delay) {
+  const botao = findExpandButton(bloco);
+  if (!botao) return false;
+  if (botao.getAttribute("aria-expanded") === "true") return false;
+
+  const tamanhoAntes = (bloco.textContent || "").length;
+  try {
+    botao.click();
+  } catch (_) {
+    return false;
+  }
+  await sleep(delay);
+
+  const tamanhoDepois = (bloco.textContent || "").length;
+  return botao.getAttribute("aria-expanded") === "true" || tamanhoDepois > tamanhoAntes + 10;
 }
 
 // ─── Visibilidade e utilidades ────────────────────────────────────────────────
