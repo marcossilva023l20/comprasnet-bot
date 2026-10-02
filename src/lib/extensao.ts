@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.12";
+export const VERSAO_EXTENSAO = "1.7.13";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.13",
+    itens: [
+      "Corrige a escala observada em produção (67,4100 → 674.100,0000): os prefixos intermediários são convertidos para a escala decimal antes do evento input, evitando que 674100 seja lido como reais inteiros",
+      "Detecta máscaras que recebem a vírgula como separador decimal (primeiro dígito exibido como 6,0000) e só envia keypress quando keydown não aceitou a tecla",
+      "Valores com duas casas, como 61,41, mantêm o mesmo preço e são exibidos com quatro casas no portal (61,4100); o bot não salva se a conferência do preço falhar",
+    ],
+  },
   {
     versao: "1.7.12",
     itens: [

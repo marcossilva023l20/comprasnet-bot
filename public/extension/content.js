@@ -959,6 +959,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
   let textoDigitado = texto;
   let tipoMascara = null; // "keydown", "keypress" ou "input", detectado na primeira tecla
   const campoFormatadoInicial = casasDoTexto(input.value) !== null;
+  let modoMascara = null; // "texto" (6,0000) ou "digitos" (0,0006)
   let digitosDigitados = ""; // prefixo numérico sem a formatação visual do campo
   let reagiuKeydown = false;
   let reagiuTecla = false;
@@ -977,7 +978,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
 
     // Uma máscara de moeda só consome dígitos. Não lhe passe a pontuação do
     // texto formatado: o próprio campo deve colocar a vírgula e os milhares.
-    if (mascaraOuValorFormatado && !/\d/.test(ch)) {
+    if (mascaraOuValorFormatado && !/\d/.test(ch) && !(ch === "," && modoMascara === "texto")) {
       await pausaDigitacao();
       continue;
     }
@@ -991,70 +992,109 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     };
     let mudou = false;
     let origemDaReacao = null;
+    let eventoConsumido = false;
+    let origemConsumida = null;
     let enviouTecla = false;
+    const janela = tipoMascara === "keydown" || tipoMascara === "keypress" || i === 0
+      ? ESPERA_REACAO_MASCARA
+      : ESPERA_TECLA_MASCARA;
 
     // Primeiro oferece só keydown. Algumas máscaras consomem a tecla nos dois
-    // eventos; dispará-los juntos duplica cada dígito. Só sondamos keypress se
-    // keydown não mudou o campo e a máscara ainda não foi identificada.
+    // eventos; dispará-los juntos duplica cada dígito. Só envia keypress depois
+    // de esperar a máscara e confirmar que keydown não mudou nem consumiu nada.
     if (tipoMascara === "keypress") {
-      disparar(input, "keypress", view, tecla);
+      const eventoKeypress = disparar(input, "keypress", view, tecla);
       enviouTecla = true;
-      mudou = await esperarCampoMudar(input, valorAntes, ESPERA_REACAO_MASCARA);
+      mudou = await esperarCampoMudar(input, valorAntes, janela);
       if (mudou) origemDaReacao = "keypress";
+      else if (eventoKeypress?.defaultPrevented) {
+        eventoConsumido = true;
+        origemConsumida = "keypress";
+      }
     } else if (tipoMascara !== "input") {
       const eventoKeydown = disparar(input, "keydown", view, tecla);
       enviouTecla = true;
-      const janela = tipoMascara === "keydown" || i === 0
-        ? ESPERA_REACAO_MASCARA
-        : ESPERA_TECLA_MASCARA;
       mudou = await esperarCampoMudar(input, valorAntes, janela);
       if (mudou) {
         origemDaReacao = "keydown";
-      } else if (tipoMascara === null && !eventoKeydown?.defaultPrevented) {
+      } else if (eventoKeydown?.defaultPrevented) {
+        eventoConsumido = true;
+        origemConsumida = "keydown";
+      } else {
         const antesKeypress = String(input.value ?? "");
-        disparar(input, "keypress", view, tecla);
+        const eventoKeypress = disparar(input, "keypress", view, tecla);
         mudou = await esperarCampoMudar(input, antesKeypress, janela);
         if (mudou) origemDaReacao = "keypress";
+        else if (eventoKeypress?.defaultPrevented) {
+          eventoConsumido = true;
+          origemConsumida = "keypress";
+        }
       }
     }
+
+    const inferirModoMascara = () => {
+      if (modoMascara || !/\d/.test(ch)) return;
+      const casas = casasDoTexto(textoDigitado) ?? casasDaMascara(input);
+      const valorAtual = valorNumerico(input.value);
+      const valorComoTexto = valorNumerico(textoDigitado.slice(0, i + 1));
+      const prefixoEmDigitos = Number(digitosDigitados || "0") / 10 ** casas;
+      if (valorComoTexto !== null && mesmoNumero(valorAtual, valorComoTexto)) modoMascara = "texto";
+      else if (mesmoNumero(valorAtual, prefixoEmDigitos)) modoMascara = "digitos";
+    };
 
     if (mudou && /\d/.test(ch)) {
       reagiuTecla = true;
       reagiuKeydown = origemDaReacao === "keydown";
       digitosDigitados += ch;
       if (!tipoMascara) tipoMascara = origemDaReacao;
+      inferirModoMascara();
     } else if (!mudou) {
-      // Um zero no valor vazio/zero formatado já está representado pela
-      // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
-      const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
-      if (!zeroJaRepresentado) {
-        const ehDigito = /\d/.test(ch);
-        if (ehDigito && mascaraOuValorFormatado) {
-          // Não concatene o dígito ao texto VISUAL formatado ("6,0000" + "7"):
-          // algumas máscaras leem o value inteiro no evento input e isso escala
-          // 67,4100 para 674.100,0000. Reenvie só o prefixo de dígitos digitados.
-          digitosDigitados += ch;
-          escreverDireto(input, digitosDigitados, view);
-          escritas += 1;
-          if (!tipoMascara) tipoMascara = "input";
-        } else {
-          let inseriu = false;
-          if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
-            try {
-              inseriu = input.ownerDocument.execCommand("insertText", false, ch);
-            } catch (_) {
-              inseriu = false;
+      const ehDigito = /\d/.test(ch);
+      const separadorJaExibido = ch === "," && modoMascara === "texto" && casasDoTexto(input.value) !== null;
+      if (eventoConsumido && ehDigito) {
+        // A máscara aceitou a tecla sem refletir o valor imediatamente. Não
+        // envie outra escrita que possa somar o mesmo dígito pela segunda vez.
+        reagiuTecla = true;
+        reagiuKeydown = origemConsumida === "keydown";
+        digitosDigitados += ch;
+        if (!tipoMascara) tipoMascara = origemConsumida;
+        inferirModoMascara();
+      } else if (!eventoConsumido && !separadorJaExibido) {
+        // Um zero no valor vazio/zero formatado já está representado pela
+        // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
+        const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
+        if (!zeroJaRepresentado) {
+          if (ehDigito && mascaraOuValorFormatado) {
+            // Não concatene ao texto visual nem envie o prefixo como inteiro
+            // ("674100" pode ser lido como R$ 674.100,0000). Converta o prefixo
+            // para a escala decimal do campo: "67" em 4 casas vira "0,0067".
+            digitosDigitados += ch;
+            const casasParciais = casasDoTexto(textoDigitado) ?? casasDaMascara(input);
+            const valorParcial = Number(digitosDigitados || "0") / 10 ** casasParciais;
+            escreverDireto(input, comCasas(valorParcial, casasParciais), view);
+            escritas += 1;
+            if (!tipoMascara) tipoMascara = "input";
+            inferirModoMascara();
+          } else {
+            let inseriu = false;
+            if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
+              try {
+                inseriu = input.ownerDocument.execCommand("insertText", false, ch);
+              } catch (_) {
+                inseriu = false;
+              }
             }
-          }
 
-          const valorSemMascara = valorAntes + ch;
-          if (ehDigito) digitosDigitados += ch;
-          if (!inseriu || String(input.value ?? "") === valorAntes) {
-            escreverDireto(input, valorSemMascara, view);
-          }
-          escritas += 1;
-          if (ehDigito && String(input.value ?? "") !== valorSemMascara && !tipoMascara) {
-            tipoMascara = "input";
+            const valorSemMascara = valorAntes + ch;
+            if (ehDigito) digitosDigitados += ch;
+            if (!inseriu || String(input.value ?? "") === valorAntes) {
+              escreverDireto(input, valorSemMascara, view);
+            }
+            escritas += 1;
+            if (ehDigito && String(input.value ?? "") !== valorSemMascara && !tipoMascara) {
+              tipoMascara = "input";
+            }
+            inferirModoMascara();
           }
         }
       }

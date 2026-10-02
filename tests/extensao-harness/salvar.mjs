@@ -29,6 +29,8 @@
  * 25) A máscara pode exibir 6,0000 primeiro; continua com o prefixo cru e salva 67,4100
  * 26) O botão Salvar do portal (br-button) é encontrado pelo nome acessível
  * 27) Entrada 61,41 com zeros iniciais e máscara assíncrona não duplica keydown/keypress
+ * 28) Prefixo numérico é escalado antes do input, impedindo 674.100,0000
+ * 29) Máscara de texto que inicia em 6,0000 recebe a vírgula e preserva 67,4100
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1490,7 +1492,7 @@ export async function rodarSalvar() {
     checar(r.camposProblematicos.some((campo) => campo.esperado === "67,4100"), `o relatório diferencia o preço esperado 67,4100 (${JSON.stringify(r.camposProblematicos)})`);
   }
 
-  console.log("\n── 25) Máscara mostra 6,0000; prefixo cru termina em 67,4100 e salva ──");
+  console.log("\n── 25) Máscara mostra 6,0000; prefixo com escala decimal termina em 67,4100 ──");
   {
     const html = `<!DOCTYPE html><html><body>
       <h2>Itens</h2>
@@ -1567,7 +1569,7 @@ export async function rodarSalvar() {
     const campo = window.document.getElementById("vu1");
     const total = window.document.getElementById("total1").textContent;
     checar(eventos.valorInicialFormatado, "a máscara exibiu 6,0000 imediatamente após a primeira tecla 6");
-    checar(campo.value === "67,4100", `prefixo cru evitou casas extras e manteve 67,4100 (${campo.value})`);
+    checar(campo.value === "67,4100", `prefixo convertido para a escala decimal manteve 67,4100 (${campo.value})`);
     checar(total === "R$ 1.011,1500", `total calculado corretamente (${total})`);
     checar(eventos.salvamentos.length === 1 && eventos.salvamentos[0]?.valor === "67,4100", `clicou no botão br-button Salvar com preço correto (${JSON.stringify(eventos.salvamentos)})`);
     checar(eventos.salvamentos[0]?.total === "R$ 1.011,1500", "o item foi salvo depois do total correto");
@@ -1694,6 +1696,162 @@ export async function rodarSalvar() {
     checar(eventos.salvos.length === 1 && eventos.salvos[0] === "61,4100", `salvou somente o preço correto (${JSON.stringify(eventos.salvos)})`);
     checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "o item foi confirmado no relatório");
     checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "continuou preenchendo marca e modelo");
+  }
+
+  console.log("\n── 28) A máscara interpreta prefixos sem vírgula como reais inteiros ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { salvos: [], primeiroKeydown: false };
+    const lerNumero = (texto) => {
+      const limpo = String(texto).replace(/[^\d.,-]/g, "");
+      const ultimo = Math.max(limpo.lastIndexOf(","), limpo.lastIndexOf("."));
+      if (ultimo < 0) return Number(limpo) || 0;
+      const parteInteira = limpo.slice(0, ultimo).replace(/[.,]/g, "");
+      const parteFracionaria = limpo.slice(ultimo + 1).replace(/[.,]/g, "");
+      return Number(`${parteInteira || "0"}.${parteFracionaria || "0"}`) || 0;
+    };
+    const formatar = (numero) => numero.toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("keydown", (event) => {
+          if (!/^\d$/.test(event.key || "")) return;
+          if (!eventos.primeiroKeydown) {
+            eventos.primeiroKeydown = true;
+            campo.value = `${event.key},0000`;
+            campo.className = "ng-dirty ng-touched ng-valid";
+          }
+        });
+        // Esta máscara lê o value inteiro no input. Se receber "674100" sem
+        // separador, interpreta como R$ 674.100,0000, reproduzindo o relato.
+        campo.addEventListener("input", () => {
+          const valor = lerNumero(campo.value);
+          campo.value = formatar(valor);
+          campo.className = "ng-dirty ng-touched ng-valid";
+          w.document.getElementById("total1").textContent = `R$ ${formatar(valor * 15)}`;
+        });
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(eventos.primeiroKeydown, "a máscara transformou o primeiro 6 em 6,0000");
+    checar(campo.value === "67,4100", `enviou o prefixo com a escala certa, sem chegar a 674.100,0000 (${campo.value})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `total calculado a partir do valor correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "67,4100", `salvou uma vez com 67,4100 (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "o item foi confirmado");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "preencheu marca e modelo");
+  }
+
+  console.log("\n── 29) Máscara de texto aceita a vírgula e separa centavos ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { teclas: [], virgula: false, salvos: [] };
+    let parteInteira = "";
+    let parteFracionaria = "";
+    let entrouNosDecimais = false;
+    const formatar = () => `${Number(parteInteira || "0").toLocaleString("pt-BR")},${parteFracionaria.padEnd(4, "0")}`;
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("keydown", (event) => {
+          eventos.teclas.push(`${event.type}:${event.key}`);
+          if (event.key === ",") {
+            event.preventDefault();
+            eventos.virgula = true;
+            entrouNosDecimais = true;
+            return;
+          }
+          if (!/^\d$/.test(event.key || "")) return;
+          event.preventDefault();
+          if (entrouNosDecimais) parteFracionaria = `${parteFracionaria}${event.key}`.slice(0, 4);
+          else parteInteira = `${parteInteira}${event.key}`.replace(/^0+(?=\d)/, "");
+          const valorTexto = formatar();
+          campo.value = valorTexto;
+          campo.className = "ng-dirty ng-touched ng-valid";
+          const valor = Number(valorTexto.replace(/\./g, "").replace(",", ".")) || 0;
+          w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          })}`;
+        });
+        campo.addEventListener("keypress", (event) => eventos.teclas.push(`${event.type}:${event.key}`));
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(campo.value === "67,4100", `preservou 67,4100 após a vírgula digitada (${campo.value})`);
+    checar(eventos.virgula, "enviou a vírgula para a máscara que posiciona o separador decimal");
+    checar(eventos.teclas.filter((tecla) => tecla.startsWith("keydown:")).length === 7 && !eventos.teclas.some((tecla) => tecla.startsWith("keypress:")), `uma sequência de keydown por caractere, sem duplicar keypress (${JSON.stringify(eventos.teclas)})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `total correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "67,4100", `salvou só o valor correto (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "item confirmado");
   }
 
   return falhas;
