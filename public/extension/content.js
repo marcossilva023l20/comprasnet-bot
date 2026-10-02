@@ -405,6 +405,8 @@ async function fillItems(items, delayMs) {
   const errors = [];
   const warnings = [];
   const filledItems = [];
+  const salvamentos = [];
+  const savedItems = [];
   abortRequested = false;
 
   if (items.length === 0) {
@@ -424,6 +426,11 @@ async function fillItems(items, delayMs) {
       }
       if (outcome.error) errors.push(outcome.error);
       if (outcome.warnings?.length) warnings.push(...outcome.warnings);
+      if (outcome.salvamento) {
+        salvamentos.push(outcome.salvamento);
+        // Só considera "salvo" o item cujo Salvar foi realmente clicado.
+        if (outcome.salvamento.clicado) savedItems.push(item.item);
+      }
     } catch (err) {
       errors.push(`Item ${item.item}: ${err.message}`);
     }
@@ -434,15 +441,30 @@ async function fillItems(items, delayMs) {
 
   removeProgressBar();
 
+  const semSalvar = items.length - savedItems.length;
+  const confirmados = salvamentos.filter((s) => s.clicado && s.confirmado).length;
   if (abortRequested) {
     showNotification(`⏹ Parado: ${filled} de ${items.length} itens preenchidos.`, "warning");
+  } else if (filled === items.length && confirmados === items.length) {
+    showNotification(`✅ ${filled} itens preenchidos e salvos (o site confirmou)!`, "success");
+  } else if (filled === items.length && semSalvar === 0) {
+    showNotification(`⚠️ ${filled} itens preenchidos e com Salvar clicado, mas o site não confirmou ${items.length - confirmados}. Confira na página.`, "warning");
   } else if (filled === items.length) {
-    showNotification(`✅ ${filled} itens preenchidos com sucesso!`, "success");
+    showNotification(`⚠️ ${filled} itens preenchidos, ${semSalvar} sem Salvar — veja o relatório no popup.`, "warning");
   } else {
     showNotification(`⚠️ ${filled} de ${items.length} itens preenchidos. ${errors.length} erro(s).`, "warning");
   }
 
-  return { filled, total: items.length, errors, warnings, filledItems, aborted: abortRequested };
+  return {
+    filled,
+    total: items.length,
+    errors,
+    warnings,
+    filledItems,
+    salvamentos,
+    savedItems,
+    aborted: abortRequested,
+  };
 }
 
 async function fillSingleItem(item, allowUnassignedFields) {
@@ -500,12 +522,23 @@ async function fillSingleItem(item, allowUnassignedFields) {
 
   await sleep(200);
   showNotification(`💾 Item ${itemNumber}: salvando...`, "info");
-  const saved = await clickSalvar(itemNumber, allowUnassignedFields);
-  if (!saved) {
-    warnings.push(`Item ${itemNumber}: campos preenchidos; não localizei um botão Salvar dentro do item. Confira a página antes de enviar.`);
+  const salvamento = await salvarItem(itemNumber, allowUnassignedFields);
+
+  if (!salvamento.clicado) {
+    warnings.push(
+      `Item ${itemNumber}: os campos foram preenchidos, mas NÃO salvei — ${salvamento.motivo}. Clique em Salvar na página.`,
+    );
+    showNotification(`⚠️ Item ${itemNumber}: preenchido, mas não salvou — ${salvamento.motivo}`, "warning");
+  } else if (!salvamento.confirmado) {
+    warnings.push(
+      `Item ${itemNumber}: cliquei em "${salvamento.botao}" e o site não confirmou${salvamento.motivo ? ` (${salvamento.motivo})` : ""} — confira antes de seguir.`,
+    );
+    showNotification(`⚠️ Item ${itemNumber}: cliquei em Salvar, mas o site não confirmou`, "warning");
+  } else {
+    showNotification(`✅ Item ${itemNumber}: salvo!`, "success");
   }
 
-  return { ok: true, warnings };
+  return { ok: true, warnings, salvamento };
 }
 
 function getFieldsForItem(itemNumber, allowUnassignedFields) {
@@ -560,12 +593,63 @@ async function tryExpandItem(itemNumber) {
   return true;
 }
 
+/** O campo continua vazio depois de tentarmos escrever? (máscara recusou) */
+function campoVazio(el) {
+  return !String(el?.value ?? el?.textContent ?? "").trim();
+}
+
+/** Dispara um evento do tipo certo, sem quebrar em navegadores antigos. */
+function disparar(el, tipo, view, dados = {}) {
+  const ehInput = tipo === "input" || tipo === "beforeinput";
+  const Evento = ehInput && typeof view.InputEvent === "function" ? view.InputEvent : view.Event;
+  try {
+    el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, ...dados }));
+  } catch (_) {
+    try {
+      el.dispatchEvent(new view.Event(tipo, { bubbles: true }));
+    } catch (_) {
+      // sem eventos: o valor direto continua valendo
+    }
+  }
+}
+
+function aplicarValor(input, value, view) {
+  if (input.isContentEditable || input.getAttribute("role") === "textbox") {
+    input.textContent = value;
+    return;
+  }
+  let prototype;
+  if (input.tagName === "TEXTAREA") prototype = view.HTMLTextAreaElement?.prototype;
+  else if (input.tagName === "INPUT") prototype = view.HTMLInputElement?.prototype;
+
+  const setter = prototype && Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (setter) setter.call(input, value);
+  else input.value = value;
+}
+
+/**
+ * Insere texto como se fosse digitação (alguns componentes com máscara só
+ * aceitam o valor por esse caminho).
+ */
+function tentarInsertText(input, value) {
+  try {
+    input.focus();
+    if (typeof input.select === "function") input.select();
+    if (typeof input.ownerDocument.execCommand === "function") {
+      return input.ownerDocument.execCommand("insertText", false, value);
+    }
+  } catch (_) {
+    // segue sem insertText
+  }
+  return false;
+}
+
 async function setInputValue(input, rawValue) {
   if (!input || !input.isConnected || !isFillable(input)) return false;
 
   const view = input.ownerDocument.defaultView || window;
-  let value = String(rawValue ?? "");
-  if (input.tagName === "INPUT" && input.type === "number") value = value.replace(",", ".");
+  const value = String(rawValue ?? "");
+  const espera = input.tagName === "SELECT" ? "" : value;
 
   try {
     input.focus();
@@ -575,28 +659,45 @@ async function setInputValue(input, rawValue) {
   }
 
   if (input.tagName === "SELECT") {
-    const target = normalizeText(value);
+    const alvo = normalizeText(value);
     const option = [...input.options].find(
-      (entry) => normalizeText(entry.value) === target || normalizeText(entry.textContent) === target,
+      (entrada) => normalizeText(entrada.value) === alvo || normalizeText(entrada.textContent) === alvo,
     );
     if (!option) return false;
     input.value = option.value;
-  } else if (input.isContentEditable || input.getAttribute("role") === "textbox") {
-    input.textContent = value;
-  } else {
-    let prototype;
-    if (input.tagName === "TEXTAREA") prototype = view.HTMLTextAreaElement.prototype;
-    else if (input.tagName === "INPUT") prototype = view.HTMLInputElement.prototype;
-
-    const setter = prototype && Object.getOwnPropertyDescriptor(prototype, "value")?.set;
-    if (setter) setter.call(input, value);
-    else input.value = value;
+    disparar(input, "input", view, { data: option.value, inputType: "insertText" });
+    disparar(input, "change", view, { data: option.value });
+    input.blur();
+    await sleep(100);
+    return true;
   }
 
-  input.dispatchEvent(new view.Event("input", { bubbles: true }));
-  input.dispatchEvent(new view.Event("change", { bubbles: true }));
-  input.blur();
+  // Sequência parecida com digitação: muitos componentes de formulário só
+  // reagem ao beforeinput/input com dados.
+  disparar(input, "keydown", view, { key: "Unidentified" });
+  disparar(input, "beforeinput", view, { data: espera, inputType: "insertText" });
+  aplicarValor(input, value, view);
+  disparar(input, "input", view, { data: espera, inputType: "insertText" });
+  disparar(input, "keyup", view, { key: "Unidentified" });
+  disparar(input, "change", view, { data: espera });
+
+  // Máscaras podem recusar o valor: tenta digitar de verdade antes de desistir.
+  if (espera && campoVazio(input)) {
+    if (tentarInsertText(input, value)) {
+      disparar(input, "input", view, { data: espera, inputType: "insertText" });
+      disparar(input, "change", view, { data: espera });
+    }
+  }
+
+  try {
+    input.blur();
+  } catch (_) {
+    // blur é opcional
+  }
   await sleep(100);
+
+  // Campo que continua vazio = o site não aceitou o valor (máscara/validação).
+  if (espera && campoVazio(input)) return false;
   return true;
 }
 
@@ -604,61 +705,378 @@ async function setInputValue(input, rawValue) {
  * Textos aceitos como "Salvar" (o ComprasNet varia entre telas: "Salvar",
  * "Salvar Item", "Gravar", "Confirmar", com/sem ícone dentro).
  */
-const TEXTO_BOTAO_SALVAR = /^(salvar|gravar|confirmar|save)(\s+(item|itens|dados|altera[cç][õo]es|e\s+[a-zçãõéíóú]+))?$/;
+/**
+ * Textos aceitos como "Salvar" (o portal varia entre telas: "Salvar",
+ * "Salvar Item", "Gravar", "Confirmar"). Ficam de fora os que salvam e já abrem
+ * outro formulário ("Salvar e adicionar outro"), porque atrapalhariam os
+ * próximos itens.
+ */
+const TEXTO_BOTAO_SALVAR =
+  /^(salvar|gravar|confirmar|save)(\s+(item|itens|dados|altera[cç][õo]es|valor|valores|pre[cç]o|proposta|formul[aá]rio))?$/;
+const TEXTO_BOTAO_SALVAR_PROIBIDO =
+  /(e\s+(adicionar|incluir|criar|nov[oa]s?|pr[oó]xim\w*|continuar|fechar|sair)|adicionar\s+outr|inserir\s+outr)/i;
+const PISTAS_BOTAO_SALVAR = /(salvar|save|gravar|confirmar)/i;
 
-function ehBotaoSalvar(el) {
-  if (!el || !isVisible(el) || el.disabled) return false;
-  const texto = normalizeText(
-    el.textContent || el.value || el.getAttribute("aria-label") || el.title || "",
-  );
-  if (!texto) return false;
-  return TEXTO_BOTAO_SALVAR.test(texto);
+/** Elementos clicáveis onde o "Salvar" costuma estar. */
+const SELETOR_CLICAVEL = [
+  "button",
+  'input[type="submit"]',
+  'input[type="button"]',
+  'input[type="image"]',
+  '[role="button"]',
+  "a",
+  "[onclick]",
+  '[class*="salvar" i]',
+  '[id*="salvar" i]',
+].join(", ");
+
+/** querySelectorAll atravessando shadow roots abertos (web components). */
+function consultarProfundo(raiz, seletor) {
+  const achados = [];
+  const visitados = new Set();
+  const visitar = (no) => {
+    if (!no?.querySelectorAll || visitados.has(no)) return;
+    visitados.add(no);
+    for (const el of no.querySelectorAll(seletor)) achados.push(el);
+    for (const el of no.querySelectorAll("*")) {
+      if (el.shadowRoot) visitar(el.shadowRoot);
+    }
+  };
+  visitar(raiz);
+  return achados;
 }
 
-async function clickSalvar(itemNumber, allowUnassignedFields) {
-  const state = scanPage();
-  const key = normalizeItemNumber(itemNumber);
-  const group = latestScanState?.itemGroups.get(key);
-
-  // Escopos em ordem de preferência: o contêiner exato do item, o contexto do
-  // item um pouco mais acima e — só quando a página não tem itens numerados —
-  // o documento inteiro.
-  const escopos = [];
-  if (group?.container) {
-    escopos.push(group.container);
-    const contexto = findItemContext(group.container);
-    if (contexto?.container && contexto.container !== group.container) escopos.push(contexto.container);
+function ehElementoClicavel(el) {
+  if (!el?.matches) return false;
+  if (
+    el.matches(
+      'button, input[type="submit"], input[type="button"], input[type="image"], a, [role="button"], [onclick]',
+    )
+  ) {
+    return true;
   }
-  if (allowUnassignedFields && state.itemCount === 0) escopos.push(...collectDocuments());
+  return typeof el.tabIndex === "number" && el.tabIndex >= 0;
+}
 
+/**
+ * Pontua um candidato a botão Salvar. Devolve <= 0 para o que não serve.
+ * Texto exato vale mais; id/classe/aria-label com "salvar" também identificam
+ * (o botão pode ser só um ícone).
+ */
+function pontuarBotaoSalvar(el) {
+  if (!el || !isVisible(el)) return -1;
+
+  const texto = normalizeText(el.textContent || el.value || "");
+  const atributos = normalizeText(
+    `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${el.id || ""} ${
+      typeof el.className === "string" ? el.className : ""
+    } ${el.getAttribute("data-testid") || ""} ${el.getAttribute("name") || ""}`,
+  );
+
+  if (TEXTO_BOTAO_SALVAR_PROIBIDO.test(texto)) return -1;
+
+  let pontos = 0;
+  if (TEXTO_BOTAO_SALVAR.test(texto)) pontos += 100;
+  else if (PISTAS_BOTAO_SALVAR.test(atributos) && (ehElementoClicavel(el) || el.matches(SELETOR_CLICAVEL))) pontos += 60;
+  else if (el.matches('[class*="salvar" i], [id*="salvar" i]') && ehElementoClicavel(el)) pontos += 40;
+
+  if (pontos === 0) return -1;
+  if (!ehElementoClicavel(el)) pontos -= 20;
+  if (el.tagName === "BUTTON") pontos += 8;
+  if (el.matches('input[type="submit"]')) pontos += 8;
+  if (el.getAttribute("type") === "submit") pontos += 4;
+  if (el.disabled) pontos -= 25; // pode habilitar depois — ainda é o nosso botão
+
+  return pontos;
+}
+
+function encontrarBotaoSalvar(escopo) {
+  const candidatos = consultarProfundo(escopo, SELETOR_CLICAVEL)
+    .map((el) => ({ el, pontos: pontuarBotaoSalvar(el) }))
+    .filter((candidato) => candidato.pontos > 0)
+    .sort((a, b) => b.pontos - a.pontos);
+
+  return candidatos[0]?.el || null;
+}
+
+/** Texto do botão para relatar ao usuário ("Salvar", "Gravar item"...). */
+function descreverBotao(el) {
+  const texto = (el?.textContent || el?.value || el?.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim();
+  if (texto) return texto.slice(0, 40);
+  return normalizeText(typeof el?.className === "string" ? el.className : "") || "botão sem texto";
+}
+
+/** Um botão desabilitado pode habilitar quando o formulário fica válido. */
+async function esperarHabilitar(botao, tempoMs = 2500) {
+  const limite = Date.now() + tempoMs;
+  while (Date.now() < limite) {
+    if (!botao.isConnected) return false;
+    if (!botao.disabled && botao.getAttribute("aria-disabled") !== "true") return true;
+    await sleep(150);
+  }
+  return !botao.disabled;
+}
+
+/**
+ * Clique "de verdade": além do click(), dispara a sequência de mouse que
+ * alguns componentes escutam, e usa requestSubmit() quando o botão é um submit
+ * dentro de um form.
+ */
+function clicarDeVerdade(el) {
+  const view = el.ownerDocument?.defaultView || window;
+  const opcoes = { bubbles: true, cancelable: true, view, detail: 1 };
+  try {
+    el.scrollIntoView?.({ block: "center" });
+  } catch (_) {
+    // jsdom e páginas sem layout não implementam scrollIntoView
+  }
+  try {
+    el.focus?.({ preventScroll: true });
+  } catch (_) {
+    // foco é opcional
+  }
+  for (const tipo of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
+    try {
+      const Evento = tipo.startsWith("pointer") ? view.PointerEvent : view.MouseEvent;
+      el.dispatchEvent(new (Evento || view.MouseEvent)(tipo, opcoes));
+    } catch (_) {
+      // segue para o click()
+    }
+  }
+  try {
+    el.click();
+  } catch (_) {
+    return false;
+  }
+  const form = el.form || el.closest?.("form");
+  if (form && typeof form.requestSubmit === "function" && (el.type === "submit" || el.tagName === "BUTTON")) {
+    try {
+      form.requestSubmit(el);
+    } catch (_) {
+      // o click() já deve ter disparado o submit
+    }
+  }
+  return true;
+}
+
+/** Mensagens visíveis de sucesso/erro dentro do escopo (toasts, alerts). */
+const SELETOR_DE_AVISOS =
+  '[role="alert"], [role="status"], [class*="alert" i], [class*="toast" i], [class*="mensagem" i], [class*="aviso" i], [class*="erro" i], [class*="error" i], [class*="sucesso" i], [class*="success" i]';
+
+/** Coleta os elementos que podem carregar um aviso do site (toast, alerta…). */
+function avisosDaPagina(escopos) {
+  const vistos = new Set();
+  const avisos = [];
   for (const escopo of escopos) {
-    const botao = [...escopo.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')]
-      .find(ehBotaoSalvar);
-    if (botao) {
-      botao.click();
-      await sleep(600);
-      return true;
+    if (!escopo) continue;
+    for (const el of consultarProfundo(escopo, SELETOR_DE_AVISOS)) {
+      if (vistos.has(el)) continue;
+      vistos.add(el);
+      const texto = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!texto || texto.length > 200) continue;
+      avisos.push({ el, texto });
+      if (avisos.length >= 12) break;
+    }
+  }
+  return avisos;
+}
+
+/**
+ * Estado de um aviso: além do texto, se ele está escondido e um "sinal" que muda
+ * quando o site troca de classe/estado. O aviso pode já existir escondido e só
+ * aparecer depois do clique — é isso que detecta o salvamento.
+ */
+function estadoDoAviso(aviso) {
+  const el = aviso.el;
+  const inline = el.style?.display || "";
+  let computado = "";
+  try {
+    computado = (el.ownerDocument?.defaultView || window).getComputedStyle(el).display || "";
+  } catch (_) {
+    computado = "";
+  }
+  const ocultoPorAtributo = el.hidden === true || el.getAttribute("aria-hidden") === "true" || inline === "none";
+  // Em shadow DOM (e no jsdom) o estilo computado pode ficar desatualizado: se o
+  // próprio elemento declara um display diferente de "none", confie na declaração.
+  const oculto = ocultoPorAtributo || (computado === "none" && !inline);
+  return {
+    texto: aviso.texto.slice(0, 160),
+    oculto,
+    sinal: `${inline}|${el.getAttribute("class") || ""}`,
+  };
+}
+
+/** Textos dos avisos que o usuário está vendo agora (para o relatório). */
+function mensagensDeStatus(escopo) {
+  const mensagens = [];
+  for (const aviso of avisosDaPagina([escopo])) {
+    if (estadoDoAviso(aviso).oculto) continue;
+    if (!mensagens.includes(aviso.texto)) mensagens.push(aviso.texto);
+    if (mensagens.length >= 4) break;
+  }
+  return mensagens;
+}
+
+/**
+ * Escopos observados para saber se o site reagiu ao clique: o item e a página
+ * inteira (a confirmação costuma aparecer num toast no topo, às vezes dentro de
+ * um shadow root — por isso não basta olhar o item).
+ */
+function escoposDeVerificacao(escopos, botao) {
+  const lista = [];
+  const adicionar = (el) => {
+    if (el && !lista.includes(el)) lista.push(el);
+  };
+  for (const escopo of escopos) {
+    if (escopo?.contains?.(botao)) adicionar(escopo);
+  }
+  for (const doc of collectDocuments()) adicionar(doc.body || doc.documentElement);
+  return lista;
+}
+
+/**
+ * Escopos que formam o painel do item (sem o <body>, que recebe as nossas
+ * notificações e mudaria de texto o tempo todo).
+ */
+function escoposDoPainel(escopos, botao) {
+  return escopos.filter(
+    (escopo) => escopo?.contains?.(botao) && escopo !== escopo.ownerDocument?.body && escopo !== escopo.ownerDocument?.documentElement,
+  );
+}
+
+function assinaturaDeSalvamento(escopos, botao) {
+  return JSON.stringify({
+    // Lista COM repetição: dois itens salvos geram o mesmo aviso duas vezes.
+    avisos: avisosDaPagina(escopos).map(estadoDoAviso),
+    // O painel pode confirmar sem toast: "Proposta cadastrada", valor total, etc.
+    painel: escoposDoPainel(escopos, botao).map((escopo) => (escopo.textContent || "").replace(/\s+/g, " ").trim().length),
+    botaoVisivel: Boolean(botao?.isConnected && isVisible(botao)),
+    botaoDesabilitado: Boolean(botao?.disabled),
+    itensDesmontados: escopos.filter((escopo) => escopo?.isConnected === false).length,
+  });
+}
+
+/**
+ * Salva o item: encontra o botão (no item, no contexto do item, num ancestral
+ * ou — se for o único — na página), espera habilitar, clica e verifica se o
+ * site reagiu. Devolve um relatório para o popup.
+ */
+async function salvarItem(itemNumber, allowUnassignedFields) {
+  const estado = scanPage();
+  const chave = normalizeItemNumber(itemNumber);
+  const grupo = latestScanState?.itemGroups.get(chave);
+
+  // ── Escopos, do mais específico para o mais amplo ────────────────────────
+  const escopos = [];
+  const adicionar = (el) => {
+    if (el && !escopos.includes(el)) escopos.push(el);
+  };
+
+  adicionar(grupo?.container);
+  if (grupo?.container) {
+    // Sobe alguns níveis: o botão costuma ficar no rodapé do painel do item,
+    // fora do contêiner que guarda os campos.
+    let node = grupo.container.parentElement;
+    for (let nivel = 0; node && nivel < 4; nivel += 1, node = node.parentElement) {
+      if (node === node.ownerDocument?.body) break;
+      if ((node.textContent || "").length > 6000) break;
+      adicionar(node);
+    }
+    const contexto = findItemContext(grupo.container);
+    adicionar(contexto?.container);
+  }
+  if (allowUnassignedFields && estado.itemCount === 0) escopos.push(...collectDocuments());
+
+  const relatorio = { item: itemNumber, encontrado: false, clicado: false, confirmado: false, botao: "", motivo: "" };
+
+  let botao = null;
+  for (const escopo of escopos) {
+    botao = encontrarBotaoSalvar(escopo);
+    if (botao) break;
+  }
+
+  // Último recurso: um único "Salvar" visível em cada documento da página.
+  if (!botao) {
+    const globais = [];
+    for (const doc of collectDocuments()) globais.push(...consultarProfundo(doc, SELETOR_CLICAVEL).filter((el) => pontuarBotaoSalvar(el) > 0));
+    const unicos = [...new Set(globais)];
+    if (unicos.length === 1) botao = unicos[0];
+    else if (unicos.length > 1) {
+      // Vários itens abertos: pega o que estiver mais perto do item pelo DOM.
+      const referencia = grupo?.container;
+      if (referencia) {
+        let melhor = null;
+        let melhorDistancia = Infinity;
+        for (const candidato of unicos) {
+          let node = candidato;
+          let distancia = 0;
+          while (node && node !== referencia && distancia < 40) {
+            node = node.parentElement;
+            distancia += 1;
+          }
+          if (node === referencia && distancia < melhorDistancia) {
+            melhor = candidato;
+            melhorDistancia = distancia;
+          }
+        }
+        botao = melhor;
+      }
     }
   }
 
-  // Último recurso: existe exatamente um "Salvar" visível na página (itens em
-  // modal ou um formulário por vez) — clica nele em vez de deixar o item sem
-  // salvar.
-  const globais = [];
-  for (const doc of collectDocuments()) {
-    globais.push(
-      ...[...doc.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')].filter(
-        ehBotaoSalvar,
-      ),
-    );
-  }
-  if (globais.length === 1) {
-    globais[0].click();
-    await sleep(600);
-    return true;
+  if (!botao) {
+    relatorio.motivo = "não encontrei um botão Salvar nesta página";
+    return relatorio;
   }
 
-  return false;
+  relatorio.encontrado = true;
+  relatorio.botao = descreverBotao(botao);
+
+  if (botao.disabled || botao.getAttribute("aria-disabled") === "true") {
+    const habilitou = await esperarHabilitar(botao);
+    if (!habilitou) {
+      relatorio.motivo = `o botão "${relatorio.botao}" está desabilitado — falta algum campo obrigatório na tela`;
+      return relatorio;
+    }
+  }
+
+  const ondeObservar = escoposDeVerificacao(escopos, botao);
+  const antes = assinaturaDeSalvamento(ondeObservar, botao);
+
+  if (!clicarDeVerdade(botao)) {
+    relatorio.motivo = `não consegui clicar em "${relatorio.botao}"`;
+    return relatorio;
+  }
+  relatorio.clicado = true;
+
+  // ── Verificação: o site reagiu ao clique? ────────────────────────────────
+  const limite = Date.now() + 3500;
+  while (Date.now() < limite) {
+    await sleep(250);
+    if (grupo?.container && !grupo.container.isConnected) {
+      relatorio.confirmado = true; // a tela foi remontada (item salvo e recarregado)
+      break;
+    }
+    if (assinaturaDeSalvamento(ondeObservar, botao) !== antes) {
+      relatorio.confirmado = true;
+      break;
+    }
+  }
+
+  const mensagens = [];
+  for (const escopo of ondeObservar) {
+    for (const mensagem of mensagensDeStatus(escopo)) {
+      if (!mensagens.includes(mensagem)) mensagens.push(mensagem);
+    }
+  }
+  relatorio.mensagens = mensagens;
+  if (!relatorio.confirmado && mensagens.length) {
+    relatorio.motivo = `o site mostrou: "${mensagens[0]}"`;
+  } else if (!relatorio.confirmado) {
+    relatorio.motivo = "cliquei no botão, mas o site não deu nenhum sinal de confirmação";
+  }
+
+  return relatorio;
 }
 
 // ─── Leitura dos itens da página (extensão → sistema) ────────────────────────

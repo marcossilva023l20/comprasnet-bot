@@ -654,13 +654,37 @@ async function runBot() {
     });
 
     if (result?.ok) {
-      addLog("success", `✅ ${result.filled}/${result.total} itens preenchidos!`);
+      const clicados = (result.savedItems || []).length;
+      const confirmados = (result.salvamentos || []).filter((s) => s.clicado && s.confirmado).length;
+      addLog(
+        "success",
+        `✅ ${result.filled}/${result.total} itens preenchidos · 💾 ${clicados} com Salvar clicado · ✔ ${confirmados} confirmados pelo site`,
+      );
+
+      // Relatório do Salvar, item a item (é o que diz se o site gravou).
+      for (const registro of result.salvamentos || []) {
+        if (registro.clicado && registro.confirmado) {
+          addLog("success", `💾 Item ${registro.item}: salvo (botão "${registro.botao}").`);
+        } else if (registro.clicado) {
+          addLog(
+            "warn",
+            `💾 Item ${registro.item}: cliquei em "${registro.botao}", mas o site não confirmou${registro.motivo ? ` — ${registro.motivo}` : ""}. Marquei como enviado; confira na página.`,
+          );
+        } else {
+          addLog(
+            "error",
+            `💾 Item ${registro.item}: NÃO salvei — ${registro.motivo || "botão Salvar não encontrado"}. Não marquei como enviado.`,
+          );
+        }
+      }
+
       if (result.errors?.length) result.errors.forEach((error) => addLog("error", error));
       if (result.warnings?.length) result.warnings.forEach((warning) => addLog("warn", warning));
       setProgress(result.filled, result.total);
 
       const propostaId = document.getElementById("proposta-select").value;
-      await marcarEnviados(propostaId, result.filledItems || []);
+      // Só marca como "enviado" no sistema o que foi realmente salvo na página.
+      await marcarEnviados(propostaId, result.savedItems || []);
     } else {
       addLog("error", result?.error || "Erro desconhecido");
     }

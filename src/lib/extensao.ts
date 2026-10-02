@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.1";
+export const VERSAO_EXTENSAO = "1.5.2";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,16 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.2",
+    itens: [
+      "Correção do Salvar: o botão é procurado no rodapé do item, em shadow DOM e pelo id/classe — não só pelo texto",
+      "Espera o botão Salvar habilitar e confirma no site se o item foi gravado",
+      "Relatório item a item no popup: salvo, sem confirmação ou não salvo (com o motivo)",
+      "Só marca como enviado no sistema o item que foi realmente salvo na página",
+      "Preenchimento dispara a sequência completa de eventos (beforeinput/input/change) e detecta valor recusado por máscara",
+    ],
+  },
   {
     versao: "1.5.1",
     itens: [
