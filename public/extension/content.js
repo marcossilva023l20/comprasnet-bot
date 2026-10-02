@@ -958,6 +958,9 @@ async function limparCampoComTeclas(input, view) {
 async function digitarTextoDoValor(input, texto, alvo, view) {
   let textoDigitado = texto;
   let tipoMascara = null; // "keydown" ou "input", detectado na primeira tecla
+  const campoFormatadoInicial = casasDoTexto(input.value) !== null;
+  let digitosDigitados = ""; // prefixo numérico sem a formatação visual do campo
+  let reagiuKeydown = false;
   let escritas = 0;
 
   for (let i = 0; i < textoDigitado.length; i += 1) {
@@ -969,7 +972,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     const ch = textoDigitado[i];
     const valorAntes = String(input.value ?? "");
     const campoJaFormatado = casasDoTexto(valorAntes) !== null;
-    const mascaraOuValorFormatado = tipoMascara !== null || campoJaFormatado;
+    const mascaraOuValorFormatado = tipoMascara !== null || campoFormatadoInicial;
 
     // Uma máscara de moeda só consome dígitos. Não lhe passe a pontuação do
     // texto formatado: o próprio campo deve colocar a vírgula e os milhares.
@@ -993,26 +996,42 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     if (!mudou && i === 0) mudou = await esperarCampoMudar(input, valorAntes, ESPERA_TECLA_MASCARA);
 
     if (mudou && /\d/.test(ch)) {
-      tipoMascara = "keydown";
+      reagiuKeydown = true;
+      digitosDigitados += ch;
+      if (!tipoMascara) tipoMascara = "keydown";
     } else if (!mudou) {
       // Um zero no valor vazio/zero formatado já está representado pela
       // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
       const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
       if (!zeroJaRepresentado) {
-        let inseriu = false;
-        if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
-          try {
-            inseriu = input.ownerDocument.execCommand("insertText", false, ch);
-          } catch (_) {
-            inseriu = false;
+        const ehDigito = /\d/.test(ch);
+        if (ehDigito && mascaraOuValorFormatado) {
+          // Não concatene o dígito ao texto VISUAL formatado ("6,0000" + "7"):
+          // algumas máscaras leem o value inteiro no evento input e isso escala
+          // 67,4100 para 674.100,0000. Reenvie só o prefixo de dígitos digitados.
+          digitosDigitados += ch;
+          escreverDireto(input, digitosDigitados, view);
+          escritas += 1;
+          if (!tipoMascara) tipoMascara = "input";
+        } else {
+          let inseriu = false;
+          if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
+            try {
+              inseriu = input.ownerDocument.execCommand("insertText", false, ch);
+            } catch (_) {
+              inseriu = false;
+            }
           }
-        }
 
-        const valorSemMascara = valorAntes + ch;
-        if (!inseriu) escreverDireto(input, valorSemMascara, view);
-        escritas += 1;
-        if (/\d/.test(ch) && String(input.value ?? "") !== valorSemMascara) {
-          tipoMascara = "input";
+          const valorSemMascara = valorAntes + ch;
+          if (ehDigito) digitosDigitados += ch;
+          if (!inseriu || String(input.value ?? "") === valorAntes) {
+            escreverDireto(input, valorSemMascara, view);
+          }
+          escritas += 1;
+          if (ehDigito && String(input.value ?? "") !== valorSemMascara && !tipoMascara) {
+            tipoMascara = "input";
+          }
         }
       }
     }
@@ -1064,6 +1083,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     textoFinal,
     escritas,
     tipoMascara,
+    reagiuKeydown,
   };
 }
 
@@ -1450,6 +1470,20 @@ async function garantirRegistroDoCampo(input, view, numerico, alvo, casas, cutuc
     // mas só aceita o reforço se o número continuar idêntico ao valor pedido.
     const estado = estadoDeValidacao(input);
     if (pistasDeFramework(input) && (estado.pristine || estado.invalido)) {
+      if (!cutucar) {
+        // Máscara que já consumiu keydown: não reenvie o valor formatado por
+        // input, pois o componente pode interpretá-lo como novos dígitos.
+        // Change/blur atualizam o framework sem reescrever o preço.
+        disparar(input, "change", view, { data: String(input.value ?? "") });
+        disparar(input, "blur", view, {});
+        disparar(input, "focusout", view, {});
+        try { input.blur(); } catch (_) { /* opcional */ }
+        await pausa(80);
+        const depois = estadoDeValidacao(input);
+        const numeroPreservado = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
+        return numeroPreservado && !depois.pristine && !depois.invalido;
+      }
+
       await reforcarValor(input, view);
       await pausa(80);
       const depois = estadoDeValidacao(input);
@@ -1569,10 +1603,11 @@ async function setInputValue(input, rawValue, esperaNumero) {
       return false;
     }
 
-    // Depois de digitar, envie uma única tecla de registro. Alguns campos só
-    // atualizam o total após Backspace; cutucarCampo reverte qualquer mudança
-    // e abaixo só seguimos se o número continuar exatamente igual ao alvo.
-    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, true);
+    // Máscaras que já reagiram ao keydown registram o valor durante a digitação;
+    // um Backspace extra pode deslocar a escala. Nos campos que só reagiram a
+    // input, a cutucada continua disponível e só seguimos se preservar o preço.
+    const precisaCutucar = !resultado.reagiuKeydown;
+    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
     const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
     if (!registrado || !valorPreservado) {
       registrarDiagnosticoDeCampo(input, {
@@ -1685,20 +1720,38 @@ function ehElementoClicavel(el) {
  * Texto exato vale mais; id/classe/aria-label com "salvar" também identificam
  * (o botão pode ser só um ícone).
  */
+function nomeAcessivelDoBotao(el) {
+  if (!el) return "";
+  const ariaLabel = el.getAttribute?.("aria-label")?.trim();
+  if (ariaLabel) return ariaLabel;
+
+  const labelledBy = (el.getAttribute?.("aria-labelledby") || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => el.ownerDocument?.getElementById(id)?.textContent?.trim() || "")
+    .filter(Boolean)
+    .join(" ");
+  if (labelledBy) return labelledBy;
+
+  const texto = el.innerText || el.textContent || el.value || el.title || "";
+  return String(texto).replace(/\s+/g, " ").trim();
+}
+
 function pontuarBotaoSalvar(el) {
   if (!el || !isVisible(el)) return -1;
 
-  const texto = normalizeText(el.textContent || el.value || "");
+  const nome = normalizeText(nomeAcessivelDoBotao(el));
+  const texto = normalizeText(el.innerText || el.textContent || el.value || "");
   const atributos = normalizeText(
     `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${el.id || ""} ${
       typeof el.className === "string" ? el.className : ""
     } ${el.getAttribute("data-testid") || ""} ${el.getAttribute("name") || ""}`,
   );
 
-  if (TEXTO_BOTAO_SALVAR_PROIBIDO.test(texto)) return -1;
+  if (TEXTO_BOTAO_SALVAR_PROIBIDO.test(texto) || TEXTO_BOTAO_SALVAR_PROIBIDO.test(nome)) return -1;
 
   let pontos = 0;
-  if (TEXTO_BOTAO_SALVAR.test(texto)) pontos += 100;
+  if (TEXTO_BOTAO_SALVAR.test(texto) || TEXTO_BOTAO_SALVAR.test(nome)) pontos += 100;
   else if (PISTAS_BOTAO_SALVAR.test(atributos) && (ehElementoClicavel(el) || el.matches(SELETOR_CLICAVEL))) pontos += 60;
   else if (el.matches('[class*="salvar" i], [id*="salvar" i]') && ehElementoClicavel(el)) pontos += 40;
 
@@ -1723,7 +1776,7 @@ function encontrarBotaoSalvar(escopo) {
 
 /** Texto do botão para relatar ao usuário ("Salvar", "Gravar item"...). */
 function descreverBotao(el) {
-  const texto = (el?.textContent || el?.value || el?.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim();
+  const texto = nomeAcessivelDoBotao(el);
   if (texto) return texto.slice(0, 40);
   return normalizeText(typeof el?.className === "string" ? el.className : "") || "botão sem texto";
 }

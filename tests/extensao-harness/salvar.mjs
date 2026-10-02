@@ -26,7 +26,8 @@
  *     continuam preenchendo marca/fabricante e modelo/versão
  * 23) Valor 67,4100 exato e confirmação Não/Sim sem ARIA/classes conhecidas
  * 24) Se a máscara corromper o preço, o bot não salva e continua os outros campos
- * 25) A máscara pode exibir 6,0000 após o primeiro dígito e aceitar os próximos por input
+ * 25) A máscara pode exibir 6,0000 primeiro; continua com o prefixo cru e salva 67,4100
+ * 26) O botão Salvar do portal (br-button) é encontrado pelo nome acessível
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1488,11 +1489,11 @@ export async function rodarSalvar() {
     checar(r.camposProblematicos.some((campo) => campo.esperado === "67,4100"), `o relatório diferencia o preço esperado 67,4100 (${JSON.stringify(r.camposProblematicos)})`);
   }
 
-  console.log("\n── 25) Máscara transforma o primeiro dígito em 6,0000 e aceita os próximos via input ──");
+  console.log("\n── 25) Máscara mostra 6,0000; prefixo cru termina em 67,4100 e salva ──");
   {
     const html = `<!DOCTYPE html><html><body>
       <h2>Itens</h2>
-      <section data-item="1">
+      <section class="item" data-item="1">
         <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
           <div class="publicados">
             <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
@@ -1501,55 +1502,54 @@ export async function rodarSalvar() {
           <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
         </div>
         <div class="detalhes">
-          <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+          <label>Valor unitário (R$)</label><input id="vu1" class="entrada ng-pristine" />
           <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
           <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
           <label>Modelo/Versão</label><input id="mv1" class="entrada" />
-          <button id="salvar1">Salvar</button>
+          <button type="button" class="mini br-button ml-2 mb-1 ng-star-inserted">Salvar</button>
         </div>
       </section>
     </body></html>`;
 
     const eventos = { salvamentos: [], teclas: [], valorInicialFormatado: false };
-    let digitosDoModelo = "";
     const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
       minimumFractionDigits: 4,
       maximumFractionDigits: 4,
     });
+    const atualizarTotal = (w, valor) => {
+      w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    };
     const { window, enviar } = montarPagina(html, {
       preparar: (w) => {
         const campo = w.document.getElementById("vu1");
         campo.addEventListener("keydown", (event) => {
           eventos.teclas.push(event.key);
-          if (/^\d$/.test(event.key || "") && !digitosDoModelo) {
-            // Caso da captura: a primeira tecla 6 vira um número formatado
-            // completo (6,0000). As teclas posteriores não alteram o DOM.
-            digitosDoModelo = event.key;
+          if (/^\d$/.test(event.key || "") && !eventos.valorInicialFormatado) {
+            // Reproduz a máscara observada: o primeiro 6 vira o visual 6,0000;
+            // as próximas teclas keydown não mudam o value do campo.
             campo.value = `${event.key},0000`;
             eventos.valorInicialFormatado = campo.value === "6,0000";
           }
-          if (event.key === "Backspace") {
-            const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
-            w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
-              minimumFractionDigits: 4,
-              maximumFractionDigits: 4,
-            })}`;
-            campo.className = "entrada ng-dirty ng-touched ng-valid";
-          }
         });
-        campo.addEventListener("input", (event) => {
-          // Para os dígitos seguintes, só a sequência input atualiza o modelo.
-          if (/^\d$/.test(event.data || "")) digitosDoModelo += event.data;
-          campo.value = formatarMoeda(digitosDoModelo);
+        campo.addEventListener("input", () => {
+          // O componente lê o texto recebido: se o bot concatenar ao visual
+          // "6,0000", os zeros decimais viram novos dígitos (674.100,0000).
+          const digitos = campo.value.replace(/\D/g, "");
+          campo.value = formatarMoeda(digitos);
+          campo.className = "entrada ng-dirty ng-touched ng-valid";
+          const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+          atualizarTotal(w, valor);
         });
         w.document.querySelector(".seta").addEventListener("click", () => {
           w.document.querySelector(".detalhes").style.display = "block";
         });
-        w.document.getElementById("salvar1").addEventListener("click", () => {
-          eventos.salvamentos.push({
-            valor: campo.value,
-            total: w.document.getElementById("total1").textContent,
-          });
+        const botao = w.document.querySelector("button.br-button");
+        botao.addEventListener("click", () => {
+          const valor = campo.value;
+          eventos.salvamentos.push({ valor, total: w.document.getElementById("total1").textContent });
           const toast = w.document.createElement("div");
           toast.setAttribute("role", "alert");
           toast.textContent = "Item salvo com sucesso";
@@ -1566,14 +1566,58 @@ export async function rodarSalvar() {
     const campo = window.document.getElementById("vu1");
     const total = window.document.getElementById("total1").textContent;
     checar(eventos.valorInicialFormatado, "a máscara exibiu 6,0000 imediatamente após a primeira tecla 6");
-    checar(campo.value === "67,4100", `o bot continuou a digitação e preservou 67,4100 (${campo.value})`);
-    checar(total === "R$ 1.011,1500", `Backspace registrou o preço e atualizou o total (${total})`);
-    checar(eventos.salvamentos.length === 1 && eventos.salvamentos[0]?.valor === "67,4100", `clicou Salvar uma vez com o preço correto (${JSON.stringify(eventos.salvamentos)})`);
-    checar(eventos.salvamentos[0]?.total === "R$ 1.011,1500", "o portal salvou após registrar o total correto");
+    checar(campo.value === "67,4100", `prefixo cru evitou casas extras e manteve 67,4100 (${campo.value})`);
+    checar(total === "R$ 1.011,1500", `total calculado corretamente (${total})`);
+    checar(eventos.salvamentos.length === 1 && eventos.salvamentos[0]?.valor === "67,4100", `clicou no botão br-button Salvar com preço correto (${JSON.stringify(eventos.salvamentos)})`);
+    checar(eventos.salvamentos[0]?.total === "R$ 1.011,1500", "o item foi salvo depois do total correto");
     checar(r.filled === 1 && JSON.stringify(r.savedItems) === "[1]" && r.salvamentos[0]?.confirmado, "item confirmado no relatório de salvamento");
+    checar(r.salvamentos[0]?.botao === "Salvar", `reconheceu o nome do botão (${r.salvamentos[0]?.botao})`);
     checar(r.salvamentos[0]?.lancamentos?.valorUnitario === 1, "valor unitário lançado uma única vez");
     checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "preencheu marca e modelo depois do preço");
-    checar(eventos.teclas.filter((tecla) => tecla === "Backspace").length === 1, "enviou uma única tecla de registro ao valor unitário");
+    checar(!eventos.teclas.includes("Backspace"), "não enviou Backspace extra depois que a máscara já reagiu ao keydown");
+  }
+
+  console.log("\n── 26) Botão br-button sem texto DOM é encontrado pelo nome acessível ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <section class="item" data-item="1">
+        <div class="cabecalho">
+          <div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" />
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <span id="rotulo-botao-salvar" hidden>Salvar</span>
+          <button type="button" class="mini br-button ml-2 mb-1 ng-star-inserted" aria-labelledby="rotulo-botao-salvar"><svg></svg></button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { cliques: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelector("button.br-button").addEventListener("click", () => {
+          eventos.cliques += 1;
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector("section.item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    checar(eventos.cliques === 1, `clicou no botão pelo nome acessível “Salvar” (${eventos.cliques})`);
+    checar(r.salvamentos[0]?.botao === "Salvar" && r.salvamentos[0]?.confirmado, "relatório reconheceu e confirmou o botão sem texto interno");
+    checar(window.document.querySelector("#vu1").value === "67,4100", "manteve o valor unitário exato ao localizar o botão");
   }
 
   return falhas;

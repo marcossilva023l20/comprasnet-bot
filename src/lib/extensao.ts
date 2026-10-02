@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.10";
+export const VERSAO_EXTENSAO = "1.7.11";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.11",
+    itens: [
+      "Corrige o preenchimento em máscaras que exibem 6,0000 no primeiro dígito: os caracteres seguintes usam apenas o prefixo numérico, sem reaproveitar os zeros da tela (evita 674.100,0000)",
+      "Não envia Backspace extra quando a máscara já reagiu ao keydown; o preço só chega a Salvar se continuar exatamente igual ao valor informado",
+      "Encontra o botão Salvar do portal pelo nome acessível (texto, aria-label ou aria-labelledby), inclusive o botão br-button",
+    ],
+  },
   {
     versao: "1.7.10",
     itens: [
