@@ -25,8 +25,15 @@
 #     opcional (VERCEL_DEPLOY_HOOK) é cadastrado pelo dono do repositório no
 #     GitHub e usado apenas no job de publicação.
 #
+# Observação sobre `.github/workflows/**`
+#   O GitHub recusa push do `GITHUB_TOKEN` quando o commit é CRIADO DENTRO do
+#   próprio workflow e altera arquivos de workflow (regra "workflows
+#   permission", que nenhum bloco `permissions:` concede). Aqui isso não ocorre:
+#   os commits já existem no servidor (foram enviados para a branch da sessão
+#   antes) e o job apenas faz fast-forward de `main` para eles — o push é aceito.
+#
 # Configuração necessária no GitHub: veja a seção
-# "Publicação automática (Arena -> main -> Vercel)" no README.md.
+# "Deploy automático (Arena -> main -> Vercel)" no README.md.
 
 name: Arena → main (CI + publicação)
 
@@ -52,12 +59,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout (sem guardar credenciais no .git/config)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
       - name: Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -93,13 +100,16 @@ jobs:
 
       - name: Resumo das verificações
         if: always()
+        env:
+          BRANCH: ${{ github.ref_name }}
+          REVISAO: ${{ github.sha }}
         run: |
           {
             echo "### Verificações"
             echo ""
             echo "| etapa | branch | revisão |"
             echo "| --- | --- | --- |"
-            echo "| lint, typecheck, testes, build | \`${{ github.ref_name }}\` | \`${{ github.sha }}\` |"
+            echo "| lint, typecheck, testes, build | \`${BRANCH}\` | \`${REVISAO}\` |"
             echo ""
             echo "Sem banco de dados: \`DATABASE_URL\` não é definida e \`SKIP_DB_MIGRATIONS=1\`."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -128,7 +138,7 @@ jobs:
       VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
     steps:
       - name: Checkout da revisão validada
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -174,6 +184,13 @@ jobs:
             exit 1
           fi
 
+          # Aviso (não bloqueia): revisões que alteram workflows são aceitas aqui
+          # porque os commits já existem no servidor; o GitHub só recusa commits
+          # criados dentro do próprio workflow que tocam `.github/workflows/**`.
+          if [ "$PUBLICAR" = "true" ] && ! git diff --quiet "origin/main...$REVISAO" -- .github/workflows; then
+            echo "::notice title=Revisão altera workflow::Esta revisão muda arquivos em .github/workflows/. Isso é publicável porque os commits vieram da branch da sessão (já existem no servidor). Se o push for recusado algum dia, veja a seção de problemas no README.md."
+          fi
+
           echo "publicar=$PUBLICAR" >> "$GITHUB_OUTPUT"
 
       - name: Publicar em main (fast-forward, sem force)
@@ -182,26 +199,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! git push origin HEAD:main 2> /tmp/push.err; then
+          REVISAO_ATUAL="$(git rev-parse HEAD)"
+
+          if ! git push origin HEAD:main > /tmp/push.out 2> /tmp/push.err; then
             echo "publicado=false" >> "$GITHUB_OUTPUT"
+            ERRO="$( { cat /tmp/push.err /tmp/push.out 2>/dev/null || true; } | tail -4 | tr '\n' '|' | cut -c1-500)"
             echo "::group::Saída do git push"
-            cat /tmp/push.err
+            cat /tmp/push.err 2>/dev/null || true
+            cat /tmp/push.out 2>/dev/null || true
             echo "::endgroup::"
             {
               echo "### Publicação falhou (nada foi publicado)"
               echo ""
-              echo "O \`git push\` foi rejeitado. Motivos mais comuns:"
+              echo "O \`git push\` foi rejeitado:"
+              echo ""
+              echo '```'
+              echo "$ERRO" | tr '|' '\n'
+              echo '```'
+              echo ""
+              echo "Motivos mais comuns:"
               echo ""
               echo "1. **Permissão**: em GitHub → Settings → Actions → General → Workflow permissions,"
-              echo "   deixe marcado *Read and write permissions* (ou mantenha este workflow, que já"
-              echo "   pede \`contents: write\` explicitamente)."
+              echo "   deixe marcado *Read and write permissions*."
               echo "2. **Proteção de branch em \`main\`**: se houver regra de proteção/ruleset, adicione"
-              echo "   *GitHub Actions* à lista de exceções (bypass) e não exija pull request para"
-              echo "   publicar. Caso contrário o push é bloqueado."
-              echo "3. **Confirmação de e-mail na organização/conta** ou restrições de app podem bloquear"
-              echo "   o \`GITHUB_TOKEN\`."
+              echo "   *GitHub Actions* à lista de exceções (bypass) e não exija pull request."
+              echo "3. **Arquivos de workflow**: o GitHub recusa commits criados dentro do próprio workflow"
+              echo "   que alteram \`.github/workflows/**\` (regra 'workflows permission'). Neste projeto os"
+              echo "   commits já existem no servidor, então isso normalmente não se aplica."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=Publicação não autorizada::git push rejeitado. Nada foi sobrescrito. Veja no resumo do job (Summary) os ajustes de permissão necessários."
+            echo "::error title=Publicação não autorizada::git push rejeitado: ${ERRO}"
             exit 1
           fi
 
@@ -211,8 +237,8 @@ jobs:
           echo "main_depois=$MAIN_DEPOIS" >> "$GITHUB_OUTPUT"
           echo "publicado=true" >> "$GITHUB_OUTPUT"
 
-          if [ "$MAIN_DEPOIS" != "$REVISAO" ]; then
-            echo "::error title=Estado inesperado::origin/main ($MAIN_DEPOIS) não é a revisão publicada ($REVISAO). Verifique manualmente antes de qualquer nova publicação."
+          if [ "$MAIN_DEPOIS" != "$REVISAO_ATUAL" ]; then
+            echo "::error title=Estado inesperado::origin/main ($MAIN_DEPOIS) não é a revisão publicada ($REVISAO_ATUAL). Verifique manualmente antes de qualquer nova publicação."
             exit 1
           fi
 
@@ -220,7 +246,7 @@ jobs:
 
       # Opcional: sem este secret, o push em main já dispara o deploy de produção
       # pela integração Git da Vercel. Com ele, garantimos o disparo também nos
-      # casos em que a Vercel recusa commits automáticos (github-actions[bot]).
+      # casos em que a Vercel recusa commits automáticos.
       - name: Disparar deploy de produção na Vercel (opcional)
         if: steps.push.outputs.publicado == 'true' && env.VERCEL_DEPLOY_HOOK != ''
         run: |
@@ -236,21 +262,28 @@ jobs:
 
       - name: Resumo da publicação
         if: always()
+        env:
+          PUBLICADO: ${{ steps.push.outputs.publicado }}
+          BRANCH: ${{ github.ref_name }}
+          REVISAO_VALIDADA: ${{ steps.revisao.outputs.revisao }}
+          MAIN_ANTES: ${{ steps.revisao.outputs.main_antes }}
+          MAIN_DEPOIS: ${{ steps.push.outputs.main_depois }}
+          MODO_DEPLOY: ${{ env.VERCEL_DEPLOY_HOOK != '' && 'Deploy Hook explícito' || 'integração Git da Vercel (push em main)' }}
         run: |
           {
             echo "## Publicação (Arena → main → Vercel)"
             echo ""
             echo "| item | valor |"
             echo "| --- | --- |"
-            echo "| branch | \`${{ github.ref_name }}\` |"
-            echo "| revisão validada | \`${{ steps.revisao.outputs.revisao }}\` |"
-            echo "| main antes | \`${{ steps.revisao.outputs.main_antes }}\` |"
-            echo "| publicado em main | \`${{ steps.push.outputs.main_depois }}\` |"
-            echo "| deploy Vercel | ${{ env.VERCEL_DEPLOY_HOOK != '' && 'disparado via Deploy Hook' || 'pela integração Git (push em main)' }} |"
+            echo "| branch | \`${BRANCH}\` |"
+            echo "| revisão validada | \`${REVISAO_VALIDADA}\` |"
+            echo "| main antes | \`${MAIN_ANTES}\` |"
+            echo "| publicado em main | \`${MAIN_DEPOIS}\` |"
+            echo "| deploy da Vercel | ${MODO_DEPLOY} |"
             echo ""
-            if [ "${{ steps.push.outputs.publicado }}" = "true" ]; then
-              echo "Verificação: confira em Vercel → Deployments a implantação de produção com o commit \`${{ steps.push.outputs.main_depois }}\`."
+            if [ "${PUBLICADO}" = "true" ]; then
+              echo "Verificação: confira em Vercel → Deployments a implantação de **Production** com o commit \`${MAIN_DEPOIS}\`."
             else
-              echo "Nada foi publicado nesta execução. Veja acima/mensagens deste job o motivo."
+              echo "Nada foi publicado nesta execução. Veja acima o motivo."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
