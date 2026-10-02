@@ -36,5 +36,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# drizzle migrations (optional - you may want to commit these)
-drizzle/
+# artefatos gerados no build
+public/extension.zip
+
+# as migrations SQL em drizzle/ sao versionadas (usadas pelo build na Vercel)

@@ -101,12 +101,13 @@ export default function ExtensaoPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-6">
           <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">💡 Dicas importantes</h3>
           <ul className="space-y-2 text-sm text-blue-700">
-            <li>✅ <strong>Certifique-se</strong> de estar na página "Cadastrar Propostas" do item correto antes de executar</li>
+            <li>✅ <strong>Certifique-se</strong> de estar na página &quot;Cadastrar Propostas&quot; do item correto antes de executar</li>
             <li>✅ <strong>Role a página</strong> para que os itens estejam visíveis antes de executar</li>
-            <li>✅ Use <strong>delay "Lento"</strong> se o site estiver demorando para responder</li>
+            <li>✅ Use <strong>delay &quot;Lento&quot;</strong> se o site estiver demorando para responder</li>
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>
             <li>⚠️ Se aparecer CAPTCHA, resolva manualmente e continue</li>
-            <li>⚠️ Cada clique em "Salvar" é feito individualmente por item</li>
+            <li>⚠️ Cada clique em &quot;Salvar&quot; é feito individualmente por item</li>
+            <li>🌐 Usando <strong>domínio próprio</strong> na Vercel? Adicione o endereço em <code className="bg-white/70 px-1 rounded">host_permissions</code> do <code className="bg-white/70 px-1 rounded">manifest.json</code> antes de carregar a extensão</li>
           </ul>
         </div>
       </main>

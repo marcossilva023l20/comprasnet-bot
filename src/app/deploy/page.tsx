@@ -86,19 +86,33 @@ git push -u origin main`}</Code>
             </Step>
 
             <Step n="2.2" title="Crie um novo projeto">
-              <p>Clique em <strong>"New Project"</strong> → dê um nome → selecione a região mais próxima do Brasil (<strong>US East</strong>) → clique <strong>Create Project</strong></p>
+              <p>Clique em <strong>&quot;New Project&quot;</strong> → dê um nome → selecione a região <strong>South America (São Paulo) — sa-east-1</strong> (menor latência para o Brasil) → clique <strong>Create Project</strong></p>
             </Step>
 
             <Step n="2.3" title="Copie a connection string">
-              <p>Na tela do projeto, vá em <strong>Connection Details</strong> → copie a <strong>Connection string</strong>. Ela terá este formato:</p>
-              <Code>{`postgresql://usuario:senha@ep-xxxx-xxxx.us-east-2.aws.neon.tech/neondb?sslmode=require`}</Code>
+              <p>Na tela do projeto, vá em <strong>Connection details</strong> → selecione <strong>Pooled connection</strong> → copie a string. Ela terá este formato:</p>
+              <Code>{`postgresql://usuario:senha@ep-xxxx-xxxx-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require`}</Code>
+              <p className="text-slate-400 text-xs mt-2">
+                Tanto a string <strong>pooled</strong> quanto a direta funcionam: o app usa o driver HTTP do Neon,
+                que converte o host em <code className="text-teal-300">https://api.sa-east-1.aws.neon.tech/sql</code>.
+                Se o Neon entregar a URL com <code>&amp;channel_binding=require</code>, pode deixar — é aceito.
+              </p>
               <p className="text-slate-400 text-xs mt-2">⚠️ Guarde bem essa string — será usada no Vercel.</p>
             </Step>
 
-            <Step n="2.4" title="Aplique o schema no Neon">
-              <p>No terminal local, rode (substitua pela sua connection string do Neon):</p>
-              <Code>{`DATABASE_URL="postgresql://..." npx drizzle-kit push`}</Code>
-              <p className="text-slate-400 text-xs mt-1">Isso cria as tabelas <code>propostas</code> e <code>itens</code> no Neon.</p>
+            <Step n="2.4" title="Crie as tabelas (automático ou manual)">
+              <p>
+                <strong>Automático:</strong> o build deste projeto roda <code>npm run db:migrate</code> e cria as
+                tabelas <code>propostas</code> e <code>itens</code> sozinho. Basta a <code>DATABASE_URL</code> estar
+                na Vercel antes do primeiro deploy.
+              </p>
+              <p className="mt-2">
+                <strong>Manual</strong> (opcional — para criar antes ou se o build falhar), rode localmente com a mesma string:
+              </p>
+              <Code>{`DATABASE_URL="postgresql://..." npm run db:migrate`}</Code>
+              <p className="text-slate-400 text-xs mt-1">
+                É idempotente: pode rodar quantas vezes quiser, só aplica o que ainda falta.
+              </p>
             </Step>
 
             <div className="bg-green-900/40 border border-green-700 rounded-xl p-4 text-green-300 text-sm">
@@ -117,24 +131,42 @@ git push -u origin main`}</Code>
             </Step>
 
             <Step n="3.2" title="Importe o repositório">
-              <p>No dashboard do Vercel, clique em <strong>"Add New → Project"</strong> → selecione o repositório <strong>comprasnet-bot</strong> → clique <strong>Import</strong></p>
+              <p>No dashboard do Vercel, clique em <strong>&quot;Add New → Project&quot;</strong> → selecione o repositório <strong>comprasnet-bot</strong> → clique <strong>Import</strong></p>
             </Step>
 
             <Step n="3.3" title="Configure a variável de ambiente">
-              <p>Antes de clicar em Deploy, adicione a variável:</p>
+              <p>
+                Em <strong>Environment Variables</strong>, adicione a variável abaixo marcando os 3 ambientes
+                (<em>Production</em>, <em>Preview</em> e <em>Development</em>) — ela precisa existir antes do
+                primeiro deploy, porque o build usa a URL para criar as tabelas:
+              </p>
               <div className="bg-white/5 rounded-xl border border-white/10 p-4 font-mono text-xs space-y-1">
                 <div><span className="text-slate-400">Nome: </span><span className="text-green-400">DATABASE_URL</span></div>
-                <div><span className="text-slate-400">Valor: </span><span className="text-yellow-300">postgresql://usuario:senha@ep-xxxx.neon.tech/neondb?sslmode=require</span></div>
+                <div><span className="text-slate-400">Valor: </span><span className="text-yellow-300">postgresql://usuario:senha@ep-xxxx-xxxx-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require</span></div>
               </div>
+              <p className="text-slate-400 text-xs mt-2">
+                Não mexa em <strong>Build Command</strong>: o padrão (<code>npm run build</code>) já aplica as
+                migrações e gera o ZIP da extensão. Se quiser pular as migrações no build,
+                adicione também <code>SKIP_DB_MIGRATIONS=1</code>.
+              </p>
             </Step>
 
             <Step n="3.4" title="Clique em Deploy!">
               <p>Clique em <strong>Deploy</strong>. O Vercel vai:</p>
               <ul className="mt-1 space-y-1 text-slate-300 ml-4">
                 <li>• Instalar dependências</li>
+                <li>• Aplicar as migrações (tabelas <code>propostas</code> e <code>itens</code>)</li>
                 <li>• Fazer o build do Next.js</li>
                 <li>• Publicar em um domínio <code>.vercel.app</code></li>
               </ul>
+            </Step>
+
+            <Step n="3.5" title="Confira se ficou saudável">
+              <p>Abra no navegador (troque pela sua URL):</p>
+              <Code>{`https://comprasnet-bot.vercel.app/api/health`}</Code>
+              <p className="text-slate-400 text-xs mt-2">
+                Resposta esperada: <code className="text-green-400">{`{ "ok": true, "driver": "neon-http", "tables": { "propostas": true, "itens": true } }`}</code>
+              </p>
             </Step>
 
             <div className="bg-green-900/40 border border-green-700 rounded-xl p-4 text-green-300">
@@ -222,6 +254,10 @@ git push origin main
               { q: "Posso usar um domínio próprio?", a: "Sim! No Vercel, vá em Settings → Domains → adicione seu domínio. É gratuito inclusive com domínios personalizados." },
               { q: "E se o Neon ficar fora do ar?", a: "O Neon tem 99.9% de uptime. Em caso de problema, o Vercel mostra o erro claramente nos logs." },
               { q: "Como proteger com senha?", a: "No Vercel, você pode adicionar autenticação com Vercel Password Protection (plano pago) ou implementar next-auth no código." },
+              { q: "Deu erro `relation \"propostas\" does not exist`", a: "As tabelas não foram criadas. Rode `DATABASE_URL=... npm run db:migrate` localmente e refaça o deploy — ou confira se DATABASE_URL está marcada para o ambiente Production na Vercel." },
+              { q: "Deu erro `DATABASE_URL is required` no build", a: "A variável não estava disponível durante o build. Agora o build não quebra mais sem ela, mas o app avisa na tela. Adicione DATABASE_URL nos 3 ambientes e faça Redeploy." },
+              { q: "O build falhou em `[db:migrate]`", a: "Confira a string do Neon (senha, região, sslmode=require) e se o projeto Neon não está suspenso por inatividade. Dá para pular essa etapa com SKIP_DB_MIGRATIONS=1 e criar as tabelas depois." },
+              { q: "Preciso trocar a senha do Neon depois de expor a URL?", a: "Sim, se a string vazou. No Neon: Project settings → Reset password. Depois atualize DATABASE_URL na Vercel e faça Redeploy." },
             ].map((faq) => (
               <div key={faq.q} className="border-b border-slate-100 pb-4 last:border-0 last:pb-0">
                 <p className="font-bold text-slate-700 mb-1">❔ {faq.q}</p>

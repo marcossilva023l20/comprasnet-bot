@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Preenche automaticamente as propostas de licitação no ComprasNet a partir da planilha importada.",
   "permissions": [
     "activeTab",
