@@ -5,6 +5,7 @@
 
 let abortRequested = false;
 let latestScanState = null;
+let botPausado = false;
 
 const FIELD_LABELS = {
   valorUnitario: "valor unitário",
@@ -13,13 +14,49 @@ const FIELD_LABELS = {
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.action === "ping") {
-    sendResponse({ ok: true, url: location.href });
+  if (msg.action === "stop") {
+    abortRequested = true;
+    botPausado = false;
+    atualizarPainel();
+    sendResponse({ ok: true });
     return true;
   }
 
-  if (msg.action === "stop") {
-    abortRequested = true;
+  if (msg.action === "pause") {
+    botPausado = true;
+    atualizarPainel();
+    registrarNoPainel("⏸ Bot pausado — os itens seguintes esperam você mandar continuar.");
+    sendResponse({ ok: true, pausado: true });
+    return true;
+  }
+
+  if (msg.action === "resume") {
+    botPausado = false;
+    atualizarPainel();
+    registrarNoPainel("▶ Bot retomado.");
+    sendResponse({ ok: true, pausado: false });
+    return true;
+  }
+
+  if (msg.action === "status" || msg.action === "ping") {
+    sendResponse({
+      ok: true,
+      pausado: botPausado,
+      rodando: Boolean(rodandoAgora),
+      painel: Boolean(document.getElementById(PAINEL_ID)),
+      url: location.href,
+    });
+    return true;
+  }
+
+  if (msg.action === "painel_mostrar") {
+    mostrarPainel();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.action === "painel_esconder") {
+    removerPainel();
     sendResponse({ ok: true });
     return true;
   }
@@ -408,6 +445,7 @@ async function fillItems(items, delayMs) {
   const salvamentos = [];
   const savedItems = [];
   abortRequested = false;
+  diagnosticoDeCampos.length = 0;
 
   if (items.length === 0) {
     return { filled, total: 0, errors: ["Nenhum item foi enviado para preencher."], warnings, filledItems };
@@ -415,8 +453,24 @@ async function fillItems(items, delayMs) {
 
   showNotification(`🤖 Lendo a página e preenchendo ${items.length} item(ns)...`, "info");
 
-  for (const item of items) {
+  rodandoAgora = true;
+  mostrarPainel();
+  definirStatusDoPainel(`Preenchendo ${items.length} item(ns)...`);
+  atualizarPainel();
+
+  for (const [indice, item] of items.entries()) {
     if (abortRequested) break;
+    await aguardarSePausado();
+    if (abortRequested) break;
+
+    definirStatusDoPainel(`Item ${item.item}: preenchendo (${indice + 1}/${items.length})...`);
+    atualizarPainel();
+    avisarProgresso({
+      item: item.item,
+      indice: indice + 1,
+      total: items.length,
+      status: "preenchendo",
+    });
 
     try {
       const outcome = await fillSingleItem(item, items.length === 1);
@@ -428,21 +482,31 @@ async function fillItems(items, delayMs) {
       if (outcome.warnings?.length) warnings.push(...outcome.warnings);
       if (outcome.salvamento) {
         salvamentos.push(outcome.salvamento);
-        // Só considera "salvo" o item cujo Salvar foi realmente clicado.
-        if (outcome.salvamento.clicado) savedItems.push(item.item);
+        // Só considera "salvo" o item cujo Salvar foi clicado E que o site não
+        // recusou (ex.: "O campo Valor unitário é obrigatório").
+        if (outcome.salvamento.clicado && !outcome.salvamento.recusado) savedItems.push(item.item);
       }
     } catch (err) {
       errors.push(`Item ${item.item}: ${err.message}`);
     }
 
     showProgressBar(filled, items.length);
+    atualizarPainel();
     await sleep(delayMs);
   }
 
   removeProgressBar();
+  rodandoAgora = false;
 
   const semSalvar = items.length - savedItems.length;
   const confirmados = salvamentos.filter((s) => s.clicado && s.confirmado).length;
+  definirStatusDoPainel(
+    abortRequested
+      ? `Parado: ${filled} de ${items.length} itens preenchidos.`
+      : `${filled}/${items.length} preenchidos · ${confirmados} confirmados pelo site`,
+  );
+  atualizarPainel();
+  avisarProgresso({ status: "fim", filled, total: items.length, confirmados, savedItems });
   if (abortRequested) {
     showNotification(`⏹ Parado: ${filled} de ${items.length} itens preenchidos.`, "warning");
   } else if (filled === items.length && confirmados === items.length) {
@@ -464,11 +528,23 @@ async function fillItems(items, delayMs) {
     salvamentos,
     savedItems,
     aborted: abortRequested,
+    // Campos que o site marcou como inválidos/obrigatórios mesmo preenchidos.
+    camposProblematicos: [...diagnosticoDeCampos],
   };
 }
 
 async function fillSingleItem(item, allowUnassignedFields) {
   const itemNumber = String(item.item ?? "");
+
+  // O item pode estar em outra página da lista (10 itens por página).
+  const naPagina = await irParaItem(itemNumber);
+  if (!naPagina) {
+    return {
+      ok: false,
+      error: `Item ${itemNumber}: não está na página e não consegui chegar até ele (confira a paginação / se o item existe).`,
+    };
+  }
+
   await tryExpandItem(itemNumber);
   await sleep(250);
 
@@ -490,6 +566,8 @@ async function fillSingleItem(item, allowUnassignedFields) {
   const warnings = [];
 
   for (const field of [...required, optional]) {
+    if (abortRequested) return { ok: false, error: `Item ${itemNumber}: preenchimento interrompido.` };
+    await aguardarSePausado();
     if (abortRequested) return { ok: false, error: `Item ${itemNumber}: preenchimento interrompido.` };
     if (!field.value) continue;
 
@@ -525,7 +603,12 @@ async function fillSingleItem(item, allowUnassignedFields) {
   showNotification(`💾 Item ${itemNumber}: salvando...`, "info");
   const salvamento = await salvarItem(itemNumber, allowUnassignedFields, fields);
 
-  if (!salvamento.clicado) {
+  if (salvamento.recusado) {
+    warnings.push(
+      `Item ${itemNumber}: o site RECUSOU o salvamento — ${salvamento.motivo}. Não marquei como enviado; confira os campos na página.`,
+    );
+    showNotification(`❌ Item ${itemNumber}: o site recusou — confira os campos`, "error");
+  } else if (!salvamento.clicado) {
     warnings.push(
       `Item ${itemNumber}: os campos foram preenchidos, mas NÃO salvei — ${salvamento.motivo}. Clique em Salvar na página.`,
     );
@@ -638,7 +721,7 @@ function disparar(el, tipo, view, dados = {}) {
   const ehInput = tipo === "input" || tipo === "beforeinput";
   const Evento = ehInput && typeof view.InputEvent === "function" ? view.InputEvent : view.Event;
   try {
-    el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, ...dados }));
+    el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, composed: true, ...dados }));
   } catch (_) {
     try {
       el.dispatchEvent(new view.Event(tipo, { bubbles: true }));
@@ -717,8 +800,10 @@ async function digitarDeVerdade(input, value, view) {
   let composto = "";
 
   for (const ch of caracteres) {
-    disparar(input, "keydown", view, { key: ch, char: ch, keyCode: ch.charCodeAt(0) });
-    disparar(input, "keypress", view, { key: ch, char: ch, keyCode: ch.charCodeAt(0) });
+    const codigo = ch === " " ? "Space" : /[0-9]/.test(ch) ? `Digit${ch}` : /[a-z]/i.test(ch) ? `Key${ch.toUpperCase()}` : "";
+    const tecla = { key: ch, code: codigo, char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
+    disparar(input, "keydown", view, tecla);
+    disparar(input, "keypress", view, tecla);
 
     let inseriu = false;
     if (podeInsertText) {
@@ -733,7 +818,7 @@ async function digitarDeVerdade(input, value, view) {
       aplicarValor(input, composto, view);
       disparar(input, "input", view, { data: ch, inputType: "insertText" });
     }
-    disparar(input, "keyup", view, { key: ch, char: ch });
+    disparar(input, "keyup", view, tecla);
 
     // A máscara pode ter reformatado o campo: parte do valor realmente aceito.
     if (inseriu) composto = String(input.value ?? "");
@@ -742,6 +827,101 @@ async function digitarDeVerdade(input, value, view) {
 
   disparar(input, "change", view, { data: String(input.value ?? "") });
   return !campoVazio(input);
+}
+
+/**
+ * O framework do site registrou o valor no formulário?
+ * Angular marca `ng-invalid`/`ng-pristine`/`ng-untouched`; Bootstrap usa
+ * `is-invalid`; outros usam `aria-invalid`. Se o campo continua "pristine"
+ * depois de preenchido, o site não viu o evento de input.
+ */
+function estadoDeValidacao(el) {
+  if (!el) return { invalido: false, pristine: false, mensagem: "" };
+  const classe = String(el.className || "");
+  const ariaInvalido = el.getAttribute("aria-invalid") === "true";
+  const classeInvalida = /\b(ng-invalid|is-invalid|has-error)\b/i.test(classe);
+  const pristine = /\b(ng-pristine|ng-untouched)\b/i.test(classe);
+
+  let mensagem = "";
+  const container = el.closest(".form-group, .campo, .field, [class*='form-field'], [class*='invalid']") || el.parentElement;
+  if (container && (ariaInvalido || classeInvalida)) {
+    const texto = (container.textContent || "").replace(/\s+/g, " ").trim();
+    if (texto.length <= 160) mensagem = texto;
+  }
+
+  return { invalido: ariaInvalido || classeInvalida, pristine, mensagem };
+}
+
+/**
+ * O campo pertence a um formulário controlado por framework (Angular e afins)?
+ * Só nesses vale reforçar o evento — máscaras simples podem reagir mal a um
+ * input manual e apagar o valor.
+ */
+function pistasDeFramework(el) {
+  const classe = String(el?.className || "");
+  if (/\bng-(pristine|untouched|dirty|touched|valid|invalid)\b/.test(classe)) return true;
+  if (el?.getAttribute?.("aria-invalid") !== null && el?.getAttribute?.("aria-invalid") !== undefined) return true;
+  if (/\b(is-invalid|has-error|was-validated|invalid-feedback)\b/i.test(classe)) return true;
+
+  const container = el?.closest?.("form, .form-group, [class*='form-field'], mat-form-field, .p-field, fieldset");
+  if (container && /\bng-(pristine|untouched|invalid)\b/.test(String(container.className || ""))) return true;
+  return false;
+}
+
+/**
+ * Reforça o valor já gravado no campo: dispara a sequência de eventos com o
+ * VALOR FINAL (depois da máscara formatar) e repete um tick depois — muitos
+ * componentes só leem o campo quando o evento chega com o texto já formatado.
+ * Se a máscara apagar o valor, restaura o texto e desiste (sem estragar nada).
+ */
+async function reforcarValor(input, view) {
+  const texto = String(input.value ?? "");
+  if (!texto) return false;
+  const numero = valorNumerico(texto);
+
+  const restaurar = () => {
+    aplicarValor(input, texto, view);
+    return false;
+  };
+
+  aplicarValor(input, texto, view);
+  disparar(input, "beforeinput", view, { data: texto, inputType: "insertText" });
+  disparar(input, "input", view, { data: texto, inputType: "insertText" });
+  await sleep(80);
+  if (campoVazio(input)) return restaurar();
+
+  const final = String(input.value ?? texto);
+  if (!mesmoNumero(valorNumerico(final), numero)) return restaurar();
+
+  aplicarValor(input, final, view);
+  disparar(input, "input", view, { data: final, inputType: "insertText" });
+  disparar(input, "change", view, { data: final });
+  await sleep(80);
+  if (campoVazio(input)) return restaurar();
+
+  disparar(input, "blur", view, {});
+  disparar(input, "focusout", view, {});
+  try {
+    input.blur();
+  } catch (_) {
+    // opcional
+  }
+  await sleep(60);
+  return true;
+}
+
+/**
+ * Última cartada para o formulário do site "ver" o valor: repete o input com o
+ * texto final e acompanha o estado de validação (pristine → o site não viu).
+ */
+async function acordarCampo(input, view) {
+  for (let rodada = 1; rodada <= 2; rodada += 1) {
+    const estado = estadoDeValidacao(input);
+    if (!estado.pristine && !estado.invalido) return true;
+    await reforcarValor(input, view);
+    await sleep(120);
+  }
+  return !estadoDeValidacao(input).pristine;
 }
 
 /** Uma tentativa completa de escrever o valor no campo. */
@@ -767,15 +947,13 @@ async function preencherCampo(input, value, view) {
     }
   }
 
-  // blur: formulários que só validam/commitam o valor ao sair do campo.
-  try {
-    disparar(input, "blur", view, {});
-    disparar(input, "focusout", view, {});
-    input.blur();
-  } catch (_) {
-    // blur é opcional
+  // Reforça o valor final (o framework do site pode ter lido antes da máscara
+  // formatar) e confere se ele registrou o campo. Só em campos de framework:
+  // máscaras simples podem reagir mal a um input manual.
+  if (!campoVazio(input) && pistasDeFramework(input)) {
+    await reforcarValor(input, view);
+    await acordarCampo(input, view);
   }
-  await sleep(120);
 }
 
 async function setInputValue(input, rawValue) {
@@ -811,6 +989,7 @@ async function setInputValue(input, rawValue) {
   // (44,00 vira 0,4400, por exemplo). Por isso conferimos o que ficou no campo e,
   // se o número não bate, tentamos de novo no formato que a máscara aceita.
   const alvo = valorNumerico(value);
+  const estadoInicial = estadoDeValidacao(input);
   const formatos =
     alvo === null
       ? [value]
@@ -821,15 +1000,41 @@ async function setInputValue(input, rawValue) {
   for (const tentativa of tentativas) {
     await preencherCampo(input, tentativa, view);
 
-    if (alvo !== null) {
-      if (mesmoNumero(valorNumerico(input.value), alvo)) return true;
-      continue; // a máscara interpretou diferente: tenta o próximo formato
-    }
+    const bateu =
+      alvo !== null ? mesmoNumero(valorNumerico(input.value), alvo) : !espera || !campoVazio(input);
+    if (!bateu) continue; // a máscara interpretou diferente: tenta o próximo formato
 
-    if (!espera || !campoVazio(input)) return true;
+    // O valor bate: só falta o site ter registrado no formulário.
+    const precisaAcordar = alvo !== null && estadoDeValidacao(input).pristine;
+    if (precisaAcordar && !(await acordarCampo(input, view))) {
+      registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
+    } else if (estadoDeValidacao(input).invalido) {
+      registrarDiagnosticoDeCampo(input, { valor: value, invalido: true });
+    }
+    return true;
   }
 
+  if (!campoVazio(input)) registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
   return false;
+}
+
+/**
+ * Campos que o site marcou como inválidos mesmo depois de preenchidos ficam
+ * guardados para o relatório (é o caso do "campo é obrigatório" falso).
+ */
+const diagnosticoDeCampos = [];
+
+function registrarDiagnosticoDeCampo(input, info) {
+  try {
+    const entrada = {
+      campo: input.id || input.name || input.getAttribute("aria-label") || input.className || "campo",
+      valor: input.value,
+      ...info,
+    };
+    if (!diagnosticoDeCampos.some((e) => e.campo === entrada.campo)) diagnosticoDeCampos.push(entrada);
+  } catch (_) {
+    // diagnóstico é opcional
+  }
 }
 
 /**
@@ -1058,10 +1263,20 @@ function estadoDoAviso(aviso) {
  */
 function pareceConfirmacao(mensagens) {
   for (const mensagem of mensagens || []) {
-    if (/(erro|error|inv[aá]lid|obrigat[óo]ri|falh|incorret|rejeit|n[ãa]o\s+(foi|p[oô]de|conseguiu))/i.test(mensagem)) continue;
+    if (ehMensagemDeErro(mensagem)) continue;
     if (/(salv|cadastrad|gravad|sucesso|êxito|exito|atualizad|conclu[íi]d)/i.test(mensagem)) return mensagem;
   }
   return "";
+}
+
+/**
+ * O site reclamou de algum campo? ("O campo "Valor unitário" é obrigatório.")
+ * Essas mensagens nunca podem ser confundidas com salvamento.
+ */
+function ehMensagemDeErro(mensagem) {
+  return /(obrigat[óo]ri|é\s+necess[áa]rio|preencha|inv[aá]lid|incorret|erro|error|falh|rejeit|n[ãa]o\s+(foi|p[oô]de|conseguiu|permitid)|não\s+informad|informe|selecione|deve\s+ser)/i.test(
+    mensagem || "",
+  );
 }
 
 /** Textos dos avisos que o usuário está vendo agora (para o relatório). */
@@ -1103,16 +1318,20 @@ function escoposDoPainel(escopos, botao) {
 }
 
 function assinaturaDeSalvamento(escopos, botao) {
-  return JSON.stringify({
+  return {
     // Lista COM repetição: dois itens salvos geram o mesmo aviso duas vezes.
     avisos: avisosDaPagina(escopos).map(estadoDoAviso),
-    // O painel pode confirmar sem toast: "Proposta cadastrada", valor total, etc.
-    painel: escoposDoPainel(escopos, botao).map((escopo) => (escopo.textContent || "").replace(/\s+/g, " ").trim().length),
+    // O painel pode confirmar sem toast (contagem de texto, valor total...).
+    painel: escoposDoPainel(escopos, botao).map((escopo) =>
+      (escopo.textContent || "").replace(/\s+/g, " ").trim().length,
+    ),
     botaoVisivel: Boolean(botao?.isConnected && isVisible(botao)),
     botaoDesabilitado: Boolean(botao?.disabled),
     itensDesmontados: escopos.filter((escopo) => escopo?.isConnected === false).length,
-  });
+  };
 }
+
+const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Salva o item: encontra o botão (no item, no contexto do item, num ancestral
@@ -1212,6 +1431,8 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     return mensagens;
   };
 
+  await aguardarSePausado();
+  const mensagensAntes = coletarMensagens();
   let confirmado = false;
   let tentativas = 0;
   let mensagens = [];
@@ -1226,25 +1447,56 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     tentativas = tentativa;
     relatorio.clicado = true;
 
-    const limite = Date.now() + (tentativa === 1 ? 3000 : 2500);
+    // O site costuma responder rápido (toast), mas pode demorar um pouco.
+    await sleep(800);
+
+    const limite = Date.now() + (tentativa === 1 ? 2600 : 2200);
     while (Date.now() < limite) {
-      await sleep(250);
-      if (grupo?.container && !grupo.container.isConnected) {
+      mensagens = coletarMensagens();
+      const novas = mensagens.filter((m) => !mensagensAntes.includes(m));
+
+      // 1º de tudo: o site RECUSOU o salvamento? (campo obrigatório etc.)
+      const recusa = novas.find(ehMensagemDeErro);
+      if (recusa) {
+        relatorio.recusado = true;
+        relatorio.motivo = `o site recusou: "${recusa}"`;
+        confirmado = false;
+        break;
+      }
+
+      // 2º: mensagem de sucesso explícita.
+      const sucesso = novas.find((m) => !ehMensagemDeErro(m) && /(salv|cadastrad|gravad|sucesso|êxito|exito|atualizad|conclu[íi]d)/i.test(m));
+      if (sucesso) {
+        confirmado = true;
+        relatorio.mensagemSucesso = sucesso;
+        break;
+      }
+
+      const agora = assinaturaDeSalvamento(ondeObservar, botao);
+      const itemSumiu = Boolean(grupo?.container && !grupo.container.isConnected);
+      if (itemSumiu || agora.itensDesmontados > antes.itensDesmontados) {
         confirmado = true; // a tela foi remontada (item salvo e recarregado)
         break;
       }
-      if (assinaturaDeSalvamento(ondeObservar, botao) !== antes) {
-        confirmado = true;
+
+      const avisosMudaram = !igual(agora.avisos, antes.avisos);
+      if (avisosMudaram && !mensagens.some(ehMensagemDeErro)) {
+        confirmado = true; // apareceu um aviso/mensagem que não é de erro
         break;
       }
+
+      const botaoMudou =
+        agora.botaoVisivel !== antes.botaoVisivel || agora.botaoDesabilitado !== antes.botaoDesabilitado;
+      if (botaoMudou) {
+        confirmado = true; // o site desabilitou/escondeu o Salvar (gravou)
+        break;
+      }
+
+      await sleep(250);
     }
 
-    mensagens = coletarMensagens();
+    if (relatorio.recusado) break; // o site respondeu: não vale insistir
     if (confirmado) break;
-    if (pareceConfirmacao(mensagens)) {
-      confirmado = true;
-      break;
-    }
 
     // Janela de confirmação ("Salvar" → "Confirmar")?
     const modal = await responderModalDeConfirmacao();
@@ -1278,7 +1530,9 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
   relatorio.mensagens = mensagens;
   relatorio.mensagemSucesso = pareceConfirmacao(mensagens);
 
-  if (!confirmado && mensagens.length) {
+  if (!confirmado && relatorio.recusado) {
+    // a mensagem já está no motivo
+  } else if (!confirmado && mensagens.length) {
     relatorio.motivo = `o site mostrou: "${mensagens[0]}"`;
   } else if (!confirmado) {
     relatorio.motivo = "cliquei no Salvar 2× e o site não deu nenhum sinal de confirmação";
@@ -1408,6 +1662,174 @@ function camposVisiveisDoItem(grupo) {
   };
 }
 
+// ─── Paginação da lista de itens (ComprasNet mostra 10 itens por página) ─────
+//
+// O portal pagina a lista: 1-10 na página 1, 11-20 na página 2 e assim por
+// diante. Tanto a leitura quanto o preenchimento precisam navegar por essas
+// páginas. Nunca clicamos em nada que lembre "Favoritos".
+
+const SELETOR_PAGINACAO = [
+  '[class*="pagination" i]',
+  '[class*="paginacao" i]',
+  '[class*="paginador" i]',
+  '[class*="paging" i]',
+  'nav[aria-label*="pág" i]',
+  '[data-testid*="pagination" i]',
+].join(", ");
+
+const TEXTO_PROIBIDO_PAGINACAO = /favorit|salvar|imprimir|excluir|remover|sair|logout|voltar\s+ao\s+topo/i;
+const TEXTO_PROXIMO = /^(»|›|>|\u203a|pr[oó]xim[ao]|próxima\s+p[áa]gina|next|avan[çc]ar)/i;
+const TEXTO_ANTERIOR = /^(«|‹|<|\u2039|anterior|p[áa]gina\s+anterior|prev|voltar)/i;
+
+/** Botões de página (números, próximo e anterior) da lista de itens. */
+function controlesDePagina() {
+  const candidatos = [];
+
+  for (const doc of collectDocuments()) {
+    for (const el of consultarProfundo(doc, `${SELETOR_PAGINACAO}, button, a, [role="button"]`)) {
+      if (!isVisible(el) || el.disabled) continue;
+      const rotulo = normalizeText(
+        `${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""}`,
+      );
+      if (!rotulo || TEXTO_PROIBIDO_PAGINACAO.test(rotulo)) continue;
+
+      const emPaginacao = Boolean(el.closest?.(SELETOR_PAGINACAO));
+      const numero = /^\d+$/.test(rotulo) ? rotulo : "";
+      const proximo = TEXTO_PROXIMO.test(rotulo);
+      const anterior = !proximo && TEXTO_ANTERIOR.test(rotulo);
+      if (!numero && !proximo && !anterior) continue;
+      // Fora de um contêiner de paginação, só aceita as setas de avançar/voltar.
+      if (!emPaginacao && !proximo && !anterior) continue;
+
+      const ativo =
+        el.getAttribute("aria-current") === "page" ||
+        /\b(active|current|selected|ativo|selecionado)\b/i.test(String(el.className || "")) ||
+        (el.parentElement ? /\b(active|current|selected|ativo|selecionado)\b/i.test(String(el.parentElement.className || "")) : false);
+
+      candidatos.push({ el, numero, proximo, anterior, ativo, emPaginacao });
+    }
+  }
+
+  if (candidatos.length === 0) return null;
+
+  const paginas = new Map();
+  for (const c of candidatos) if (c.numero) paginas.set(c.numero, c.el);
+
+  const ativo = candidatos.find((c) => c.ativo && c.numero);
+  return {
+    paginas,
+    proximo: candidatos.find((c) => c.proximo)?.el || null,
+    anterior: candidatos.find((c) => c.anterior)?.el || null,
+    atual: ativo?.numero || "",
+  };
+}
+
+/** Os números dos itens que estão no DOM agora (para saber se a página mudou). */
+function assinaturaDaLista() {
+  return findItemBlocks({ exigirVisivel: false })
+    .map((bloco) => itemNumberFromBlock(bloco))
+    .filter(Boolean)
+    .join(",");
+}
+
+/** Números dos itens presentes na página atual (mesmo com os campos fechados). */
+function numerosNaPagina() {
+  const numeros = new Set();
+  for (const bloco of findItemBlocks({ exigirVisivel: false })) {
+    const numero = itemNumberFromBlock(bloco);
+    if (numero) numeros.add(normalizeItemNumber(numero));
+  }
+  return numeros;
+}
+
+async function esperarListaMudar(antes, tempoMs = 5000) {
+  const limite = Date.now() + tempoMs;
+  while (Date.now() < limite) {
+    await sleep(200);
+    if (assinaturaDaLista() !== antes) {
+      await sleep(250); // deixa o site terminar de montar os itens
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Vai para a página número `numero` (1, 2, 3...). */
+async function irParaPagina(numero) {
+  const alvo = String(numero);
+  const controles = controlesDePagina();
+  if (!controles || controles.atual === alvo) return Boolean(controles && controles.atual === alvo);
+
+  const botao = controles.paginas.get(alvo);
+  if (!botao) return false;
+
+  const antes = assinaturaDaLista();
+  if (!clicarDeVerdade(botao)) return false;
+  return esperarListaMudar(antes);
+}
+
+/** Avança uma página (seta "próxima"). */
+async function avancarPagina() {
+  const controles = controlesDePagina();
+  if (!controles?.proximo) return false;
+  const antes = assinaturaDaLista();
+  if (!clicarDeVerdade(controles.proximo)) return false;
+  return esperarListaMudar(antes);
+}
+
+/** Volta para a primeira página (para varrer a lista desde o começo). */
+async function irParaPrimeiraPagina() {
+  const controles = controlesDePagina();
+  if (!controles) return false;
+  if (controles.atual === "1") return true;
+  if (await irParaPagina(1)) return true;
+
+  // Sem botão "1": volta com a seta de anterior até o começo.
+  for (let i = 0; i < 50; i += 1) {
+    const atual = controlesDePagina();
+    if (!atual?.anterior || atual.atual === "1") break;
+    const antes = assinaturaDaLista();
+    if (!clicarDeVerdade(atual.anterior)) break;
+    if (!(await esperarListaMudar(antes))) break;
+  }
+  return true;
+}
+
+/**
+ * Garante que o item pedido esteja na página atual, navegando se preciso.
+ * Guarda em que página cada item já foi visto para não varrer tudo de novo.
+ */
+const paginaDoItem = new Map();
+
+async function irParaItem(itemNumber) {
+  const chave = normalizeItemNumber(itemNumber);
+
+  if (numerosNaPagina().has(chave)) return true;
+
+  const controles = controlesDePagina();
+  if (!controles) return false; // lista sem paginação
+
+  const tentarPagina = async (numero) => {
+    if (!(await irParaPagina(numero))) return false;
+    return numerosNaPagina().has(chave);
+  };
+
+  // Já sabemos (ou o site informa) em que página ele estava.
+  const conhecida = paginaDoItem.get(chave);
+  if (conhecida && (await tentarPagina(conhecida))) return true;
+
+  if (!(await irParaPrimeiraPagina())) return false;
+
+  for (let i = 0; i < 50; i += 1) {
+    const numeros = numerosNaPagina();
+    for (const numero of numeros) paginaDoItem.set(numero, String(i + 1));
+    if (numeros.has(chave)) return true;
+    if (!(await avancarPagina())) break;
+  }
+
+  return false;
+}
+
 // ─── Leitura dos itens da página (extensão → sistema) ────────────────────────
 //
 // Diferente de scanPage() (que procura CAMPOS para preencher), esta leitura
@@ -1499,8 +1921,90 @@ async function expandirTodos(delay) {
 }
 
 async function readPageItems({ expandir = true, delay = 400 } = {}) {
-  const avisos = [];
   const identificacao = readPageIdentificacao();
+  rodandoAgora = true;
+  mostrarPainel();
+  definirStatusDoPainel("Lendo os itens da página...");
+  atualizarPainel();
+  const avisos = [];
+  const itens = [];
+  const vistos = new Set();
+  abortRequested = false;
+
+  const controles = controlesDePagina();
+  const temPaginacao = Boolean(controles?.paginas?.size || controles?.proximo);
+  let paginasLidas = 0;
+  let expandidos = 0;
+  let expandiuTodos = false;
+
+  // Navega pelas páginas (10 itens por página no ComprasNet) e junta tudo.
+  if (temPaginacao) await irParaPrimeiraPagina();
+
+  for (let pagina = 1; pagina <= 50; pagina += 1) {
+    if (abortRequested) break;
+
+    const resultado = await lerItensDaPaginaAtual({ expandir, delay, identificacao });
+    if (!resultado.ok && pagina === 1) {
+      return {
+        ok: false,
+        error: resultado.error,
+        identificacao,
+      };
+    }
+    if (!resultado.ok) break;
+
+    paginasLidas += 1;
+    expandidos += resultado.expandidos;
+    expandiuTodos = expandiuTodos || Boolean(resultado.expandiuTodos);
+    avisos.push(...resultado.avisos);
+
+    let novos = 0;
+    for (const item of resultado.itens) {
+      const chave = normalizeItemNumber(item.numeroItem) || item.descricao;
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      itens.push(item);
+      novos += 1;
+    }
+
+    if (!temPaginacao || novos === 0) break;
+    if (!(await avancarPagina())) break;
+  }
+
+  if (temPaginacao) {
+    await irParaPrimeiraPagina(); // devolve a página como estava (início)
+    avisos.push(`Páginas lidas: ${paginasLidas}.`);
+  }
+
+  rodandoAgora = false;
+  definirStatusDoPainel(`Leitura concluída: ${itens.length} item(ns) em ${paginasLidas} página(s).`);
+  atualizarPainel();
+
+  if (itens.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Não encontrei a lista de itens nesta página. Abra a página de cadastro de propostas do ComprasNet com os itens visíveis e tente novamente.",
+      identificacao,
+    };
+  }
+
+  return {
+    ok: true,
+    url: location.href,
+    identificacao,
+    itens,
+    total: itens.length,
+    expandidos,
+    expandiuTodos,
+    paginas: paginasLidas,
+    avisos,
+  };
+}
+
+/** Lê os itens que estão na página atual (uma "folha" da paginação). */
+async function lerItensDaPaginaAtual({ expandir = true, delay = 400, identificacao } = {}) {
+  const avisos = [];
 
   let blocos = findItemBlocks();
   let expandiuTodos = false;
@@ -1521,13 +2025,12 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
       ok: false,
       error:
         "Não encontrei a lista de itens nesta página. Abra a página de cadastro de propostas do ComprasNet com os itens visíveis e tente novamente.",
-      identificacao,
+      identificacao: identificacao || readPageIdentificacao(),
     };
   }
 
   const itens = [];
   let expandidos = 0;
-  abortRequested = false;
 
   if (expandir) showProgressBar(0, blocos.length);
 
@@ -1536,6 +2039,8 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
       avisos.push("Leitura interrompida antes do fim da lista.");
       break;
     }
+    await aguardarSePausado();
+    if (abortRequested) break;
 
     const numero = itemNumberFromBlock(bloco) || String(index + 1);
 
@@ -1560,17 +2065,9 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
 
   if (expandir) removeProgressBar();
 
-  return {
-    ok: true,
-    url: location.href,
-    identificacao,
-    itens,
-    total: itens.length,
-    expandidos,
-    expandiuTodos,
-    avisos,
-  };
+  return { ok: true, itens, total: itens.length, expandidos, expandiuTodos, avisos };
 }
+
 
 /** Cabeçalho da página: UASG, número da compra/processo, objeto e data limite. */
 function readPageIdentificacao() {
@@ -2170,9 +2667,176 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ─── Painel flutuante na página (não fecha junto com o popup) ────────────────
+//
+// O popup do Chrome fecha quando o usuário clica fora. Este painel vive na
+// própria página do ComprasNet, mostra o andamento e tem os botões de
+// Pausar/Continuar e Parar.
+
+const PAINEL_ID = "__comprasnet_bot_painel__";
+const PAINEL_POSICAO = "__comprasnet_bot_painel_pos__";
+
+let rodandoAgora = false;
+let painelStatus = "Pronto.";
+const painelLog = [];
+
+function removerPainel() {
+  document.getElementById(PAINEL_ID)?.remove();
+}
+
+function registrarNoPainel(mensagem) {
+  const texto = String(mensagem || "").replace(/\s+/g, " ").trim();
+  if (!texto) return;
+  painelLog.push(texto);
+  while (painelLog.length > 8) painelLog.shift();
+  if (document.getElementById(PAINEL_ID)) {
+    const area = document.getElementById(`${PAINEL_ID}_log`);
+    if (area) area.textContent = painelLog.join("\n");
+  }
+}
+
+function definirStatusDoPainel(texto) {
+  painelStatus = texto;
+  const el = document.getElementById(`${PAINEL_ID}_status`);
+  if (el) el.textContent = texto;
+}
+
+function atualizarPainel() {
+  const painel = document.getElementById(PAINEL_ID);
+  if (!painel) return;
+  const pausar = document.getElementById(`${PAINEL_ID}_pausar`);
+  if (pausar) {
+    pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
+    pausar.style.background = botPausado ? "#168821" : "#1351b4";
+  }
+  const parar = document.getElementById(`${PAINEL_ID}_parar`);
+  if (parar) parar.disabled = !rodandoAgora && !botPausado;
+  const el = document.getElementById(`${PAINEL_ID}_status`);
+  if (el) el.textContent = botPausado ? `⏸ Pausado — ${painelStatus}` : painelStatus;
+}
+
+function mostrarPainel() {
+  if (document.getElementById(PAINEL_ID)) {
+    atualizarPainel();
+    return;
+  }
+
+  const painel = document.createElement("div");
+  painel.id = PAINEL_ID;
+  painel.style.cssText = [
+    "position:fixed",
+    "right:16px",
+    "bottom:16px",
+    "width:290px",
+    "z-index:2147483647",
+    "background-color:#fff",
+    "color:#1f2937",
+    "border:1px solid #cbd5e1",
+    "border-radius:12px",
+    "box-shadow:0 12px 32px rgba(15,23,42,0.28)",
+    "font-size:12px",
+    "line-height:1.45",
+    "font-family:'Segoe UI',system-ui,sans-serif",
+    "overflow:hidden",
+  ].join(";");
+
+  try {
+    const salva = JSON.parse(localStorage.getItem(PAINEL_POSICAO) || "null");
+    if (salva && Number.isFinite(salva.top) && Number.isFinite(salva.left)) {
+      painel.style.right = "auto";
+      painel.style.bottom = "auto";
+      painel.style.top = `${salva.top}px`;
+      painel.style.left = `${salva.left}px`;
+    }
+  } catch (_) {
+    // posição é opcional
+  }
+
+  painel.innerHTML = `
+    <div id="${PAINEL_ID}_topo" style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#1351b4;color:#fff;cursor:move;">
+      <strong style="flex:1;font-size:12px;">🤖 ComprasNet Bot</strong>
+      <button id="${PAINEL_ID}_fechar" title="Fechar painel" style="background:transparent;border:0;color:#fff;cursor:pointer;font-size:14px;">✕</button>
+    </div>
+    <div style="padding:10px;">
+      <div id="${PAINEL_ID}_status" style="font-weight:600;margin-bottom:8px;">Pronto.</div>
+      <div style="display:flex;gap:6px;">
+        <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#1351b4;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
+        <button id="${PAINEL_ID}_parar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#e52207;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏹ Parar</button>
+      </div>
+      <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font:11px/1.4 monospace;color:#475569;"></pre>
+      <div style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
+    </div>`;
+
+  document.body.appendChild(painel);
+
+  document.getElementById(`${PAINEL_ID}_fechar`).addEventListener("click", removerPainel);
+  document.getElementById(`${PAINEL_ID}_pausar`).addEventListener("click", () => {
+    botPausado = !botPausado;
+    registrarNoPainel(botPausado ? "⏸ Bot pausado." : "▶ Bot retomado.");
+    atualizarPainel();
+  });
+  document.getElementById(`${PAINEL_ID}_parar`).addEventListener("click", () => {
+    abortRequested = true;
+    botPausado = false;
+    registrarNoPainel("⏹ Parando depois do item atual...");
+    atualizarPainel();
+  });
+
+  // Arrastar pelo cabeçalho.
+  const topo = document.getElementById(`${PAINEL_ID}_topo`);
+  let arrasto = null;
+  topo.addEventListener("pointerdown", (evento) => {
+    const rect = painel.getBoundingClientRect();
+    arrasto = { dx: evento.clientX - rect.left, dy: evento.clientY - rect.top };
+    evento.preventDefault();
+  });
+  window.addEventListener("pointermove", (evento) => {
+    if (!arrasto) return;
+    const left = Math.max(0, Math.min(window.innerWidth - painel.offsetWidth, evento.clientX - arrasto.dx));
+    const top = Math.max(0, Math.min(window.innerHeight - 40, evento.clientY - arrasto.dy));
+    painel.style.right = "auto";
+    painel.style.bottom = "auto";
+    painel.style.left = `${left}px`;
+    painel.style.top = `${top}px`;
+  });
+  window.addEventListener("pointerup", () => {
+    if (!arrasto) return;
+    arrasto = null;
+    try {
+      localStorage.setItem(PAINEL_POSICAO, JSON.stringify({ left: painel.offsetLeft, top: painel.offsetTop }));
+    } catch (_) {
+      // posição é opcional
+    }
+  });
+
+  const area = document.getElementById(`${PAINEL_ID}_log`);
+  if (area) area.textContent = painelLog.join("\n");
+  atualizarPainel();
+}
+
+/** Espera enquanto o bot estiver pausado (o Parar interrompe a espera). */
+async function aguardarSePausado() {
+  if (!botPausado) return;
+  definirStatusDoPainel("Pausado pelo usuário.");
+  atualizarPainel();
+  while (botPausado && !abortRequested) await sleep(300);
+  if (!abortRequested) definirStatusDoPainel("Rodando...");
+  atualizarPainel();
+}
+
+/** Avisa o popup (se estiver aberto) do andamento — usado a cada item. */
+function avisarProgresso(dados) {
+  try {
+    chrome.runtime.sendMessage({ action: "progresso", ...dados }, () => void chrome.runtime.lastError);
+  } catch (_) {
+    // popup fechado: sem problema
+  }
+}
+
 // ─── Notificações na página ───────────────────────────────────────────────────
 
 function showNotification(message, type = "info") {
+  registrarNoPainel(message);
   removeNotification();
 
   const colors = {

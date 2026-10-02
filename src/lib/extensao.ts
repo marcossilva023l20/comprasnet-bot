@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.5";
+export const VERSAO_EXTENSAO = "1.6.0";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,16 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.6.0",
+    itens: [
+      "Paginação: lê e preenche os itens de TODAS as páginas (10 por página), navegando sozinho",
+      "Painel flutuante na própria página, com Pausar/Continuar e Parar — não fecha quando você clica fora",
+      "O popup ganhou Pausar/Parar, \"📌 Painel na página\" e \"🗗 Janela flutuante\" (não fecha ao clicar fora)",
+      "Quando o site recusa (ex.: \"O campo Valor unitário é obrigatório\"), o bot não marca como salvo e diz o motivo",
+      "Reforço do preenchimento para formulários do portal (Angular): o site registra o valor e o campo para de acusar obrigatório",
+    ],
+  },
   {
     versao: "1.5.5",
     itens: [

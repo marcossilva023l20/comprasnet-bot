@@ -26,6 +26,22 @@ document.addEventListener("DOMContentLoaded", async () => {
  * Manifest V3 bloqueia handlers inline (onclick="..."): a CSP da extensao
  * so permite script-src 'self'. Entao todos os eventos sao ligados aqui.
  */
+/**
+ * O content script avisa cada item; o popup (ou a janela flutuante) mostra.
+ * Funciona mesmo com a janela do popup fechada — o painel na página continua.
+ */
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.action !== "progresso") return;
+  if (msg.status === "preenchendo") {
+    setProgress((msg.indice || 1) - 1, msg.total || 1);
+    addLog("info", `🤖 Item ${msg.item}: preenchendo (${msg.indice}/${msg.total})...`);
+    const botao = document.getElementById("pause-btn");
+    if (botao && botao.textContent.includes("Pausar")) botao.textContent = "⏸ Pausar";
+  } else if (msg.status === "fim") {
+    addLog("info", `🏁 Fim: ${msg.filled}/${msg.total} preenchidos · ${msg.confirmados} confirmados.`);
+  }
+});
+
 function bindEvents() {
   document.querySelectorAll('[data-action="tab"]').forEach((el) => {
     el.addEventListener("click", () => showTab(el.dataset.tab));
@@ -41,6 +57,9 @@ function bindEvents() {
   on("btn-clear-sel", "click", clearSel);
   on("run-btn", "click", runBot);
   on("stop-btn", "click", stopBot);
+  on("pause-btn", "click", alternarPausa);
+  on("pin-btn", "click", fixarPainelNaPagina);
+  on("float-btn", "click", abrirJanelaFlutuante);
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -62,12 +81,27 @@ function bindEvents() {
 }
 
 async function getCurrentTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  currentTab = tab;
+  // Na janela flutuante não existe aba ativa do ComprasNet: usa a que o popup
+  // original guardou antes de abrir a janela.
+  const emJanela = new URLSearchParams(location.search).has("janela");
+  if (emJanela) {
+    try {
+      const salvo = await chrome.storage.session.get("janelaTabId");
+      const id = salvo?.janelaTabId;
+      if (id) currentTab = await chrome.tabs.get(id).catch(() => null);
+    } catch (_) {
+      currentTab = null;
+    }
+  }
 
-  if (tab?.url) {
+  if (!currentTab) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    currentTab = tab;
+  }
+
+  if (currentTab?.url) {
     const el = document.getElementById("page-url");
-    if (el) el.textContent = tab.url;
+    if (el) el.textContent = currentTab.url;
   }
 }
 
@@ -625,7 +659,9 @@ async function runBot() {
   running = true;
 
   document.getElementById("run-btn").style.display = "none";
-  document.getElementById("stop-btn").style.display = "flex";
+  document.getElementById("controles-bot").style.display = "flex";
+  const pauseBtn = document.getElementById("pause-btn");
+  if (pauseBtn) pauseBtn.textContent = "⏸ Pausar";
   document.getElementById("progress-wrap").style.display = "block";
   document.getElementById("log-area").style.display = "block";
 
@@ -664,7 +700,12 @@ async function runBot() {
 
       // Relatório do Salvar, item a item (é o que diz se o site gravou).
       for (const registro of result.salvamentos || []) {
-        if (registro.clicado && registro.confirmado) {
+        if (registro.recusado) {
+          addLog(
+            "error",
+            `💾 Item ${registro.item}: o site RECUSOU o salvamento — ${registro.motivo}. Não marquei como enviado; ajuste o item e rode de novo.`,
+          );
+        } else if (registro.clicado && registro.confirmado) {
           const via = registro.modal?.clicado
             ? `confirmei na janela do site ("${registro.modal.botao}")`
             : registro.mensagemSucesso
@@ -701,6 +742,14 @@ async function runBot() {
         }
       }
 
+      if (result.camposProblematicos?.length) {
+        for (const campo of result.camposProblematicos) {
+          addLog(
+            "warn",
+            `📝 Campo "${campo.campo}" ficou com "${campo.valor}" e o site não registrou${campo.invalido ? " (marcado como inválido)" : ""}. O site pode exigir outro formato.`,
+          );
+        }
+      }
       if (result.errors?.length) result.errors.forEach((error) => addLog("error", error));
       if (result.warnings?.length) result.warnings.forEach((warning) => addLog("warn", warning));
       setProgress(result.filled, result.total);
@@ -716,7 +765,52 @@ async function runBot() {
   } finally {
     running = false;
     document.getElementById("run-btn").style.display = "flex";
-    document.getElementById("stop-btn").style.display = "none";
+    document.getElementById("controles-bot").style.display = "none";
+  }
+}
+
+/** Alterna pausa/retomada do bot que está rodando na página. */
+async function alternarPausa() {
+  if (!currentTab?.id) return;
+  const botao = document.getElementById("pause-btn");
+  try {
+    const estado = await chrome.tabs.sendMessage(currentTab.id, { action: "status" }).catch(() => ({}));
+    const pausar = !estado?.pausado;
+    await chrome.tabs.sendMessage(currentTab.id, { action: pausar ? "pause" : "resume" });
+    botao.textContent = pausar ? "▶ Continuar" : "⏸ Pausar";
+    addLog(pausar ? "warn" : "info", pausar ? "⏸ Bot pausado." : "▶ Bot retomado.");
+  } catch (e) {
+    addLog("error", "Não consegui falar com a página: " + e.message);
+  }
+}
+
+/** Mostra o painel flutuante na página (com Pausar/Parar e o andamento). */
+async function fixarPainelNaPagina() {
+  if (!currentTab?.id) {
+    addLog("warn", "Abra a página do ComprasNet primeiro.");
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar" });
+    addLog("info", "📌 Painel fixado na página — ele continua aberto mesmo se você fechar este popup.");
+  } catch (_) {
+    addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
+  }
+}
+
+/** Abre o popup numa janela separada, que não fecha ao clicar fora. */
+async function abrirJanelaFlutuante() {
+  try {
+    if (currentTab?.id) await chrome.storage.session.set({ janelaTabId: currentTab.id });
+    await chrome.windows.create({
+      url: chrome.runtime.getURL("popup.html?janela=1"),
+      type: "popup",
+      width: 440,
+      height: 700,
+    });
+    window.close();
+  } catch (e) {
+    addLog("error", "Não consegui abrir a janela flutuante: " + e.message);
   }
 }
 

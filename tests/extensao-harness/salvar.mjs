@@ -13,6 +13,8 @@
  * 11) Site pede confirmação em janela ("Salvar" → "Confirmar") → confirma e salva
  * 12) Máscara de 4 casas do portal ("44,0000") → é esse o valor que salva
  * 13) Máscara de 2 casas: o bot ajusta o formato para o valor ficar certo
+ * 14) Formulário tipo Angular (ng-pristine): o reforço faz o site registrar o valor
+ * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -490,6 +492,128 @@ export async function rodarSalvar() {
     checar(eventos.salvos[0]?.endsWith("44,00"), `o site salvou com 44,00 (${JSON.stringify(eventos.salvos)})`);
     checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+  }
+
+  console.log("\n── 14) Formulário Angular: reforço faz o site registrar o valor ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label>
+              <input id="vu1" class="entrada ng-pristine ng-untouched ng-invalid" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvos: [], registros: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+
+        const campo = w.document.getElementById("vu1");
+        const valido = () => /^\d{1,3}(\.\d{3})*,\d{4}$/.test(campo.value);
+
+        // "Angular": registra o valor lido no momento do evento. Se a máscara
+        // ainda não formatou (primeiro input), o valor chega cru e o campo
+        // continua inválido — é exatamente o que trava o site de verdade.
+        campo.addEventListener("input", () => {
+          eventos.registros += 1;
+          if (valido()) campo.className = "entrada ng-dirty ng-touched ng-valid";
+        });
+
+        // Máscara: formata depois (registrada por último, roda por último).
+        campo.addEventListener("input", () => {
+          const digitos = campo.value.replace(/\D/g, "");
+          if (!digitos) return;
+          const numero = Number(digitos) / 10000;
+          campo.value = numero.toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+        });
+
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          if (!campo.className.includes("ng-valid")) {
+            const erro = w.document.createElement("div");
+            erro.setAttribute("role", "alert");
+            erro.className = "alert alert-danger";
+            erro.textContent = 'O campo "Valor unitário" é obrigatório.';
+            w.document.querySelector(".item").appendChild(erro);
+            return;
+          }
+          eventos.salvos.push("salvar1");
+          const ok = w.document.createElement("div");
+          ok.setAttribute("role", "alert");
+          ok.className = "alert alert-success";
+          ok.textContent = "Proposta cadastrada com sucesso";
+          w.document.querySelector(".item").appendChild(ok);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    checar(window.document.getElementById("vu1").className.includes("ng-valid"), "o formulário do site registrou o valor (ng-valid)");
+    checar(eventos.salvos.length === 1, `o site salvou (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true && !r.salvamentos[0]?.recusado, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+    checar(!r.camposProblematicos?.length, "nenhum campo problemático");
+  }
+
+  console.log("\n── 15) Site recusa: campo obrigatório (não pode contar como salvo) ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const eventos = { cliques: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.cliques += 1;
+          const erro = w.document.createElement("div");
+          erro.setAttribute("role", "alert");
+          erro.className = "alert alert-danger";
+          erro.textContent = 'O campo "Valor unitário" é obrigatório.';
+          w.document.querySelector(".item").appendChild(erro);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    const s0 = r.salvamentos[0];
+    checar(eventos.cliques === 1, `clicou uma vez só (o site já respondeu) — ${eventos.cliques}`);
+    checar(s0?.recusado === true, `relatório: recusado ("${s0?.motivo}")`);
+    checar(s0?.confirmado === false, "não confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([]), "NÃO entra em savedItems");
+    checar(r.warnings.some((w) => /RECUSOU/.test(w)), "avisa que o site recusou");
   }
 
   return falhas;

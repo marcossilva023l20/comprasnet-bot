@@ -180,6 +180,8 @@
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .page-actions { display: flex; gap: 8px; }
   .page-actions .btn { flex: 1; padding-left: 8px; padding-right: 8px; }
+  #controles-bot { display: flex; }
+  #pin-btn, #float-btn { flex: 1; padding: 8px 6px; font-size: 11px; }
   #page-read-status { margin-bottom: 0; }
 
   /* Stat box */
@@ -376,9 +378,17 @@
         <button class="btn btn-success" id="run-btn">
           🚀 Executar Bot (<span id="sel-count">0</span> itens)
         </button>
-        <button class="btn btn-danger" id="stop-btn" style="display:none; margin-top:8px;">
-          ⏹ Parar
-        </button>
+        <div id="controles-bot" style="display:none; gap:8px; margin-top:8px;">
+          <button class="btn btn-outline" id="pause-btn" style="flex:1;">⏸ Pausar</button>
+          <button class="btn btn-danger" id="stop-btn" style="flex:1;">⏹ Parar</button>
+        </div>
+        <div class="mt-1" style="display:flex; gap:8px;">
+          <button class="btn btn-outline btn-sm" id="pin-btn" type="button">📌 Painel na página</button>
+          <button class="btn btn-outline btn-sm" id="float-btn" type="button">🗗 Janela flutuante</button>
+        </div>
+        <p class="text-xs muted" style="margin:6px 0 0; color:#64748b; font-size:11px;">
+          O painel fica na própria página do ComprasNet e não fecha quando você clica fora do popup.
+        </p>
       </div>
     </div>
 
