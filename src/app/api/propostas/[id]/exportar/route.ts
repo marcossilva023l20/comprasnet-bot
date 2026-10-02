@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { propostas, itens } from "@/db/schema";
 import { eq, asc } from "drizzle-orm";
-import { COLUNAS_EXPORTACAO, LARGURAS_EXPORTACAO, montarLinhasExportacao } from "@/lib/planilha-export";
+import {
+  COLUNAS_EXPORTACAO,
+  LARGURAS_EXPORTACAO,
+  aplicarFormatoValores,
+  montarLinhasExportacao,
+} from "@/lib/planilha-export";
 import * as XLSX from "xlsx";
 
 export async function GET(
@@ -20,6 +25,7 @@ export async function GET(
 
     const ws = XLSX.utils.json_to_sheet(data, { header: [...COLUNAS_EXPORTACAO] });
     ws["!cols"] = LARGURAS_EXPORTACAO.map((w) => ({ wch: w }));
+    aplicarFormatoValores(ws, data.length); // valores com 4 casas: 44,0000
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Itens");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });

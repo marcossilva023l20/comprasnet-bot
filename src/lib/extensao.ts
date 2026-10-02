@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.5.4";
+export const VERSAO_EXTENSAO = "1.5.5";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.5",
+    itens: [
+      "Valor unitário no formato do portal: 4 casas decimais (44,0000) — era 44,00 e a máscara do site virava 0,4400",
+      "O bot confere o que ficou no campo e ajusta o formato sozinho se a máscara usar outras casas (ex.: 44,00)",
+      "Planilha e sistema também mostram os valores com 4 casas (44,0000)",
+    ],
+  },
   {
     versao: "1.5.4",
     itens: [

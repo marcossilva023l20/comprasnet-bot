@@ -597,6 +597,37 @@ async function tryExpandItem(itemNumber) {
   return true;
 }
 
+/** Número a partir de um valor digitado/exibido ("R$ 1.234,5000" → 1234.5). */
+function valorNumerico(texto) {
+  if (texto === null || texto === undefined) return null;
+  const limpo = String(texto).replace(/[^\d.,-]/g, "").trim();
+  if (!limpo || !/\d/.test(limpo)) return null;
+
+  const ultimo = Math.max(limpo.lastIndexOf(","), limpo.lastIndexOf("."));
+  if (ultimo < 0) {
+    const inteiro = Number(limpo);
+    return Number.isFinite(inteiro) ? inteiro : null;
+  }
+
+  const parteInteira = limpo.slice(0, ultimo).replace(/[.,]/g, "");
+  const parteFracionaria = limpo.slice(ultimo + 1).replace(/[.,]/g, "");
+  const numero = Number(`${parteInteira || "0"}.${parteFracionaria || "0"}`);
+  return Number.isFinite(numero) ? numero : null;
+}
+
+/** Os dois valores são o mesmo número? (tolerância para arredondamento) */
+function mesmoNumero(a, b) {
+  if (a === null || b === null) return false;
+  return Math.abs(a - b) < 1e-6;
+}
+
+/** Valor com N casas no formato brasileiro ("44" → "44,0000"). */
+function comCasas(valor, casas) {
+  const numero = typeof valor === "number" ? valor : valorNumerico(valor);
+  if (numero === null) return String(valor ?? "");
+  return numero.toFixed(casas).replace(".", ",");
+}
+
 /** O campo continua vazio depois de tentarmos escrever? (máscara recusou) */
 function campoVazio(el) {
   return !String(el?.value ?? el?.textContent ?? "").trim();
@@ -713,6 +744,40 @@ async function digitarDeVerdade(input, value, view) {
   return !campoVazio(input);
 }
 
+/** Uma tentativa completa de escrever o valor no campo. */
+async function preencherCampo(input, value, view) {
+  // 1º caminho: digitar de verdade (máscaras de moeda só entendem teclado).
+  await digitarDeVerdade(input, value, view);
+
+  // 2º: valor direto pelo setter nativo + a sequência de eventos do componente.
+  if (value && campoVazio(input)) {
+    disparar(input, "keydown", view, { key: "Unidentified" });
+    disparar(input, "beforeinput", view, { data: value, inputType: "insertText" });
+    aplicarValor(input, value, view);
+    disparar(input, "input", view, { data: value, inputType: "insertText" });
+    disparar(input, "keyup", view, { key: "Unidentified" });
+    disparar(input, "change", view, { data: value });
+  }
+
+  // 3º: insertText de uma vez (alguns componentes com máscara só aceitam assim).
+  if (value && campoVazio(input)) {
+    if (tentarInsertText(input, value)) {
+      disparar(input, "input", view, { data: value, inputType: "insertText" });
+      disparar(input, "change", view, { data: value });
+    }
+  }
+
+  // blur: formulários que só validam/commitam o valor ao sair do campo.
+  try {
+    disparar(input, "blur", view, {});
+    disparar(input, "focusout", view, {});
+    input.blur();
+  } catch (_) {
+    // blur é opcional
+  }
+  await sleep(120);
+}
+
 async function setInputValue(input, rawValue) {
   if (!input || !input.isConnected || !isFillable(input)) return false;
 
@@ -741,40 +806,30 @@ async function setInputValue(input, rawValue) {
     return true;
   }
 
-  // 1º caminho: digitar de verdade (máscaras de moeda só entendem teclado).
-  await digitarDeVerdade(input, value, view);
+  // O portal usa valores com 4 casas ("44,0000"). Se a máscara do campo espera
+  // outro número de casas, digitar o valor errado faz o site gravar outra coisa
+  // (44,00 vira 0,4400, por exemplo). Por isso conferimos o que ficou no campo e,
+  // se o número não bate, tentamos de novo no formato que a máscara aceita.
+  const alvo = valorNumerico(value);
+  const formatos =
+    alvo === null
+      ? [value]
+      : [value, comCasas(alvo, 4), comCasas(alvo, 2), String(value).replace(/[.,]/g, ""), String(alvo)];
+  const tentativas = [...new Set(formatos.filter((t) => t !== ""))];
+  if (tentativas.length === 0) tentativas.push(value);
 
-  // 2º: valor direto pelo setter nativo + a sequência de eventos do componente.
-  if (espera && campoVazio(input)) {
-    disparar(input, "keydown", view, { key: "Unidentified" });
-    disparar(input, "beforeinput", view, { data: espera, inputType: "insertText" });
-    aplicarValor(input, value, view);
-    disparar(input, "input", view, { data: espera, inputType: "insertText" });
-    disparar(input, "keyup", view, { key: "Unidentified" });
-    disparar(input, "change", view, { data: espera });
-  }
+  for (const tentativa of tentativas) {
+    await preencherCampo(input, tentativa, view);
 
-  // 3º: insertText de uma vez (alguns componentes com máscara só aceitam assim).
-  if (espera && campoVazio(input)) {
-    if (tentarInsertText(input, value)) {
-      disparar(input, "input", view, { data: espera, inputType: "insertText" });
-      disparar(input, "change", view, { data: espera });
+    if (alvo !== null) {
+      if (mesmoNumero(valorNumerico(input.value), alvo)) return true;
+      continue; // a máscara interpretou diferente: tenta o próximo formato
     }
+
+    if (!espera || !campoVazio(input)) return true;
   }
 
-  // blur: formulários que só validam/commitam o valor ao sair do campo.
-  try {
-    disparar(input, "blur", view, {});
-    disparar(input, "focusout", view, {});
-    input.blur();
-  } catch (_) {
-    // blur é opcional
-  }
-  await sleep(120);
-
-  // Campo que continua vazio = o site não aceitou o valor (máscara/validação).
-  if (espera && campoVazio(input)) return false;
-  return true;
+  return false;
 }
 
 /**

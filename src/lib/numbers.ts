@@ -78,3 +78,19 @@ export function normalizeSpreadsheetHeader(value: unknown): string {
 export function isBlankNumericValue(value: unknown): boolean {
   return value == null || (typeof value === "string" && value.trim() === "");
 }
+
+/**
+ * Formata um valor no padrão brasileiro com as casas do portal ("44,0000").
+ * É o formato dos valores unitários no ComprasNet — usar em qualquer lugar que
+ * devolva o valor pronto para preencher a página.
+ */
+export function formatarValorBR(value: string | number | null | undefined, casas = 4): string {
+  if (value === null || value === undefined || value === "") return "";
+  const numero =
+    typeof value === "number" ? value : Number(parseLocalizedNumber(value) ?? Number.NaN);
+  if (!Number.isFinite(numero)) return "";
+  return numero.toLocaleString("pt-BR", {
+    minimumFractionDigits: casas,
+    maximumFractionDigits: casas,
+  });
+}

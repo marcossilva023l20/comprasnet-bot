@@ -149,7 +149,16 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
     }
   };
 
-  const fmt = (v: string | null) => v ? parseFloat(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—";
+  // O portal usa 4 casas nos valores unitários ("R$ 44,0000"): o sistema acompanha.
+  const fmt = (v: string | null) =>
+    v
+      ? parseFloat(v).toLocaleString("pt-BR", {
+          style: "currency",
+          currency: "BRL",
+          minimumFractionDigits: 4,
+          maximumFractionDigits: 4,
+        })
+      : "—";
 
   const filteredItems = items.filter((i) => {
     const ok = filter === "all" ? true : filter === "filled" ? !!(i.valorUnitario && i.marcaFabricante) : !(i.valorUnitario && i.marcaFabricante);
@@ -490,7 +499,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
               <input
                 id="edit-item-estimated"
                 inputMode="decimal"
-                placeholder="0,00"
+                placeholder="0,0000"
                 value={form.valorEstimado}
                 onChange={(event) => updateField("valorEstimado", event.target.value)}
                 className={inputClass}
@@ -501,7 +510,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
               <input
                 id="edit-item-price"
                 inputMode="decimal"
-                placeholder="0,00"
+                placeholder="0,0000"
                 value={form.valorUnitario}
                 onChange={(event) => updateField("valorUnitario", event.target.value)}
                 className={inputClass}
@@ -589,7 +598,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
           <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500 flex-wrap">
             <span>Qtd: <strong>{parseFloat(item.quantidade)}</strong> {item.unidade}</span>
             {item.valorEstimado && <span>Est: <strong>{fmt(item.valorEstimado)}</strong></span>}
-            {isFilled && <span className="text-green-600 font-semibold">R$ {parseFloat(item.valorUnitario!).toFixed(2)} · {item.marcaFabricante}</span>}
+            {isFilled && <span className="text-green-600 font-semibold">{fmt(item.valorUnitario)} · {item.marcaFabricante}</span>}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -624,14 +633,19 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
                 type="text"
                 value={vals.valorUnitario}
                 onChange={(e) => setVals({ ...vals, valorUnitario: e.target.value })}
-                placeholder="0,00"
+                placeholder="0,0000"
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
               />
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1">Valor total</label>
               <div className="bg-slate-100 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-700">
-                {valorTotal.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                {valorTotal.toLocaleString("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
               </div>
             </div>
           </div>
@@ -772,7 +786,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
                   {item.valorEstimado ? parseFloat(item.valorEstimado).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,00" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
                   <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-blue-500 outline-none bg-slate-50" />

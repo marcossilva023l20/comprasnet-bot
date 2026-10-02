@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { propostas, itens } from "@/db/schema";
 import { eq, asc } from "drizzle-orm";
+import { formatarValorBR } from "@/lib/numbers";
 
 // Returns the items in a format ready for the Chrome Extension to consume
 export async function GET(
@@ -23,7 +24,8 @@ export async function GET(
       .filter((i) => i.valorUnitario && i.marcaFabricante)
       .map((i) => ({
         item: i.numeroItem,
-        valorUnitario: parseFloat(i.valorUnitario!).toFixed(2).replace(".", ","),
+        // 4 casas como no portal: 44,0000 (2 casas a máscara do site lê errado)
+        valorUnitario: formatarValorBR(i.valorUnitario),
         marcaFabricante: i.marcaFabricante!,
         modeloVersao: i.modeloVersao || "",
       }));

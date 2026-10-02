@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "description": "Lê os itens da página do ComprasNet, preenche propostas (item a item, com Salvar) e se atualiza em um clique quando o app é atualizado.",
   "permissions": [
     "activeTab",

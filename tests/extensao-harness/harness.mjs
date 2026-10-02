@@ -72,7 +72,7 @@ export function paginaPortal({ itens = 2, seta = true, salvar = true, mostrarTod
         <div class="campos-publicados">
           <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">${n === 1 ? 184 : 215}</span></div>
           <div class="campo"><span class="rotulo">Unidade fornecimento</span><span class="valor">Unidade</span></div>
-          <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ ${n === 1 ? "44.0000" : "45.9900"}</span></div>
+          <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ ${n === 1 ? "44,0000" : "45,9900"}</span></div>
           <div class="campo"><span class="valor alerta">Proposta não cadastrada</span></div>
         </div>
         <div class="acoes">
@@ -174,7 +174,7 @@ registrar("leitura do portal", async () => {
   conferir(!JSON.stringify(r.itens).toLowerCase().includes("favorito"), "nenhum item trouxe “favorito”");
   conferir(i1.quantidade === "184" && i2.quantidade === "215", `quantidades: ${i1.quantidade} / ${i2.quantidade}`);
   conferir(i1.unidade === "Unidade", `unidade: ${i1.unidade}`);
-  conferir(i1.valorEstimado === "R$ 44.0000", `valor estimado: ${i1.valorEstimado}`);
+  conferir(i1.valorEstimado === "R$ 44,0000", `valor estimado: ${i1.valorEstimado}`);
   conferir(/intra auricular/.test(i1.descricaoDetalhada), "descrição detalhada do item 1");
   conferir(window.document.querySelectorAll(".detalhes[style*='block']").length === 2, "painéis abertos");
 });

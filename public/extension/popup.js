@@ -552,7 +552,7 @@ function renderItems() {
     const val = document.createElement("div");
     if (filled) {
       val.className = "item-val";
-      val.textContent = `R$ ${parseFloat(item.valorUnitario).toFixed(2)}`;
+      val.textContent = `R$ ${formatValor(item.valorUnitario)}`;
     } else {
       val.style.cssText = "font-size:10px;color:#dc2626;";
       val.textContent = "sem valor";
@@ -757,9 +757,12 @@ async function marcarEnviados(propostaId, numeros) {
   if (ok > 0) addLog("info", `${ok} item(ns) marcado(s) como enviado(s) no sistema.`);
 }
 
+/** Valor unitário no formato do portal: 4 casas decimais ("44,0000"). */
 function formatValor(v) {
-  if (!v) return "";
-  return parseFloat(v).toFixed(2).replace(".", ",");
+  if (v === null || v === undefined || v === "") return "";
+  const n = parseFloat(v);
+  if (!Number.isFinite(n)) return String(v);
+  return n.toFixed(4).replace(".", ",");
 }
 
 // ─── Progress & Logs ─────────────────────────────────────────────────────────

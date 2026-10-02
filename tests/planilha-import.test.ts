@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import { lerLinhasDaPlanilha, montarPayloadImportacao } from "../src/lib/planilha-import";
-import { COLUNAS_EXPORTACAO, LARGURAS_EXPORTACAO, montarLinhasExportacao } from "../src/lib/planilha-export";
+import {
+  COLUNAS_EXPORTACAO,
+  FORMATO_QUATRO_CASAS,
+  LARGURAS_EXPORTACAO,
+  aplicarFormatoValores,
+  montarLinhasExportacao,
+} from "../src/lib/planilha-export";
+import { parseLocalizedNumber } from "../src/lib/numbers";
 
 /** Linha no formato entregue por `XLSX.utils.sheet_to_json(sheet, { defval: "" })`. */
 const linhaExportada = (over: Record<string, unknown> = {}) => ({
@@ -188,6 +195,7 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
   assert.equal(LARGURAS_EXPORTACAO.length, COLUNAS_EXPORTACAO.length);
   const ws = XLSX.utils.json_to_sheet(linhas, { header: [...COLUNAS_EXPORTACAO] });
   ws["!cols"] = LARGURAS_EXPORTACAO.map((wch) => ({ wch }));
+  aplicarFormatoValores(ws, linhas.length);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Itens");
   const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
@@ -239,4 +247,43 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
     marcaFabricante: true,
     modeloVersao: true,
   });
+});
+
+test("exportação: valores unitário e estimado saem com 4 casas (44,0000)", () => {
+  const itens = [
+    {
+      numeroItem: 1,
+      descricao: "FONE OUVIDO",
+      descricaoDetalhada: null,
+      quantidade: "184.0000",
+      unidade: "Unidade",
+      valorEstimado: "44.0000",
+      valorUnitario: "44.0000",
+      marcaFabricante: "ACME",
+      modeloVersao: "X1",
+      enviado: false,
+    },
+  ];
+
+  const linhas = montarLinhasExportacao(itens);
+  const ws = XLSX.utils.json_to_sheet(linhas, { header: [...COLUNAS_EXPORTACAO] });
+  aplicarFormatoValores(ws, linhas.length);
+
+  const coluna = (nome: string) => String.fromCharCode(65 + COLUNAS_EXPORTACAO.indexOf(nome as never));
+  const estimado = ws[`${coluna("Valor Estimado (R$)")}2`];
+  const unitario = ws[`${coluna("Valor Unitário (R$)")}2`];
+
+  assert.equal(unitario.v, 44);
+  assert.equal(unitario.z, FORMATO_QUATRO_CASAS);
+  assert.equal(estimado.z, FORMATO_QUATRO_CASAS);
+
+  // formatado, o Excel mostra exatamente "44,0000" (pt-BR)
+  const exibido = Number(unitario.v).toLocaleString("pt-BR", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  });
+  assert.equal(exibido, "44,0000");
+
+  // e o texto continua sendo lido sem perder valor na reimportação
+  assert.equal(parseLocalizedNumber(exibido), "44.0000");
 });

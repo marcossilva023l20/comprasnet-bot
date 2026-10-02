@@ -11,6 +11,8 @@
  *  9) Primeiro clique não pega (formulário ainda atualizando) → tenta de novo e salva
  * 10) Máscara de moeda que só aceita digitação tecla a tecla → preenche e salva
  * 11) Site pede confirmação em janela ("Salvar" → "Confirmar") → confirma e salva
+ * 12) Máscara de 4 casas do portal ("44,0000") → é esse o valor que salva
+ * 13) Máscara de 2 casas: o bot ajusta o formato para o valor ficar certo
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -100,6 +102,71 @@ function ambiente(html, { mascara = false, habilitarDepois = false } = {}) {
     },
   });
   return { window, cliques, eventos, enviar };
+}
+
+/** Página com a máscara de valor do portal: N casas decimais (ex.: 4 → 44,0000). */
+function paginaComMascara(casas) {
+  return `<!DOCTYPE html><html><body>
+    <h2>Itens</h2>
+    <div id="lista">
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+        <div class="detalhes">
+          <div class="campos">
+            <label>Valor unitário (R$)</label><input id="vu1" class="entrada" data-casas="${casas}" />
+            <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+            <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+          </div>
+          <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+        </div>
+      </section>
+    </div>
+  </body></html>`;
+}
+
+/** Monta o ambiente com a máscara pedida e registra o que o site salvar. */
+function ambienteComMascara(casas, valorEnviado) {
+  const eventos = { salvos: [] };
+  const { window, enviar } = montarPagina(paginaComMascara(casas), {
+    preparar: (w) => {
+      w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+        b.closest(".item").querySelector(".detalhes").style.display = "block";
+      }));
+
+      const formato = (digitos) =>
+        (Number(digitos || "0") / 10 ** casas).toLocaleString("pt-BR", {
+          minimumFractionDigits: casas,
+          maximumFractionDigits: casas,
+        });
+
+      w.document.querySelectorAll("input[data-casas]").forEach((input) => {
+        input.addEventListener("input", () => {
+          input.value = formato(input.value.replace(/\D/g, ""));
+        });
+      });
+
+      w.document.getElementById("salvar1").addEventListener("click", () => {
+        const valor = w.document.getElementById("vu1").value;
+        eventos.salvos.push(`salvar1:${valor}`);
+        const aviso = w.document.createElement("div");
+        aviso.setAttribute("role", "alert");
+        aviso.className = "alert alert-success";
+        aviso.textContent = "Item salvo com sucesso";
+        w.document.querySelector(".item").appendChild(aviso);
+      });
+    },
+  });
+
+  const enviar1 = () =>
+    enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: valorEnviado, marcaFabricante: "MICHELIN", modeloVersao: "PRIMACY 4" }],
+    });
+
+  return { window, eventos, enviar1 };
 }
 
 const preencher = (numeros) => ({
@@ -402,6 +469,27 @@ export async function rodarSalvar() {
     checar(r.salvamentos[0]?.confirmado === true, `relatório: confirmado (${r.salvamentos[0]?.mensagemSucesso || r.salvamentos[0]?.modal?.botao})`);
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
     checar(r.salvamentos[0]?.valores?.valorUnitario === "1234,56", `relatório traz os valores da página (${JSON.stringify(r.salvamentos[0]?.valores)})`);
+  }
+
+  console.log("\n── 12) Máscara de 4 casas do portal: 44,0000 ──");
+  {
+    const { window, eventos, enviar1 } = ambienteComMascara(4, "44,0000");
+    const r = await enviar1();
+    checar(window.document.getElementById("vu1").value === "44,0000", `o campo ficou "44,0000" (${window.document.getElementById("vu1").value})`);
+    checar(eventos.salvos[0]?.endsWith("44,0000"), `o site salvou com 44,0000 (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.valores?.valorUnitario === "44,0000", `relatório traz 44,0000 (${JSON.stringify(r.salvamentos[0]?.valores)})`);
+    checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+  }
+
+  console.log("\n── 13) Máscara de 2 casas: ajusta o formato sozinho ──");
+  {
+    const { window, eventos, enviar1 } = ambienteComMascara(2, "44,0000");
+    const r = await enviar1();
+    checar(window.document.getElementById("vu1").value === "44,00", `o campo ficou "44,00" (${window.document.getElementById("vu1").value})`);
+    checar(eventos.salvos[0]?.endsWith("44,00"), `o site salvou com 44,00 (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
   }
 
   return falhas;

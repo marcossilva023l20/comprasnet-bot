@@ -39,6 +39,34 @@ export const LARGURAS_EXPORTACAO = [6, 35, 50, 12, 12, 18, 18, 25, 25, 10];
 
 const numero = (valor: string | null) => (valor === null || valor === "" ? "" : parseFloat(valor));
 
+/** Colunas de valores: o portal usa 4 casas decimais ("44,0000"). */
+export const COLUNAS_QUATRO_CASAS = ["Valor Estimado (R$)", "Valor Unitário (R$)"] as const;
+
+/** Formato de célula para o Excel mostrar "44,0000" (e não "44"). */
+export const FORMATO_QUATRO_CASAS = "0.0000";
+
+type CelulaDaPlanilha = { v?: unknown; z?: string };
+
+/**
+ * Aplica o formato de 4 casas às células de valor (linha 1 = cabeçalho),
+ * para que a planilha aberta no Excel mostre 44,0000 como no portal.
+ */
+export function aplicarFormatoValores(
+  ws: Record<string, CelulaDaPlanilha | undefined>,
+  linhas: number,
+): void {
+  for (const coluna of COLUNAS_QUATRO_CASAS) {
+    const indice = COLUNAS_EXPORTACAO.indexOf(coluna);
+    if (indice < 0 || indice > 25) continue;
+    const letra = String.fromCharCode(65 + indice);
+
+    for (let linha = 0; linha < linhas; linha += 1) {
+      const celula = ws[`${letra}${linha + 2}`];
+      if (celula && typeof celula.v === "number") celula.z = FORMATO_QUATRO_CASAS;
+    }
+  }
+}
+
 export function montarLinhasExportacao(itens: ItemParaExportar[]): Record<string, unknown>[] {
   return itens.map((item) => ({
     Item: item.numeroItem,
