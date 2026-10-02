@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.11";
+export const VERSAO_EXTENSAO = "1.7.12";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.12",
+    itens: [
+      "Evita que o mesmo dígito seja consumido duas vezes: espera a resposta assíncrona de keydown antes de emitir keypress e não manda os dois eventos quando a máscara já aceitou a tecla",
+      "Entradas com duas casas, como 61,41, mantêm o mesmo número e são normalizadas para quatro casas no portal (61,4100), sem duplicar os zeros iniciais de 0,0000",
+      "Mantém marca/modelo e só salva se o preço exibido continuar exatamente igual ao solicitado",
+    ],
+  },
   {
     versao: "1.7.11",
     itens: [

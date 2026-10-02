@@ -957,15 +957,16 @@ async function limparCampoComTeclas(input, view) {
  */
 async function digitarTextoDoValor(input, texto, alvo, view) {
   let textoDigitado = texto;
-  let tipoMascara = null; // "keydown" ou "input", detectado na primeira tecla
+  let tipoMascara = null; // "keydown", "keypress" ou "input", detectado na primeira tecla
   const campoFormatadoInicial = casasDoTexto(input.value) !== null;
   let digitosDigitados = ""; // prefixo numérico sem a formatação visual do campo
   let reagiuKeydown = false;
+  let reagiuTecla = false;
   let escritas = 0;
 
   for (let i = 0; i < textoDigitado.length; i += 1) {
     if (abortRequested) {
-      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas, tipoMascara };
+      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas, tipoMascara, reagiuTecla };
     }
     await aguardarSePausado();
 
@@ -988,17 +989,40 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
       keyCode: ch.charCodeAt(0),
       which: ch.charCodeAt(0),
     };
-    disparar(input, "keydown", view, tecla);
-    disparar(input, "keypress", view, tecla);
+    let mudou = false;
+    let origemDaReacao = null;
+    let enviouTecla = false;
 
-    const janela = tipoMascara ? ESPERA_TECLA_MASCARA : i === 0 ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA;
-    let mudou = await esperarCampoMudar(input, valorAntes, janela);
-    if (!mudou && i === 0) mudou = await esperarCampoMudar(input, valorAntes, ESPERA_TECLA_MASCARA);
+    // Primeiro oferece só keydown. Algumas máscaras consomem a tecla nos dois
+    // eventos; dispará-los juntos duplica cada dígito. Só sondamos keypress se
+    // keydown não mudou o campo e a máscara ainda não foi identificada.
+    if (tipoMascara === "keypress") {
+      disparar(input, "keypress", view, tecla);
+      enviouTecla = true;
+      mudou = await esperarCampoMudar(input, valorAntes, ESPERA_REACAO_MASCARA);
+      if (mudou) origemDaReacao = "keypress";
+    } else if (tipoMascara !== "input") {
+      const eventoKeydown = disparar(input, "keydown", view, tecla);
+      enviouTecla = true;
+      const janela = tipoMascara === "keydown" || i === 0
+        ? ESPERA_REACAO_MASCARA
+        : ESPERA_TECLA_MASCARA;
+      mudou = await esperarCampoMudar(input, valorAntes, janela);
+      if (mudou) {
+        origemDaReacao = "keydown";
+      } else if (tipoMascara === null && !eventoKeydown?.defaultPrevented) {
+        const antesKeypress = String(input.value ?? "");
+        disparar(input, "keypress", view, tecla);
+        mudou = await esperarCampoMudar(input, antesKeypress, janela);
+        if (mudou) origemDaReacao = "keypress";
+      }
+    }
 
     if (mudou && /\d/.test(ch)) {
-      reagiuKeydown = true;
+      reagiuTecla = true;
+      reagiuKeydown = origemDaReacao === "keydown";
       digitosDigitados += ch;
-      if (!tipoMascara) tipoMascara = "keydown";
+      if (!tipoMascara) tipoMascara = origemDaReacao;
     } else if (!mudou) {
       // Um zero no valor vazio/zero formatado já está representado pela
       // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
@@ -1036,7 +1060,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
       }
     }
 
-    disparar(input, "keyup", view, tecla);
+    if (enviouTecla) disparar(input, "keyup", view, tecla);
 
     // Uma máscara de duas casas pode ser descoberta pelo primeiro resultado
     // (0,01). Ajustamos a sequência antes de continuar, sem limpar/recomeçar.
@@ -1084,6 +1108,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     escritas,
     tipoMascara,
     reagiuKeydown,
+    reagiuTecla,
   };
 }
 
@@ -1143,13 +1168,19 @@ function disparar(el, tipo, view, dados = {}) {
     : ehTecla && typeof view.KeyboardEvent === "function"
       ? view.KeyboardEvent
       : view.Event;
+  const opcoes = { bubbles: true, cancelable: ehInput || ehTecla, composed: true, ...dados };
   try {
-    el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, composed: true, ...dados }));
+    const evento = new Evento(tipo, opcoes);
+    el.dispatchEvent(evento);
+    return evento;
   } catch (_) {
     try {
-      el.dispatchEvent(new view.Event(tipo, { bubbles: true }));
+      const evento = new view.Event(tipo, opcoes);
+      el.dispatchEvent(evento);
+      return evento;
     } catch (_) {
       // sem eventos: o valor direto continua valendo
+      return null;
     }
   }
 }
@@ -1603,10 +1634,10 @@ async function setInputValue(input, rawValue, esperaNumero) {
       return false;
     }
 
-    // Máscaras que já reagiram ao keydown registram o valor durante a digitação;
+    // Máscaras que já reagiram a uma tecla registram o valor durante a digitação;
     // um Backspace extra pode deslocar a escala. Nos campos que só reagiram a
     // input, a cutucada continua disponível e só seguimos se preservar o preço.
-    const precisaCutucar = !resultado.reagiuKeydown;
+    const precisaCutucar = !resultado.reagiuTecla;
     const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
     const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
     if (!registrado || !valorPreservado) {

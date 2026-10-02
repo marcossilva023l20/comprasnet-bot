@@ -28,6 +28,7 @@
  * 24) Se a máscara corromper o preço, o bot não salva e continua os outros campos
  * 25) A máscara pode exibir 6,0000 primeiro; continua com o prefixo cru e salva 67,4100
  * 26) O botão Salvar do portal (br-button) é encontrado pelo nome acessível
+ * 27) Entrada 61,41 com zeros iniciais e máscara assíncrona não duplica keydown/keypress
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1618,6 +1619,81 @@ export async function rodarSalvar() {
     checar(eventos.cliques === 1, `clicou no botão pelo nome acessível “Salvar” (${eventos.cliques})`);
     checar(r.salvamentos[0]?.botao === "Salvar" && r.salvamentos[0]?.confirmado, "relatório reconheceu e confirmou o botão sem texto interno");
     checar(window.document.querySelector("#vu1").value === "67,4100", "manteve o valor unitário exato ao localizar o botão");
+  }
+
+  console.log("\n── 27) Valor 61,41 com zeros iniciais e máscara que ouve keydown/keyPress ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 61,41</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { keydown: 0, keypress: 0, salvos: [] };
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const atualizarComTecla = (w, campo, event) => {
+      if (!/^\d$/.test(event.key || "")) return;
+      eventos[event.type] += 1;
+      const digitos = `${campo.value.replace(/\D/g, "")}${event.key}`.slice(-12);
+      campo.value = formatarMoeda(digitos);
+      campo.className = "ng-dirty ng-touched ng-valid";
+      const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+      w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        // O componente do portal pode observar os dois eventos; keydown reage
+        // de forma assíncrona. Se o bot também disparar keypress sem esperar,
+        // cada dígito é consumido duas vezes.
+        campo.addEventListener("keydown", (event) => {
+          event.preventDefault();
+          setTimeout(() => atualizarComTecla(w, campo, event), 15);
+        });
+        campo.addEventListener("keypress", (event) => atualizarComTecla(w, campo, event));
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "61,41", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(campo.value === "61,4100", `normalizou 61,41 sem alterar o valor e preservou 4 casas (${campo.value})`);
+    checar(eventos.keydown === 6 && eventos.keypress === 0, `cada dígito foi consumido uma vez só pelo keydown (keydown=${eventos.keydown}, keypress=${eventos.keypress})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 921,1500", `total correto para quantidade 15 (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "61,4100", `salvou somente o preço correto (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "o item foi confirmado no relatório");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "continuou preenchendo marca e modelo");
   }
 
   return falhas;
