@@ -7,7 +7,6 @@ let apiUrl = "";
 let allItems = [];
 let selectedIds = new Set();
 let running = false;
-let abortFlag = false;
 let currentTab = null;
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -34,6 +33,7 @@ function bindEvents() {
   const on = (id, evt, fn) => document.getElementById(id)?.addEventListener(evt, fn);
 
   on("btn-check-page", "click", checkPage);
+  on("btn-read-page", "click", () => readPage());
   on("proposta-select", "change", loadItems);
   on("btn-select-all", "click", selectAll);
   on("btn-select-filled", "click", selectFilled);
@@ -66,18 +66,14 @@ function showTab(name) {
   });
 }
 
-// ─── Page Status ──────────────────────────────────────────────────────────────
+// ─── Page Status / Leitura ────────────────────────────────────────────────────
 async function checkPage() {
-  const badge = document.getElementById("page-status-badge");
-  const text = document.getElementById("page-status-text");
-
   if (!currentTab?.id) {
     setStatus("idle", "Sem aba ativa");
     return;
   }
 
-  const url = currentTab.url || "";
-  if (!url.includes("comprasnet.gov.br") && !url.includes("cnetmobile.estaleiro.serpro.gov.br")) {
+  if (!isComprasNetPage(currentTab.url || "")) {
     setStatus("warn", "Abra o ComprasNet");
     return;
   }
@@ -94,9 +90,106 @@ async function checkPage() {
   }
 }
 
+function isComprasNetPage(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "comprasnet.gov.br" ||
+      host === "www.comprasnet.gov.br" ||
+      host.endsWith(".comprasnet.gov.br") ||
+      host === "cnetmobile.estaleiro.serpro.gov.br" ||
+      host === "compras.gov.br" ||
+      host.endsWith(".compras.gov.br") ||
+      (host === "www.gov.br" && url.pathname.startsWith("/compras"))
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+async function readPage({ quiet = false } = {}) {
+  const button = document.getElementById("btn-read-page");
+  if (!currentTab?.id) {
+    setReadStatus("warning", "Não encontrei uma aba ativa para ler.");
+    return null;
+  }
+  if (!isComprasNetPage(currentTab.url || "")) {
+    setReadStatus("warning", "Abra primeiro a página de cadastro de propostas do ComprasNet.");
+    return null;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "⏳ Lendo...";
+  }
+  setReadStatus("info", "Analisando os campos visíveis da página...");
+
+  try {
+    const result = await chrome.tabs.sendMessage(currentTab.id, { action: "scan_page" });
+    if (!result?.ok) throw new Error(result?.error || "A página não respondeu à leitura.");
+    showReadResult(result);
+    return result;
+  } catch {
+    const message = "Não consegui ler esta página. Recarregue o ComprasNet e tente novamente.";
+    setReadStatus("warning", message);
+    if (!quiet) addLog("error", message);
+    return null;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "📖 Ler página";
+    }
+  }
+}
+
+function showReadResult(result) {
+  const labels = {
+    valorUnitario: "valor",
+    marcaFabricante: "marca",
+    modeloVersao: "modelo",
+  };
+
+  if (!result.recognizedFields) {
+    setReadStatus(
+      "warning",
+      "Não encontrei campos visíveis de valor, marca ou modelo. Expanda um item no ComprasNet e clique em “Ler página” novamente.",
+    );
+    return;
+  }
+
+  if (!result.itemCount) {
+    const found = (result.unassignedFields || []).map((field) => labels[field] || field).join(", ");
+    setReadStatus(
+      "warning",
+      `Encontrei ${result.recognizedFields} campo(s) (${found}), mas não consegui associá-los a um número de item. Para evitar preencher o item errado, expanda um item e faça a leitura novamente.`,
+    );
+    return;
+  }
+
+  const itemDetails = (result.items || []).slice(0, 3).map((item) => {
+    const names = (item.fields || []).map((field) => labels[field] || field).join("/");
+    return `Item ${item.item}: ${names || "sem campos"}`;
+  });
+  if (result.items?.length > itemDetails.length) itemDetails.push("…");
+
+  const incomplete = (result.items || []).some((item) => !item.complete) || (result.unassignedFields || []).length > 0;
+  const unassignedNote = (result.unassignedFields || []).length ? " Alguns campos não foram associados a um item." : "";
+  const summary = `Página lida: ${result.itemCount} item(ns), ${result.recognizedFields} campo(s) mapeado(s). ${itemDetails.join(" · ")}${unassignedNote}`;
+  setReadStatus(incomplete ? "warning" : "success", summary);
+}
+
+function setReadStatus(type, message) {
+  const element = document.getElementById("page-read-status");
+  if (!element) return;
+  element.className = `alert alert-${type} mt-2`;
+  element.textContent = message;
+}
+
 function setStatus(type, msg) {
   const badge = document.getElementById("page-status-badge");
   const text = document.getElementById("page-status-text");
+  if (!badge || !text) return;
   badge.className = `status-badge status-${type}`;
   text.textContent = msg;
 }
@@ -267,14 +360,12 @@ async function runBot() {
   if (!currentTab?.id) { addLog("error", "Sem aba ativa"); return; }
   if (selectedIds.size === 0) { addLog("error", "Selecione pelo menos um item"); return; }
 
-  // Get selected items data
   const toFill = allItems.filter((i) => selectedIds.has(i.id) && i.valorUnitario && i.marcaFabricante);
   if (toFill.length === 0) {
     addLog("error", "Nenhum item selecionado tem valor unitário e marca preenchidos.");
     return;
   }
 
-  // Verify content script is loaded
   try {
     await chrome.tabs.sendMessage(currentTab.id, { action: "ping" });
   } catch (_) {
@@ -283,15 +374,13 @@ async function runBot() {
   }
 
   running = true;
-  abortFlag = false;
 
-  // UI
   document.getElementById("run-btn").style.display = "none";
   document.getElementById("stop-btn").style.display = "flex";
   document.getElementById("progress-wrap").style.display = "block";
   document.getElementById("log-area").style.display = "block";
 
-  const delay = parseInt(document.getElementById("delay-select").value);
+  const delay = parseInt(document.getElementById("delay-select").value, 10);
   const payload = toFill.map((i) => ({
     item: i.numeroItem,
     valorUnitario: formatValor(i.valorUnitario),
@@ -303,6 +392,13 @@ async function runBot() {
   setProgress(0, payload.length);
 
   try {
+    const pageScan = await readPage({ quiet: true });
+    if (pageScan?.recognizedFields) {
+      addLog("info", `Leitura automática: ${pageScan.recognizedFields} campo(s), ${pageScan.itemCount} item(ns) mapeado(s).`);
+    } else {
+      addLog("warn", "A leitura inicial não encontrou campos; o bot tentará após expandir cada item.");
+    }
+
     const result = await chrome.tabs.sendMessage(currentTab.id, {
       action: "fill_items",
       items: payload,
@@ -311,12 +407,10 @@ async function runBot() {
 
     if (result?.ok) {
       addLog("success", `✅ ${result.filled}/${result.total} itens preenchidos!`);
-      if (result.errors?.length) {
-        result.errors.forEach((e) => addLog("error", e));
-      }
+      if (result.errors?.length) result.errors.forEach((error) => addLog("error", error));
+      if (result.warnings?.length) result.warnings.forEach((warning) => addLog("warn", warning));
       setProgress(result.filled, result.total);
 
-      // Devolve ao sistema quais itens realmente foram enviados no ComprasNet
       const propostaId = document.getElementById("proposta-select").value;
       await marcarEnviados(propostaId, result.filledItems || []);
     } else {
@@ -326,14 +420,12 @@ async function runBot() {
     addLog("error", "Erro: " + e.message);
   } finally {
     running = false;
-    abortFlag = false;
     document.getElementById("run-btn").style.display = "flex";
     document.getElementById("stop-btn").style.display = "none";
   }
 }
 
 function stopBot() {
-  abortFlag = true;
   addLog("warn", "Parando após o item atual...");
   if (currentTab?.id) {
     chrome.tabs.sendMessage(currentTab.id, { action: "stop" }).catch(() => {});

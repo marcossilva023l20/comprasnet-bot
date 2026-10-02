@@ -104,5 +104,6 @@ Baixe o ZIP em `/extension.zip` ou acesse `/extensao` no sistema. Depois, na ext
 1. Crie uma proposta e importe a planilha Excel com os itens
 2. Preencha Valor Unitário, Marca/Fabricante e Modelo/Versão
 3. Instale a extensão Chrome
-4. Acesse o ComprasNet → Cadastrar Propostas
-5. Abra a extensão → selecione a proposta → clique Executar Bot!
+4. Acesse o ComprasNet → Cadastrar Propostas e expanda os itens
+5. Abra a extensão, selecione a proposta e clique **Ler página** para mapear os campos
+6. Confira os campos encontrados e clique **Executar Bot!**
