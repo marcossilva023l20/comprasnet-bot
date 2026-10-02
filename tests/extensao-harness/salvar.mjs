@@ -7,6 +7,7 @@
  *  5) Site não reage ao clique → clicado, mas não confirmado
  *  6) Sem botão Salvar → não clicado, com motivo (e não entra em savedItems)
  *  7) Máscara recusa o valor digitado → campo não preenchido é reportado
+ *  8) Salvar é um submit de formulário → envia UMA vez (sem salvamento duplicado)
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -176,6 +177,53 @@ export async function rodarSalvar() {
     checar(window.document.getElementById("vu1").value === "", "o campo ficou vazio");
     checar(r.filled === 0 && r.errors.some((e) => /valor unitário/i.test(e)), `erro reportado: "${r.errors[0]}"`);
     checar(eventos.salvos.length === 0, "não salvou item incompleto");
+  }
+
+  console.log("\n── 8) Salvar é submit de formulário (não pode enviar 2×) ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <form id="form1">
+              <div class="campos">
+                <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+                <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+                <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+              </div>
+              <div class="rodape"><button id="salvar1" type="submit" class="btn btn-primary">Salvar</button></div>
+            </form>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const contagem = { submits: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.getElementById("form1").addEventListener("submit", (e) => {
+          e.preventDefault();
+          contagem.submits += 1;
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(aviso);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    checar(contagem.submits === 1, `o formulário foi enviado 1 vez (enviado ${contagem.submits}×)`);
+    checar(r.salvamentos[0]?.clicado === true && r.salvamentos[0]?.confirmado === true, "relatório: clicado e confirmado pelo aviso");
+    checar(window.document.querySelectorAll('[role="alert"]').length === 1, "não duplicou o salvamento");
   }
 
   return falhas;

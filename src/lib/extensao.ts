@@ -26,6 +26,7 @@ export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
       "Relatório item a item no popup: salvo, sem confirmação ou não salvo (com o motivo)",
       "Só marca como enviado no sistema o item que foi realmente salvo na página",
       "Preenchimento dispara a sequência completa de eventos (beforeinput/input/change) e detecta valor recusado por máscara",
+      "Ao usar o Salvar de um formulário, envia uma única vez (nunca salva em dobro)",
     ],
   },
   {

@@ -843,17 +843,30 @@ function clicarDeVerdade(el) {
       // segue para o click()
     }
   }
+  // Um clique normal já submete o formulário no navegador; o requestSubmit abaixo
+  // é só rede de segurança (e nunca pode rodar junto, senão salva duas vezes).
+  const form = el.form || el.closest?.("form");
+  let submeteu = false;
+  const marcarSubmit = () => {
+    submeteu = true;
+  };
+  if (form) form.addEventListener("submit", marcarSubmit, true);
+
   try {
     el.click();
   } catch (_) {
+    if (form) form.removeEventListener("submit", marcarSubmit, true);
     return false;
   }
-  const form = el.form || el.closest?.("form");
-  if (form && typeof form.requestSubmit === "function" && (el.type === "submit" || el.tagName === "BUTTON")) {
+
+  if (form) form.removeEventListener("submit", marcarSubmit, true);
+
+  const tipo = (el.tagName === "INPUT" ? el.type : el.getAttribute?.("type") || "submit").toLowerCase();
+  if (form && !submeteu && typeof form.requestSubmit === "function" && (tipo === "submit" || tipo === "image")) {
     try {
       form.requestSubmit(el);
     } catch (_) {
-      // o click() já deve ter disparado o submit
+      // sem problema: o click() já é o caminho normal
     }
   }
   return true;
