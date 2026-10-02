@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.9";
+export const VERSAO_EXTENSAO = "1.7.10";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.10",
+    itens: [
+      "Corrige a máscara que formata o primeiro dígito como 6,0000: o bot continua digitando os demais caracteres e confere o preço completo antes de salvar",
+      "A tecla usada para registrar o valor no portal é enviada com segurança; se ela alterar o preço, o bot não salva um valor incorreto e continua marca/modelo para diagnóstico",
+      "Mantém as quatro casas decimais e confirma o clique em Salvar; se houver confirmação, escolhe Sim, nunca Não",
+    ],
+  },
   {
     versao: "1.7.9",
     itens: [

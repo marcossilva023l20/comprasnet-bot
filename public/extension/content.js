@@ -998,7 +998,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
       // Um zero no valor vazio/zero formatado já está representado pela
       // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
       const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
-      if (!zeroJaRepresentado && tipoMascara !== "keydown") {
+      if (!zeroJaRepresentado) {
         let inseriu = false;
         if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
           try {
@@ -1035,8 +1035,10 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     const esperados = digitosDoTexto(textoDigitado.slice(0, i + 1));
     await esperarDigitos(input, esperados, tipoMascara ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA);
 
-    const atuais = digitosDoTexto(input.value);
-    if (semZerosADireita(atuais).length > semZerosADireita(esperados).length) {
+    const textoAtual = String(input.value ?? "");
+    const atuais = digitosDoTexto(textoAtual);
+    const valorParcialJaFormatado = casasDoTexto(textoAtual) !== null;
+    if (!valorParcialJaFormatado && semZerosADireita(atuais).length > semZerosADireita(esperados).length) {
       return {
         ok: false,
         motivo: `a máscara aplicou dígito a mais ("${String(input.value).slice(0, 24)}")`,
@@ -1433,10 +1435,9 @@ async function garantirRegistroDoCampo(input, view, numerico, alvo, casas, cutuc
   if (numerico) {
     const digitosAlvo = alvo !== null && alvo !== undefined ? String(Math.round(alvo * 10 ** (casas ?? CASAS_PADRAO))) : "";
 
-    // Se a máscara já aceitou as teclas numéricas, não cutuque o campo de novo:
-    // alguns componentes reinterpretam o valor ao receber Backspace. Quando o
-    // portal exige essa tecla para atualizar o total, cutucarCampo só altera o
-    // valor se a própria máscara realmente processar o Backspace.
+    // A cutucada envia apenas um Backspace; não reescreve o preço inteiro.
+    // Alguns componentes alteram o campo com essa tecla: cutucarCampo só permite
+    // prosseguir se o valor original for preservado exatamente.
     if (cutucar && !(await cutucarCampo(input, view))) return false;
 
     const valorAtual = String(input.value ?? "");
@@ -1568,10 +1569,10 @@ async function setInputValue(input, rawValue, esperaNumero) {
       return false;
     }
 
-    // Máscara que já consumiu as teclas numéricas não precisa de outro
-    // Backspace + redigitação, que pode deslocar a escala do preço.
-    const precisaCutucar = resultado.tipoMascara !== "keydown";
-    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
+    // Depois de digitar, envie uma única tecla de registro. Alguns campos só
+    // atualizam o total após Backspace; cutucarCampo reverte qualquer mudança
+    // e abaixo só seguimos se o número continuar exatamente igual ao alvo.
+    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, true);
     const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
     if (!registrado || !valorPreservado) {
       registrarDiagnosticoDeCampo(input, {
