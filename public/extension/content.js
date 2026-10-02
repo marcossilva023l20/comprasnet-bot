@@ -962,7 +962,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
 
   for (let i = 0; i < textoDigitado.length; i += 1) {
     if (abortRequested) {
-      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas };
+      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas, tipoMascara };
     }
     await aguardarSePausado();
 
@@ -1061,6 +1061,7 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
     motivo: ok ? "" : `o campo ficou com "${textoFinal.slice(0, 24) || "(vazio)"}"`,
     textoFinal,
     escritas,
+    tipoMascara,
   };
 }
 
@@ -1246,41 +1247,67 @@ async function digitarDeVerdade(input, value, view) {
 }
 
 /**
- * "Cutuca" o campo com um Backspace de verdade e redigita o último caractere.
+ * Envia um Backspace para o portal contabilizar o valor, sem alterar o campo
+ * quando o site não o processa como uma tecla nativa.
  *
- * O portal (Angular) não contabiliza o valor só com os eventos sintéticos: o
- * número aparece na tela mas o total continua 0,0000 e o site acusa "campo
- * obrigatório". O usuário descobriu que apertar Backspace uma vez resolve — é
- * a tecla real que faz o formulário reler o campo. Fazemos exatamente isso,
- * UMA vez, e conferimos: se a cutucada estragar os dígitos, quem chama reescreve
- * o valor do zero (nunca remendando em cima).
+ * Alguns campos reagem ao keydown e apagam o conteúdo selecionado. Colocamos o
+ * cursor no fim antes da tecla e só redigitamos o último dígito se o valor
+ * realmente mudou. Antes, quando a máscara não alterava o campo, o bot apagava
+ * e reescrevia texto por conta própria; essa segunda escrita podia fazer a
+ * máscara reinterpretar 67,4100 como 6,0000. Agora o valor é conferido e nunca
+ * é restaurado por atribuição direta se a cutucada o corromper.
  */
 async function cutucarCampo(input, view) {
   const antes = String(input.value ?? "");
   if (!antes) return false;
   const digitosAntes = digitosDoTexto(antes);
-  const semUltimo = antes.slice(0, -1);
-  const ultimo = antes.slice(-1);
+  const numeroAntes = valorNumerico(antes);
+  const ultimoDigito = antes.match(/(\d)\D*$/)?.[1] || "";
   const teclaBackspace = { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 };
 
-  disparar(input, "keydown", view, teclaBackspace);
-  let apagou = await esperarCampoMudar(input, antes, 250);
-  if (!apagou) {
-    aplicarValor(input, semUltimo, view);
-    disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
-    apagou = String(input.value ?? "") !== antes;
+  try {
+    const fim = antes.length;
+    input.setSelectionRange?.(fim, fim);
+  } catch (_) {
+    // Campos numéricos / componentes customizados podem não expor seleção.
   }
+
+  disparar(input, "keydown", view, teclaBackspace);
+  let mudou = await esperarCampoMudar(input, antes, 250);
   disparar(input, "keyup", view, teclaBackspace);
+  if (!mudou) mudou = await esperarCampoMudar(input, antes, 80);
+
+  // O site pode contabilizar no keydown sem mudar o valor (o caso comum). Não
+  // simule uma remoção/reinserção: isso seria um segundo lançamento da quantia.
+  if (!mudou) {
+    const atual = String(input.value ?? "");
+    return mesmoNumero(valorNumerico(atual), numeroAntes) &&
+      (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
+  }
+
   await esperarCampoParar(input, 150);
+  let atual = String(input.value ?? "");
+  const valorMantido = mesmoNumero(valorNumerico(atual), numeroAntes) &&
+    (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
+  if (valorMantido) return true;
 
-  // Redigita o caractere apagado (com as teclas reais do caractere).
-  await inserirTexto(input, ultimo, view);
-  disparar(input, "change", view, { data: String(input.value ?? "") });
-  await pausa(60);
+  // A tecla apagou algo de verdade. Reinsere somente o dígito apagado — nunca
+  // o valor inteiro — e verifica o resultado antes de permitir o Salvar.
+  if (ultimoDigito) {
+    try {
+      const fim = atual.length;
+      input.setSelectionRange?.(fim, fim);
+    } catch (_) {
+      // a digitação do dígito ainda pode funcionar sem seleção explícita
+    }
+    await inserirTexto(input, ultimoDigito, view);
+    disparar(input, "change", view, { data: String(input.value ?? "") });
+    await pausa(60);
+  }
 
-  const depois = String(input.value ?? "");
-  if (digitosAntes) return digitosDoTexto(depois) === digitosAntes;
-  return depois === antes || mesmoNumero(valorNumerico(depois), valorNumerico(antes));
+  atual = String(input.value ?? "");
+  return mesmoNumero(valorNumerico(atual), numeroAntes) &&
+    (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
 }
 
 /**
@@ -1402,36 +1429,31 @@ async function preencherCampo(input, value, view) {
  * o portal exige para contabilizar; sem isso o total fica 0,0000).
  * Campo de texto em formulário de framework: reenvia o texto já formatado.
  */
-async function garantirRegistroDoCampo(input, view, numerico, alvo, casas) {
+async function garantirRegistroDoCampo(input, view, numerico, alvo, casas, cutucar = true) {
   if (numerico) {
     const digitosAlvo = alvo !== null && alvo !== undefined ? String(Math.round(alvo * 10 ** (casas ?? CASAS_PADRAO))) : "";
-    const textoAntes = String(input.value ?? "");
 
-    // O portal só contabiliza o valor quando chega uma tecla de verdade no
-    // campo (o Backspace é a que o usuário descobriu): UMA cutucada, sempre.
-    // Sem isso o total fica R$ 0,0000 e o site acusa "campo obrigatório".
-    await cutucarCampo(input, view);
+    // Se a máscara já aceitou as teclas numéricas, não cutuque o campo de novo:
+    // alguns componentes reinterpretam o valor ao receber Backspace. Quando o
+    // portal exige essa tecla para atualizar o total, cutucarCampo só altera o
+    // valor se a própria máscara realmente processar o Backspace.
+    if (cutucar && !(await cutucarCampo(input, view))) return false;
 
-    const digitosOk = !digitosAlvo || digitosIguais(digitosDoTexto(input.value), digitosAlvo);
-    const numeroOk = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
-    if (!digitosOk && !numeroOk) {
-      // A cutucada estragou o valor: devolve o texto que JÁ estava no campo
-      // (uma atribuição, sem redigitar nada) — nada de "lançar de novo".
-      // O aviso de input vai com UM caractere: máscara que descarta textos
-      // inteiros (data com mais de 1 caractere) reescreveria o campo vazio.
-      escreverDireto(input, textoAntes, view);
-      disparar(input, "change", view, { data: textoAntes });
-      await pausa(60);
-    }
+    const valorAtual = String(input.value ?? "");
+    const digitosOk = !digitosAlvo || digitosIguais(digitosDoTexto(valorAtual), digitosAlvo);
+    const numeroOk = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(valorAtual), alvo);
+    if (!digitosOk && !numeroOk) return false;
+    if (alvo !== null && alvo !== undefined && !numeroOk) return false;
 
-    // O framework ainda não registrou? Reenvia o texto que JÁ está no campo
-    // (sem redigitar: um único input/change com o valor final).
+    // O framework ainda não registrou? Reenvia o texto que JÁ está no campo,
+    // mas só aceita o reforço se o número continuar idêntico ao valor pedido.
     const estado = estadoDeValidacao(input);
     if (pistasDeFramework(input) && (estado.pristine || estado.invalido)) {
       await reforcarValor(input, view);
       await pausa(80);
       const depois = estadoDeValidacao(input);
-      return !depois.pristine && !depois.invalido;
+      const numeroPreservado = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
+      return numeroPreservado && !depois.pristine && !depois.invalido;
     }
     return true;
   }
@@ -1520,22 +1542,45 @@ async function setInputValue(input, rawValue, esperaNumero) {
     const digitosAlvo = String(Math.round(alvo * 10 ** casas));
 
     // Já está com o valor certo (o site já tinha o item preenchido)? NÃO
-    // reescreve — só garante que o site registrou (a cutucada de sempre).
+    // reescreve. Só permite seguir se a cutucada/revalidação preservar o preço.
     if (estaComOValorCerto(input, value, alvo, digitosAlvo)) {
-      await garantirRegistroDoCampo(input, view, true, alvo, casas);
+      const estadoAntes = estadoDeValidacao(input);
+      const precisaCutucar = estadoAntes.pristine || estadoAntes.invalido;
+      const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
+      const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
       const estado = estadoDeValidacao(input);
       if (estado.invalido) registrarDiagnosticoDeCampo(input, { valor: value, invalido: true });
+      if (!registrado || !valorPreservado) {
+        registrarDiagnosticoDeCampo(input, {
+          valor: String(input.value ?? ""),
+          esperado: comCasas(alvo, casas),
+          naoRegistrado: true,
+        });
+        return false;
+      }
       return true;
     }
 
-    // UMA passada (limpa + digita); se a máscara atrapalhar, no máximo mais uma.
+    // UMA passada (limpa + digita); se a máscara atrapalhar, interrompe o item.
     const resultado = await escreverValorNoCampo(input, alvo, casas, view);
     if (!resultado.ok) {
       registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
       return false;
     }
 
-    await garantirRegistroDoCampo(input, view, true, alvo, casas);
+    // Máscara que já consumiu as teclas numéricas não precisa de outro
+    // Backspace + redigitação, que pode deslocar a escala do preço.
+    const precisaCutucar = resultado.tipoMascara !== "keydown";
+    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
+    const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
+    if (!registrado || !valorPreservado) {
+      registrarDiagnosticoDeCampo(input, {
+        valor: String(input.value ?? ""),
+        esperado: comCasas(alvo, casas),
+        naoRegistrado: true,
+      });
+      return false;
+    }
 
     const estado = estadoDeValidacao(input);
     if (estado.invalido) {
@@ -1991,7 +2036,22 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     await pausa(800);
 
     const limite = Date.now() + (tentativa === 1 ? 2600 : 2200);
+    let proximaChecagemModal = 0;
     while (Date.now() < limite) {
+      if (Date.now() >= proximaChecagemModal) {
+        proximaChecagemModal = Date.now() + 500;
+        const modal = await responderModalDeConfirmacao();
+        if (modal) {
+          relatorio.modal = modal;
+          if (modal.clicado) {
+            confirmado = true;
+            relatorio.mensagemSucesso = modal.texto || "confirmação na janela do site";
+          }
+          // Se há uma confirmação aberta, não clique novamente em Salvar.
+          if (modal.texto || modal.clicado) break;
+        }
+      }
+
       mensagens = coletarMensagens();
       const novas = mensagens.filter((m) => !mensagensAntes.includes(m));
 
@@ -2098,70 +2158,124 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
 
 const SELETOR_DE_MODAL = [
   '[role="dialog"]',
+  '[role="alertdialog"]',
   '[aria-modal="true"]',
   "dialog[open]",
   ".br-modal",
   ".modal.show",
   ".modal[style*=\"display: block\"]",
   ".modal-dialog",
+  ".modal-content",
+  ".modal-container",
   ".swal2-popup",
+  ".swal-modal",
+  ".sweet-alert",
   ".p-dialog",
+  ".ui-dialog",
+  ".cdk-overlay-pane",
+  ".mat-dialog-container",
   ".mat-mdc-dialog-container",
+  ".MuiDialog-paper",
 ].join(", ");
 
+const SELETOR_DE_BOTAO_MODAL = "button, input[type='submit'], input[type='button'], [role='button'], a";
 const TEXTO_BOTAO_CONFIRMAR = /^(salvar|gravar|confirmar|sim|ok|enviar|prosseguir|continuar|cadastrar)\s*!?$/i;
+const TEXTO_BOTAO_NEGATIVO = /^(nao|cancelar|voltar|fechar|rejeitar|descartar|nao salvar)$/i;
+const TEXTO_PERGUNTA_DE_CONFIRMAR = /(deseja\s+salvar|salvar\s+as\s+alteracoes|proposta.{0,120}modificad|confirm.{0,100}(?:proposta|item|cadastro|salvamento|alterac)|(?:proposta|item).{0,100}confirm)/i;
 
 /** Está visível e não é fruto de um display "atualizado" só no shadow DOM? */
 function visivelDeVerdade(el) {
   if (!el || !el.isConnected) return false;
-  const inline = el.style?.display || "";
-  if (inline === "none") return false;
-  try {
-    const view = el.ownerDocument?.defaultView || window;
-    const estilo = view.getComputedStyle(el);
-    if (estilo.display === "none" || estilo.visibility === "hidden") return false;
-    if (!inline && Number.parseFloat(estilo.opacity || "1") === 0) return false;
-  } catch (_) {
-    // sem getComputedStyle: confia no inline
+  const visitados = new Set();
+  let node = el;
+  while (node && node.nodeType === 1 && !visitados.has(node)) {
+    visitados.add(node);
+    if (node.getAttribute?.("aria-hidden") === "true") return false;
+    try {
+      const view = node.ownerDocument?.defaultView || window;
+      const estilo = view.getComputedStyle(node);
+      if (estilo.display === "none" || estilo.visibility === "hidden" || estilo.visibility === "collapse") return false;
+      if (Number.parseFloat(estilo.opacity || "1") === 0) return false;
+    } catch (_) {
+      if (node.style?.display === "none") return false;
+    }
+    // parentElement para DOM normal; host para componentes dentro de shadow DOM.
+    node = node.parentElement || node.getRootNode?.()?.host || null;
   }
   return true;
 }
 
+function rotulosDoBotaoModal(el) {
+  return [el?.textContent, el?.value, el?.getAttribute?.("aria-label"), el?.getAttribute?.("title")]
+    .map((rotulo) => normalizeText(rotulo || ""))
+    .filter(Boolean);
+}
+
+function ehBotaoNegativoModal(el) {
+  return rotulosDoBotaoModal(el).some((rotulo) => TEXTO_BOTAO_NEGATIVO.test(rotulo));
+}
+
+function ehBotaoPositivoModal(el) {
+  const rotulos = rotulosDoBotaoModal(el);
+  return !ehBotaoNegativoModal(el) && rotulos.some((rotulo) => TEXTO_BOTAO_CONFIRMAR.test(rotulo));
+}
+
+function botoesVisiveisDaJanela(escopo) {
+  return consultarProfundo(escopo, SELETOR_DE_BOTAO_MODAL)
+    .filter((el) => visivelDeVerdade(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true");
+}
+
 /**
- * O site pode pedir confirmação depois do Salvar (modal "Deseja salvar?").
- * Se houver um modal visível, registra o texto e clica no botão de confirmar
- * (nunca em "cancelar", "voltar", "fechar" ou "não").
+ * O site pode pedir confirmação depois do Salvar. Primeiro tenta os seletores
+ * comuns de diálogo; se o portal renderizar uma caixa sem role/aria/classe
+ * conhecida, procura um ancestral visível que contenha a pergunta e os botões
+ * afirmativo e negativo. Só clica num botão afirmativo explícito (nunca em Não).
  */
 async function responderModalDeConfirmacao() {
-  for (let rodada = 0; rodada < 2; rodada += 1) {
-    let modal = null;
-    for (const doc of collectDocuments()) {
-      const achados = consultarProfundo(doc, SELETOR_DE_MODAL).filter(visivelDeVerdade);
-      const visivel = achados.find((el) => normalizeText(el.textContent || "").length > 0);
-      if (visivel) {
-        modal = visivel;
-        break;
+  const candidatos = [];
+  const vistos = new Set();
+
+  const adicionarCandidato = (el, exigirDoisBotoes) => {
+    if (!el || vistos.has(el) || !visivelDeVerdade(el)) return;
+    vistos.add(el);
+    const textoCompleto = normalizeText(el.innerText || el.textContent || "");
+    if (!textoCompleto || textoCompleto.length > 1200 || !TEXTO_PERGUNTA_DE_CONFIRMAR.test(textoCompleto)) return;
+
+    const botoes = botoesVisiveisDaJanela(el);
+    const positivos = botoes.filter(ehBotaoPositivoModal);
+    const negativos = botoes.filter(ehBotaoNegativoModal);
+    if (positivos.length === 0 || (exigirDoisBotoes && negativos.length === 0)) return;
+
+    // Prefere a caixa menor e aquela que apresenta explicitamente Não/Cancelar.
+    candidatos.push({ el, textoCompleto, botoes, positivos, negativos, pontuacao: (negativos.length ? 1000 : 0) - textoCompleto.length });
+  };
+
+  for (const doc of collectDocuments()) {
+    for (const el of consultarProfundo(doc, SELETOR_DE_MODAL)) adicionarCandidato(el, false);
+
+    // Fallback para caixas como a do ComprasNet: apenas uma <div> com texto e
+    // dois botões, sem atributos ARIA e sem uma classe de modal reconhecida.
+    const botoes = botoesVisiveisDaJanela(doc);
+    const afirmativos = botoes.filter(ehBotaoPositivoModal);
+    for (const botao of afirmativos) {
+      let ancestral = botao.parentElement || botao.getRootNode?.()?.host || null;
+      for (let nivel = 0; ancestral && ancestral !== doc.body && nivel < 14; nivel += 1) {
+        adicionarCandidato(ancestral, true);
+        ancestral = ancestral.parentElement || ancestral.getRootNode?.()?.host || null;
       }
     }
-    if (!modal) return rodada === 0 ? null : { texto: "", clicado: false };
-
-    const texto = normalizeText(modal.textContent || "").slice(0, 160);
-    const botoes = consultarProfundo(modal, "button, input[type='submit'], input[type='button'], [role='button'], a")
-      .filter((el) => visivelDeVerdade(el) && !el.disabled)
-      .filter((el) => {
-        const rotulo = normalizeText(`${el.textContent || ""} ${el.value || ""} ${el.getAttribute("aria-label") || ""}`);
-        return TEXTO_BOTAO_CONFIRMAR.test(rotulo);
-      });
-
-    if (botoes.length === 0) return { texto, clicado: false };
-
-    const alvo = botoes[0];
-    const rotulo = normalizeText(alvo.textContent || alvo.value || "");
-    if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
-    await pausa(900);
-    return { texto, clicado: true, botao: rotulo };
   }
-  return null;
+
+  candidatos.sort((a, b) => b.pontuacao - a.pontuacao);
+  const candidato = candidatos[0];
+  if (!candidato) return null;
+
+  const texto = candidato.textoCompleto.slice(0, 160);
+  const alvo = candidato.positivos[0];
+  const rotulo = rotulosDoBotaoModal(alvo).find((label) => TEXTO_BOTAO_CONFIRMAR.test(label)) || "";
+  if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
+  await pausa(900);
+  return { texto, clicado: true, botao: rotulo };
 }
 
 /** Resumo do botão escolhido (id/classe/texto/ícone) para o relatório do popup. */
@@ -3626,6 +3740,13 @@ async function iniciarPeloPainel() {
   try {
     const resultado = await fillItems(itens, velocidade);
     const salvos = new Set(resultado.savedItems || []);
+
+    for (const erro of resultado.errors || []) registrarNoPainel(`❌ ${erro}`);
+    for (const campo of resultado.camposProblematicos || []) {
+      registrarNoPainel(
+        `⚠️ Campo ${campo.campo} ficou com "${campo.valor}"${campo.esperado ? ` (esperado: ${campo.esperado})` : ""}; não salvei esse item.`,
+      );
+    }
 
     // Marca como enviado no sistema só o que foi realmente salvo na página.
     const paraMarcar = itens.filter((i) => i.id && salvos.has(normalizeItemNumero(i.item)));

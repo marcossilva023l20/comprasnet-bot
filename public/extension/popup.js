@@ -807,7 +807,7 @@ async function runBot() {
         for (const campo of result.camposProblematicos) {
           addLog(
             "warn",
-            `📝 Campo "${campo.campo}" ficou com "${campo.valor}" e o site não registrou${campo.invalido ? " (marcado como inválido)" : ""}. O site pode exigir outro formato.`,
+            `📝 Campo "${campo.campo}" ficou com "${campo.valor}"${campo.esperado ? ` (esperado: ${campo.esperado})` : ""} e o site não registrou${campo.invalido ? " (marcado como inválido)" : ""}. O site pode exigir outro formato.`,
           );
         }
       }

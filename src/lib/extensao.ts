@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.8";
+export const VERSAO_EXTENSAO = "1.7.9";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.9",
+    itens: [
+      "O valor unitário não é mais alterado pela cutucada do formulário: o bot mantém e confere exatamente o preço informado (ex.: 67,4100) antes de salvar",
+      "Se uma máscara mudar o preço ao registrar o campo, o item não é salvo com valor incorreto; o preenchimento continua nos campos de marca e modelo para diagnóstico",
+      "A confirmação do ComprasNet é reconhecida mesmo sem role/ARIA/classe conhecida; o bot clica em Sim e nunca em Não",
+    ],
+  },
   {
     versao: "1.7.8",
     itens: [

@@ -24,6 +24,8 @@
  *     (1.232,8000 não pode virar 12.328,0000)
  * 22) Valores 1/10/100/1000/10000 mantêm quatro casas, lançam uma vez e
  *     continuam preenchendo marca/fabricante e modelo/versão
+ * 23) Valor 67,4100 exato e confirmação Não/Sim sem ARIA/classes conhecidas
+ * 24) Se a máscara corromper o preço, o bot não salva e continua os outros campos
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -1326,6 +1328,163 @@ export async function rodarSalvar() {
       r.salvamentos.every((salvamento) => salvamento.lancamentos?.valorUnitario === 1),
       `cada valor foi lançado uma única vez (${JSON.stringify(r.salvamentos.map((salvamento) => salvamento.lancamentos?.valorUnitario))})`,
     );
+  }
+
+  console.log("\n── 23) Valor 67,4100 + confirmação sem ARIA/classe conhecida ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+          <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+          <button id="salvar1">Salvar</button>
+        </div>
+      </section>
+      <div id="janela-confirmacao" style="display:none">
+        <div>Confirmação</div>
+        <p>A proposta do item 1 foi modificada. Deseja salvar as alterações?</p>
+        <div>
+          <button id="btn-nao">Não</button>
+          <button id="btn-sim">Sim</button>
+        </div>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvamentos: [], sim: 0, nao: 0 };
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        const atualizarTotal = () => {
+          const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+          w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          })}`;
+        };
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        // Máscara controlada por input: só o Backspace usado para registrar o
+        // modelo atualiza o total; a tecla não deve apagar/redigitar o preço.
+        campo.addEventListener("input", () => {
+          campo.value = formatarMoeda(campo.value.replace(/\D/g, ""));
+        });
+        campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace") {
+            atualizarTotal();
+            campo.className = "entrada ng-dirty ng-touched ng-valid";
+          }
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          w.document.getElementById("janela-confirmacao").style.display = "block";
+        });
+        w.document.getElementById("btn-nao").addEventListener("click", () => {
+          eventos.nao += 1;
+          w.document.getElementById("janela-confirmacao").style.display = "none";
+        });
+        w.document.getElementById("btn-sim").addEventListener("click", () => {
+          eventos.sim += 1;
+          eventos.salvamentos.push(campo.value);
+          w.document.getElementById("janela-confirmacao").style.display = "none";
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Proposta cadastrada com sucesso";
+          w.document.querySelector("section[data-item='1']").appendChild(toast);
+        });
+      },
+    });
+
+    const modal = window.document.getElementById("janela-confirmacao");
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const valor = window.document.getElementById("vu1").value;
+    checar(valor === "67,4100", `campo preserva exatamente 67,4100 ("${valor}")`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `o portal calculou o total correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.sim === 1 && eventos.nao === 0, `clicou em Sim e nunca em Não (Sim ${eventos.sim}, Não ${eventos.nao})`);
+    checar(eventos.salvamentos[0] === "67,4100", `o site salvou o valor unitário correto (${JSON.stringify(eventos.salvamentos)})`);
+    checar(r.salvamentos[0]?.modal?.botao === "sim", `o relatório reconheceu a confirmação sem ARIA/classe (${r.salvamentos[0]?.modal?.botao})`);
+    checar(r.salvamentos[0]?.confirmado === true && JSON.stringify(r.savedItems) === "[1]", "item confirmado e salvo no relatório");
+    checar(r.salvamentos[0]?.lancamentos?.valorUnitario === 1, "valor unitário lançado uma única vez");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "marca e modelo continuam sendo preenchidos depois do preço");
+    checar(!modal.getAttribute("role") && !modal.getAttribute("aria-modal") && !modal.className, "caixa de confirmação não usa role, aria-modal nem classe conhecida");
+  }
+
+  console.log("\n── 24) Se a máscara trocar 67,4100 por 6,0000, não salva o preço errado ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <section data-item="1">
+        <div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+        <div><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+        <div><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+        <button class="seta" title="Mostrar detalhes do item">Detalhes</button>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" />
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { salvamentos: 0, corrompeu: false };
+    let digitosDaMascara = "";
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("input", (event) => {
+          // Reproduz máscara baseada em InputEvent.data: setter com texto inteiro
+          // e evento que carrega apenas o último caractere não sincronizam o modelo.
+          if (event.inputType === "deleteContentBackward") digitosDaMascara = digitosDaMascara.slice(0, -1);
+          else if (/^\d$/.test(event.data || "")) digitosDaMascara += event.data;
+          campo.value = formatarMoeda(digitosDaMascara);
+        });
+        campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace" && !eventos.corrompeu) {
+            eventos.corrompeu = true;
+            digitosDaMascara = campo.value.replace(/\D/g, "");
+            campo.value = "6,0000"; // reproduz a escala incorreta observada na captura
+          }
+        });
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvamentos += 1;
+        });
+      },
+    });
+
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    checar(eventos.corrompeu, "o harness aplicou a alteração incorreta da máscara");
+    checar(eventos.salvamentos === 0 && !r.savedItems.length, "não clicou Salvar nem marcou o item como enviado");
+    checar(r.filled === 0, `item não conta como preenchido/salvo (${r.filled})`);
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "mesmo sem salvar, continuou preenchendo marca e modelo");
+    checar(r.errors.some((erro) => /valor unitário/i.test(erro)), `informa que o valor precisa ser corrigido (${JSON.stringify(r.errors)})`);
+    checar(r.camposProblematicos.some((campo) => campo.esperado === "67,4100"), `o relatório diferencia o preço esperado 67,4100 (${JSON.stringify(r.camposProblematicos)})`);
   }
 
   return falhas;
