@@ -1,4 +1,4 @@
-CREATE TABLE "itens" (
+CREATE TABLE IF NOT EXISTS "itens" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"proposta_id" integer NOT NULL,
 	"numero_item" integer NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE "itens" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "propostas" (
+CREATE TABLE IF NOT EXISTS "propostas" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"numero_dispensa" varchar(100) NOT NULL,
 	"uasg" varchar(255),
@@ -26,4 +26,18 @@ CREATE TABLE "propostas" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "itens" ADD CONSTRAINT "itens_proposta_id_propostas_id_fk" FOREIGN KEY ("proposta_id") REFERENCES "public"."propostas"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+	IF NOT EXISTS (
+		SELECT 1
+		FROM pg_constraint
+		WHERE conname = 'itens_proposta_id_propostas_id_fk'
+		  AND conrelid = 'public.itens'::regclass
+	) THEN
+		ALTER TABLE "itens"
+			ADD CONSTRAINT "itens_proposta_id_propostas_id_fk"
+			FOREIGN KEY ("proposta_id")
+			REFERENCES "public"."propostas"("id")
+			ON DELETE cascade ON UPDATE no action;
+	END IF;
+END $$;
