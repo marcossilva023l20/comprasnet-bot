@@ -711,7 +711,9 @@ async function runBot() {
             : registro.mensagemSucesso
               ? `o site mostrou "${registro.mensagemSucesso}"`
               : `botão "${registro.botao}"`;
-          addLog("success", `💾 Item ${registro.item}: salvo${registro.tentativas > 1 ? " na 2ª tentativa" : ""} — ${via}.`);
+          const lancamentos = registro.lancamentos?.valorUnitario;
+          const notaValor = lancamentos > 1 ? ` (o valor foi lançado ${lancamentos}× até a máscara aceitar)` : "";
+          addLog("success", `💾 Item ${registro.item}: salvo${registro.tentativas > 1 ? " na 2ª tentativa" : ""} — ${via}.${notaValor}`);
         } else if (registro.clicado) {
           const valores = registro.valores
             ? Object.entries(registro.valores)

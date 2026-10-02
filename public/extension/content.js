@@ -333,6 +333,15 @@ function normalizeItemNumber(value) {
   return digits ? String(Number(digits)) : "";
 }
 
+/** Ordem de preenchimento: item 1, 2, 3, ... 10, 11 (nunca fora de ordem). */
+function compararPorItem(a, b) {
+  const na = Number(normalizeItemNumber(a?.item));
+  const nb = Number(normalizeItemNumber(b?.item));
+  const valorA = Number.isFinite(na) && na > 0 ? na : Number.MAX_SAFE_INTEGER;
+  const valorB = Number.isFinite(nb) && nb > 0 ? nb : Number.MAX_SAFE_INTEGER;
+  return valorA - valorB;
+}
+
 function getOrCreateItemGroup(groups, itemNumber, container) {
   const key = normalizeItemNumber(itemNumber);
   let group = groups.get(key);
@@ -453,12 +462,16 @@ async function fillItems(items, delayMs) {
 
   showNotification(`🤖 Lendo a página e preenchendo ${items.length} item(ns)...`, "info");
 
+  // Preenche SEMPRE na ordem do Item: 1, 2, 3, 4... É assim que o portal
+  // numera os itens na página — e é essa a ordem que o usuário confere.
+  const fila = [...items].sort(compararPorItem);
+
   rodandoAgora = true;
   mostrarPainel();
   definirStatusDoPainel(`Preenchendo ${items.length} item(ns)...`);
   atualizarPainel();
 
-  for (const [indice, item] of items.entries()) {
+  for (const [indice, item] of fila.entries()) {
     if (abortRequested) break;
     await aguardarSePausado();
     if (abortRequested) break;
@@ -545,15 +558,14 @@ async function fillSingleItem(item, allowUnassignedFields) {
     };
   }
 
-  await tryExpandItem(itemNumber);
-  await sleep(250);
-
-  scanPage();
-  let fields = getFieldsForItem(itemNumber, allowUnassignedFields);
+  let fields = await localizarCamposDoItem(itemNumber, allowUnassignedFields);
   if (!fields) {
+    const naLista = numerosNaPagina().has(normalizeItemNumber(itemNumber));
     return {
       ok: false,
-      error: `Item ${itemNumber}: não encontrei campos reconhecidos associados a este item. Expanda o item e clique em “Ler página”.`,
+      error: naLista
+        ? `Item ${itemNumber}: o item está na página, mas os campos de preenchimento não apareceram (tente abrir/expandir o item e rodar de novo).`
+        : `Item ${itemNumber}: não encontrei este item na página (confira a paginação e se o item existe).`,
     };
   }
 
@@ -574,7 +586,14 @@ async function fillSingleItem(item, allowUnassignedFields) {
     // Releitura após cada campo: páginas React/Angular podem recriar os inputs.
     scanPage();
     fields = getFieldsForItem(itemNumber, allowUnassignedFields);
-    const input = fields?.get(field.key);
+    let input = fields?.get(field.key);
+
+    // O painel do item pode ter sido remontado pelo site: procura de novo.
+    if (!input) {
+      const outraLeitura = await localizarCamposDoItem(itemNumber, allowUnassignedFields);
+      input = outraLeitura?.get(field.key);
+      if (input) fields = outraLeitura;
+    }
 
     if (!input) {
       if (field.required) missing.push(FIELD_LABELS[field.key]);
@@ -582,19 +601,25 @@ async function fillSingleItem(item, allowUnassignedFields) {
       continue;
     }
 
-    const didFill = await setInputValue(input, field.value);
+    const didFill = await setInputValue(input, field.value, field.key === "valorUnitario");
     if (!didFill) {
-      if (field.required) missing.push(FIELD_LABELS[field.key]);
-      else warnings.push(`Item ${itemNumber}: não foi possível preencher ${FIELD_LABELS[field.key]}.`);
+      // Diz o que o site deixou no campo: ajuda a entender a máscara dele.
+      const ficou = String(input.value ?? "").trim();
+      const detalhe = ficou ? ` (o site deixou "${ficou}" no campo)` : "";
+      if (field.required) missing.push(`${FIELD_LABELS[field.key]}${detalhe}`);
+      else warnings.push(`Item ${itemNumber}: não foi possível preencher ${FIELD_LABELS[field.key]}${detalhe}.`);
     }
     await sleep(120);
   }
+
+  const lancamentos = lancamentosDoItem(fields);
 
   if (missing.length) {
     return {
       ok: false,
       error: `Item ${itemNumber}: campo(s) não preenchido(s): ${missing.join(", ")}.`,
       warnings,
+      lancamentos,
     };
   }
 
@@ -625,14 +650,27 @@ async function fillSingleItem(item, allowUnassignedFields) {
     showNotification(`✅ Item ${itemNumber}: salvo!`, "success");
   }
 
-  return { ok: true, warnings, salvamento };
+  return { ok: true, warnings, salvamento: { ...salvamento, lancamentos } };
 }
 
 function getFieldsForItem(itemNumber, allowUnassignedFields) {
   if (!latestScanState) return null;
   const key = normalizeItemNumber(itemNumber);
-  const group = latestScanState.itemGroups.get(key);
-  if (group) return group.fields;
+  const doGrupo = latestScanState.itemGroups.get(key)?.fields || new Map();
+
+  // O grupo do item às vezes existe sem o campo de valor (o portal monta o
+  // painel de preenchimento fora do contêiner que identifica o item). Nesse
+  // caso, procura os campos dentro do bloco do próprio item.
+  if (!doGrupo.has("valorUnitario")) {
+    const doBloco = camposDoBloco(encontrarBlocoDoItem(itemNumber));
+    if (doBloco.size) {
+      const juntos = new Map(doGrupo);
+      for (const [campo, controle] of doBloco) if (!juntos.has(campo)) juntos.set(campo, controle);
+      return juntos;
+    }
+  }
+
+  if (doGrupo.size) return doGrupo;
 
   // Só usa campos sem número de item quando há um único item sendo preenchido.
   if (allowUnassignedFields && latestScanState.itemGroups.size === 0) {
@@ -640,6 +678,89 @@ function getFieldsForItem(itemNumber, allowUnassignedFields) {
   }
 
   return null;
+}
+
+/** Bloco do item na lista (o que contém “Quantidade solicitada” etc.). */
+function encontrarBlocoDoItem(itemNumber) {
+  const alvo = normalizeItemNumber(itemNumber);
+  if (!alvo) return null;
+  for (const bloco of findItemBlocks({ exigirVisivel: false })) {
+    if (normalizeItemNumber(itemNumberFromBlock(bloco)) === alvo) return bloco;
+  }
+  return null;
+}
+
+/** Campos reconhecidos dentro do bloco do item (valor unitário, marca...). */
+function camposDoBloco(bloco) {
+  const campos = new Map();
+  if (!bloco) return campos;
+  const controles = consultarProfundo(bloco, 'input, textarea, select, [contenteditable="true"], [role="textbox"]');
+  for (const controle of controles) {
+    if (!isFillable(controle) || !isVisible(controle)) continue;
+    const campo = classifyField(controle);
+    if (!campo) continue;
+    if (!campos.has(campo) || getControlConfidence(controle, campo) > getControlConfidence(campos.get(campo), campo)) {
+      campos.set(campo, controle);
+    }
+  }
+  return campos;
+}
+
+/**
+ * Acha os campos do item esperando a página ficar quieta.
+ *
+ * Depois de salvar um item o portal redesenha a lista — procurar os campos do
+ * item seguinte nesse instante é o que fazia o bot “pular” um item. Aqui a
+ * leitura é repetida (e o item é aberto/expandido de novo, se preciso) antes
+ * de desistir.
+ */
+async function localizarCamposDoItem(itemNumber, allowUnassignedFields) {
+  scanPage();
+  let fields = getFieldsForItem(itemNumber, allowUnassignedFields);
+  if (fields?.get("valorUnitario")) return fields;
+
+  // A seta de “mostrar detalhes” é o que monta o painel de preenchimento.
+  await tryExpandItem(itemNumber);
+  await sleep(300);
+
+  for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+    if (abortRequested) return null;
+    scanPage();
+    fields = getFieldsForItem(itemNumber, allowUnassignedFields);
+    if (fields?.get("valorUnitario")) return fields;
+
+    if (tentativa === 1) {
+      await esperarPaginaEstavel(1500);
+      continue;
+    }
+
+    await tryExpandItem(itemNumber);
+    await sleep(350);
+  }
+
+  scanPage();
+  return getFieldsForItem(itemNumber, allowUnassignedFields);
+}
+
+/** Espera a lista da página parar de mudar (o portal redesenha após salvar). */
+async function esperarPaginaEstavel(tempoMs = 1500) {
+  const limite = Date.now() + tempoMs;
+  let anterior = "";
+  let estavel = 0;
+  while (Date.now() < limite) {
+    if (abortRequested) return false;
+    await sleep(150);
+    scanPage();
+    const agora = `${assinaturaDaLista()}|${latestScanState?.result?.recognizedFields ?? 0}`;
+    if (agora === anterior) {
+      estavel += 1;
+      if (estavel >= 2) return true;
+    } else {
+      estavel = 0;
+      anterior = agora;
+    }
+  }
+  return false;
 }
 
 async function tryExpandItem(itemNumber) {
@@ -988,20 +1109,12 @@ async function reforcarValor(input, view) {
 }
 
 /**
- * Última cartada para o formulário do site "ver" o valor: repete o input com o
- * texto final e acompanha o estado de validação (pristine → o site não viu).
+ * UMA tentativa de escrever o valor no campo: limpa e digita.
+ *
+ * Existe um único lançamento por tentativa. Os caminhos abaixo só valem quando
+ * a máscara recusou e o campo ficou VAZIO — nada de reescrever (reforçar) o
+ * valor depois de escrito: era isso que “lançava e relançava” o valor unitário.
  */
-async function acordarCampo(input, view) {
-  for (let rodada = 1; rodada <= 2; rodada += 1) {
-    const estado = estadoDeValidacao(input);
-    if (!estado.pristine && !estado.invalido) return true;
-    await reforcarValor(input, view);
-    await sleep(120);
-  }
-  return !estadoDeValidacao(input).pristine;
-}
-
-/** Uma tentativa completa de escrever o valor no campo. */
 async function preencherCampo(input, value, view) {
   // 1º caminho: digitar de verdade (máscaras de moeda só entendem teclado).
   await digitarDeVerdade(input, value, view);
@@ -1024,23 +1137,108 @@ async function preencherCampo(input, value, view) {
     }
   }
 
-  // Reforça o valor final (o framework do site pode ter lido antes da máscara
-  // formatar) e confere se ele registrou o campo. Só em campos de framework:
-  // máscaras simples podem reagir mal a um input manual.
-  if (!campoVazio(input) && pistasDeFramework(input)) {
-    await reforcarValor(input, view);
-    await acordarCampo(input, view);
-  }
+}
 
-  // Campos de valor: cutuca com um Backspace real (é o que faz o portal
-  // contabilizar o valor — sem isso o total fica 0,0000 e o site reclama).
-  if (valorNumerico(input.value) !== null) {
+/**
+ * Faz o formulário do site “ver” o valor que JÁ está no campo — uma vez só.
+ *
+ * Campo de valor: um Backspace de verdade + redigitar o último dígito (é o que
+ * o portal exige para contabilizar; sem isso o total fica 0,0000).
+ * Campo de texto em formulário de framework: reenvia o texto já formatado.
+ */
+async function garantirRegistroDoCampo(input, view, numerico) {
+  if (numerico) {
     await cutucarCampo(input, view);
     await sleep(80);
   }
+
+  if (pistasDeFramework(input)) {
+    const estado = estadoDeValidacao(input);
+    if (estado.pristine || estado.invalido) {
+      await reforcarValor(input, view); // último recurso: reenvia o texto formatado
+      await sleep(80);
+      const depois = estadoDeValidacao(input);
+      return !depois.pristine && !depois.invalido;
+    }
+  }
+
+  return true;
 }
 
-async function setInputValue(input, rawValue) {
+/** O texto é mesmo um valor (só dígitos/separadores), ou um texto qualquer? */
+function ehValorNumerico(texto) {
+  const limpo = String(texto ?? "").trim();
+  if (!limpo) return false;
+  return /^(?:r\$\s*)?-?[\d.,\s]+$/i.test(limpo);
+}
+
+/** Casas decimais que um texto de valor usa ("44,0000" → 4). */
+function casasDoTexto(texto) {
+  const match = String(texto ?? "").match(/,\s*(\d{1,6})\s*$/);
+  return match ? match[1].length : null;
+}
+
+/** O campo já está com o valor que queremos? Então não escreve nada nele. */
+function jaEstaComOValorCerto(input, value, alvo) {
+  if (campoVazio(input)) return false;
+  if (alvo !== null) return mesmoNumero(valorNumerico(input.value), alvo);
+  return normalizeText(input.value) === normalizeText(value);
+}
+
+/**
+ * Quantos dígitos a máscara espera para chegar no valor certo?
+ *
+ * Se a máscara leu o valor em outra escala (ex.: tratou "162,99" como centavos
+ * e mostrou 1,6299), a razão entre o que ficou no campo e o alvo é uma potência
+ * de 10 — com ela calculamos exatamente os dígitos que o campo precisa receber,
+ * em vez de ficar tentando formato por formato.
+ */
+function digitosNaEscalaDaMascara(alvo, textoDoCampo) {
+  const ficou = valorNumerico(textoDoCampo);
+  if (alvo === null || !alvo || ficou === null) return null;
+  const razao = ficou / alvo;
+  if (!Number.isFinite(razao) || razao <= 0) return null;
+  const potencia = Math.round(Math.log10(razao));
+  const fator = 10 ** potencia;
+  if (!Number.isFinite(fator) || fator < 1) return null;
+  if (Math.abs(razao - fator) > fator * 0.001) return null;
+  const digitos = Math.round(alvo * fator);
+  if (!Number.isFinite(digitos) || digitos <= 0) return null;
+  return String(digitos);
+}
+
+/** Formatos possíveis, do mais provável (formato do portal) ao menos provável. */
+function formatosParaOMascara(input, value, alvo) {
+  if (alvo === null) return [value];
+  const casas = casasDoTexto(input.value) ?? casasDoTexto(input.placeholder) ?? CASAS_PADRAO;
+  const lista = [comCasas(alvo, casas), value, comCasas(alvo, CASAS_PADRAO), comCasas(alvo, 2), String(alvo)];
+  return [...new Set(lista.filter((t) => t !== ""))];
+}
+
+/** Quantas vezes o valor foi lançado em cada campo (1 é o esperado). */
+const lancamentosPorCampo = new Map();
+
+function contarLancamento(input) {
+  if (!input) return;
+  if (lancamentosPorCampo.size > 300) lancamentosPorCampo.clear();
+  lancamentosPorCampo.set(input, (lancamentosPorCampo.get(input) || 0) + 1);
+}
+
+/** Lançamentos por campo do item (vai para o relatório do popup). */
+function lancamentosDoItem(fields) {
+  const resultado = {};
+  if (!fields) return resultado;
+  for (const [campo, controle] of fields) {
+    const total = lancamentosPorCampo.get(controle) || 0;
+    if (total) resultado[campo] = total;
+  }
+  return resultado;
+}
+
+const CASAS_PADRAO = 4; // formato do portal: 44,0000
+const MAX_LANCAMENTOS_POR_CAMPO = 3; // 1 lançamento + correções da máscara
+
+async function setInputValue(input, rawValue, esperaNumero) {
   if (!input || !input.isConnected || !isFillable(input)) return false;
 
   const view = input.ownerDocument.defaultView || window;
@@ -1068,32 +1266,47 @@ async function setInputValue(input, rawValue) {
     return true;
   }
 
-  // O portal usa valores com 4 casas ("44,0000"). Se a máscara do campo espera
-  // outro número de casas, digitar o valor errado faz o site gravar outra coisa
-  // (44,00 vira 0,4400, por exemplo). Por isso conferimos o que ficou no campo e,
-  // se o número não bate, tentamos de novo no formato que a máscara aceita.
-  const alvo = valorNumerico(value);
-  const estadoInicial = estadoDeValidacao(input);
-  const formatos =
-    alvo === null
-      ? [value]
-      : [value, comCasas(alvo, 4), comCasas(alvo, 2), String(value).replace(/[.,]/g, ""), String(alvo)];
-  const tentativas = [...new Set(formatos.filter((t) => t !== ""))];
-  if (tentativas.length === 0) tentativas.push(value);
+  // Marca/modelo são TEXTO ("Conforme TR", "208"): não podem ser tratados como
+  // valor só porque são números — quem diz isso é o campo (valor unitário).
+  const numerico = esperaNumero !== false && ehValorNumerico(value);
+  const alvo = numerico ? valorNumerico(value) : null;
 
-  for (const tentativa of tentativas) {
+  // Já está com o valor certo (o site já tinha o item preenchido)? NÃO escreve
+  // de novo: relançar o valor era exatamente o problema relatado.
+  if (jaEstaComOValorCerto(input, value, alvo)) return true;
+
+  // O portal usa 4 casas ("44,0000"). Se a máscara do campo espera outro número
+  // de casas, digitar o formato errado faz o site gravar outra coisa (44,00 vira
+  // 0,4400, por exemplo). Conferimos o que ficou no campo e corrigimos UMA vez.
+  const formatos = formatosParaOMascara(input, value, alvo);
+  let tentativas = 0;
+
+  for (let i = 0; i < formatos.length; i += 1) {
+    if (tentativas >= MAX_LANCAMENTOS_POR_CAMPO) break;
+    const tentativa = formatos[i];
+    tentativas += 1;
+
     await preencherCampo(input, tentativa, view);
+    contarLancamento(input);
 
     const bateu =
-      alvo !== null ? mesmoNumero(valorNumerico(input.value), alvo) : !espera || !campoVazio(input);
-    if (!bateu) continue; // a máscara interpretou diferente: tenta o próximo formato
+      alvo !== null ? mesmoNumero(valorNumerico(input.value), alvo) : Boolean(espera) && !campoVazio(input);
+    if (!bateu) {
+      // Máscara leu o valor em outra escala? Sabemos os dígitos que ela quer.
+      if (i === 0) {
+        const digitos = digitosNaEscalaDaMascara(alvo, input.value);
+        if (digitos !== null && !formatos.includes(digitos)) formatos.splice(i + 1, 0, digitos);
+      }
+      continue; // a máscara interpretou diferente: tenta o próximo formato
+    }
 
     // O valor bate: só falta o site ter registrado no formulário.
-    const precisaAcordar = alvo !== null && estadoDeValidacao(input).pristine;
-    if (precisaAcordar && !(await acordarCampo(input, view))) {
-      registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
-    } else if (estadoDeValidacao(input).invalido) {
+    const registrado = await garantirRegistroDoCampo(input, view, numerico);
+    const estado = estadoDeValidacao(input);
+    if (estado.invalido) {
       registrarDiagnosticoDeCampo(input, { valor: value, invalido: true });
+    } else if (numerico && (estado.pristine || !registrado)) {
+      registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
     }
     return true;
   }

@@ -146,11 +146,13 @@ export async function rodarPaginacao() {
     });
 
     checar(r.filled === 2, `preencheu os 2 itens (${r.filled})`);
+    // Mesmo chegando fora de ordem (11 e 3), o bot preenche na ordem do ITEM:
+    // 3 (na página 1) primeiro e depois 11 (na página 2).
     checar(
-      JSON.stringify(window.__salvos || []) === JSON.stringify(["11", "3"]),
-      `salvou o 11 (página 2) e o 3 (página 1) — ${JSON.stringify(window.__salvos)}`,
+      JSON.stringify(window.__salvos || []) === JSON.stringify(["3", "11"]),
+      `preencheu na ordem do item: 3 e depois 11 — ${JSON.stringify(window.__salvos)}`,
     );
-    checar(JSON.stringify(r.savedItems) === JSON.stringify([11, 3]), `savedItems = ${JSON.stringify(r.savedItems)}`);
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([3, 11]), `savedItems = ${JSON.stringify(r.savedItems)}`);
     checar(r.salvamentos.every((s) => s.confirmado && !s.recusado), "todos confirmados pelo site");
     checar((window.__favoritos || 0) === 0, `não clicou em Favoritos (${window.__favoritos || 0})`);
     checar(

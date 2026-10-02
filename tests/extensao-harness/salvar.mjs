@@ -17,6 +17,8 @@
  * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
  * 16) Portal só contabiliza com tecla real: o Backspace do bot faz o total sair de 0,0000
  * 17) Máscara que insere na própria tecla (keydown) → os dígitos NÃO duplicam
+ * 18) Valor unitário é lançado UMA vez só (não fica relançando o valor)
+ * 19) Preenche na ordem do Item (1, 2, 3) e não pula item de painel devagar
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -472,7 +474,10 @@ export async function rodarSalvar() {
     checar(eventos.salvos.length === 1, `confirmou na janela (${JSON.stringify(eventos.salvos)})`);
     checar(r.salvamentos[0]?.confirmado === true, `relatório: confirmado (${r.salvamentos[0]?.mensagemSucesso || r.salvamentos[0]?.modal?.botao})`);
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
-    checar(r.salvamentos[0]?.valores?.valorUnitario === "1234,56", `relatório traz os valores da página (${JSON.stringify(r.salvamentos[0]?.valores)})`);
+    // O valor é escrito no formato do portal (4 casas): 1234,5600 (sem máscara
+    // não aparece o separador de milhar; com a máscara do site vira 1.234,5600).
+    checar(r.salvamentos[0]?.valores?.valorUnitario === "1234,5600", `relatório traz os valores da página (${JSON.stringify(r.salvamentos[0]?.valores)})`);
+    checar(r.salvamentos[0]?.valores?.modeloVersao === "PRIMACY 4", `modelo continua sendo texto (${JSON.stringify(r.salvamentos[0]?.valores)})`);
   }
 
   console.log("\n── 12) Máscara de 4 casas do portal: 44,0000 ──");
@@ -762,6 +767,250 @@ export async function rodarSalvar() {
     checar(eventos.salvos[0] === "1.232,8000", `o site salvou o valor certo (${JSON.stringify(eventos.salvos)})`);
     checar(r.salvamentos[0]?.confirmado === true && !r.salvamentos[0]?.recusado, "relatório: salvo e confirmado");
     checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
+  }
+
+  console.log("\n── 18) Valor unitário lançado UMA vez só ──");
+  {
+    // Portal de verdade: a máscara de 4 casas insere o dígito na própria tecla
+    // (keydown) e reformata. Contamos quantas vezes o campo é REESCRITO do zero
+    // (o usuário via o valor sendo lançado e relançado).
+    const montar = (casas) => {
+      const html = `<!DOCTYPE html><html><body>
+        <h2>Itens</h2>
+        <div id="lista">
+          <section class="item" data-item="1">
+            <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+              <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">4</span></div>
+              <div class="campo"><span class="rotulo">Valor estimado</span><span class="valor">R$ 100,00</span></div></div>
+              <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+            <div class="detalhes" style="display:none">
+              <div class="campos">
+                <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+                <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+                <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+              </div>
+              <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+            </div>
+          </section>
+        </div>
+      </body></html>`;
+
+      const eventos = { salvos: [], limpezas: 0 };
+      const { window, enviar } = montarPagina(html, {
+        preparar: (w) => {
+          // Conta cada vez que o campo de valor é limpo (= novo lançamento).
+          // Fica no prototype porque o content.js escreve pelo setter nativo.
+          const proto = w.HTMLInputElement.prototype;
+          const descritor = w.Object.getOwnPropertyDescriptor(proto, "value");
+          w.Object.defineProperty(proto, "value", {
+            configurable: true,
+            get() {
+              return descritor.get.call(this);
+            },
+            set(novo) {
+              const antes = descritor.get.call(this);
+              descritor.set.call(this, novo);
+              if (this.id === "vu1" && String(antes) !== "" && String(novo) === "") eventos.limpezas += 1;
+            },
+          });
+
+          w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+            b.closest(".item").querySelector(".detalhes").style.display = "block";
+          }));
+
+          const campo = w.document.getElementById("vu1");
+          campo.addEventListener("keydown", (e) => {
+            if (!/^[0-9]$/.test(e.key || "")) return;
+            const digitos = (campo.value.replace(/\D/g, "") + e.key).slice(-12);
+            campo.value = (Number(digitos) / 10 ** casas).toLocaleString("pt-BR", {
+              minimumFractionDigits: casas,
+              maximumFractionDigits: casas,
+            });
+          });
+
+          w.document.getElementById("salvar1").addEventListener("click", () => {
+            eventos.salvos.push(campo.value);
+            const aviso = w.document.createElement("div");
+            aviso.setAttribute("role", "alert");
+            aviso.className = "alert alert-success";
+            aviso.textContent = "Item salvo com sucesso";
+            w.document.querySelector(".item").appendChild(aviso);
+          });
+        },
+      });
+      return { window, eventos, enviar };
+    };
+
+    // a) valor já no formato do portal (4 casas): 1 lançamento
+    {
+      const { window, eventos, enviar } = montar(4);
+      const r = await enviar({
+        action: "fill_items",
+        delay: 20,
+        items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "MICHELIN", modeloVersao: "PRIMACY 4" }],
+      });
+      const valor = window.document.getElementById("vu1").value;
+      checar(valor === "1.232,8000", `o campo ficou "1.232,8000" (${valor})`);
+      // O campo estava vazio: o valor entrou uma única vez, sem nenhum
+      // "limpa e digita de novo" (que era o relança-relança relatado).
+      checar(eventos.limpezas === 0, `nenhum relançamento do valor (limpezas: ${eventos.limpezas})`);
+      checar(
+        r.salvamentos[0]?.lancamentos?.valorUnitario === 1,
+        `relatório: 1 lançamento do valor (${JSON.stringify(r.salvamentos[0]?.lancamentos)})`,
+      );
+      checar(eventos.salvos[0] === "1.232,8000", `o site salvou o valor certo (${JSON.stringify(eventos.salvos)})`);
+    }
+
+    // b) valor com menos casas na planilha ("162,99"): o bot já digita no
+    //    formato do portal e NÃO precisa lançar de novo
+    {
+      const { window, eventos, enviar } = montar(4);
+      const r = await enviar({
+        action: "fill_items",
+        delay: 20,
+        items: [{ item: 1, valorUnitario: "162,99", marcaFabricante: "Conforme TR", modeloVersao: "Conforme TR" }],
+      });
+      const valor = window.document.getElementById("vu1").value;
+      checar(valor === "162,9900", `o valor virou "162,9900" (${valor})`);
+      checar(eventos.limpezas === 0, `lançado 1 vez, sem relançar (limpezas: ${eventos.limpezas})`);
+      checar(eventos.salvos[0] === "162,9900", `o site salvou 162,9900 (${JSON.stringify(eventos.salvos)})`);
+      checar(r.filled === 1, `item preenchido (${r.filled})`);
+    }
+
+    // c) máscara de 2 casas: o bot corrige a escala em 1 correção (no máximo 2
+    //    lançamentos) em vez de ficar tentando formato por formato
+    {
+      const { window, eventos, enviar } = montar(2);
+      const r = await enviar({
+        action: "fill_items",
+        delay: 20,
+        items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "MICHELIN", modeloVersao: "PRIMACY 4" }],
+      });
+      const valor = window.document.getElementById("vu1").value;
+      checar(valor === "1.232,80", `o valor virou "1.232,80" (${valor})`);
+      checar(eventos.limpezas === 1, `uma única correção de escala (limpezas: ${eventos.limpezas})`);
+      checar(
+        r.salvamentos[0]?.lancamentos?.valorUnitario === 2,
+        `relatório: 2 lançamentos (1 + a correção da máscara) — ${JSON.stringify(r.salvamentos[0]?.lancamentos)}`,
+      );
+      checar(eventos.salvos[0] === "1.232,80", `o site salvou 1.232,80 (${JSON.stringify(eventos.salvos)})`);
+      checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
+    }
+
+    // e) modelo só com número continua TEXTO ("208", não "208,0000")
+    {
+      const { window, enviar } = montar(4);
+      const r = await enviar({
+        action: "fill_items",
+        delay: 20,
+        items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "FIAT", modeloVersao: "208" }],
+      });
+      const modelo = window.document.getElementById("mv1").value;
+      checar(modelo === "208", `modelo ficou texto ("208", não "208,0000") — ${modelo}`);
+      checar(r.filled === 1, `item preenchido (${r.filled})`);
+    }
+
+    // d) rodar de novo no mesmo item NÃO relança o valor (já está certo)
+    {
+      const { window, eventos, enviar } = montar(4);
+      const preencher1 = {
+        action: "fill_items",
+        delay: 20,
+        items: [{ item: 1, valorUnitario: "1.232,8000", marcaFabricante: "MICHELIN", modeloVersao: "PRIMACY 4" }],
+      };
+      await enviar(preencher1);
+      const limpezasDepoisDaPrimeira = eventos.limpezas;
+      const r = await enviar(preencher1);
+      checar(
+        eventos.limpezas === limpezasDepoisDaPrimeira,
+        `a 2ª rodada não relançou o valor (limpezas: ${eventos.limpezas})`,
+      );
+      checar(window.document.getElementById("vu1").value === "1.232,8000", `o campo continua "1.232,8000"`);
+      checar(r.filled === 1, `2ª rodada também preenche (${r.filled})`);
+    }
+  }
+
+  console.log("\n── 19) Preenche na ordem do Item e não pula item de painel devagar ──");
+  {
+    // Lista com 3 itens; o painel do item 2 só monta 600ms depois da seta —
+    // é o que fazia o bot "pular" um item. A planilha ainda chega fora de ordem.
+    const item = (n) => `
+      <section class="item" data-item="${n}">
+        <div class="cabecalho"><div class="numero">${n}</div><div class="titulo">ITEM ${n}</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">10</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado</span><span class="valor">R$ 100,00</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes" style="display:none">
+          <div class="campos">
+            <label>Valor unitário (R$)</label><input id="vu${n}" class="entrada" />
+            <label>Marca/Fabricante</label><input id="mf${n}" class="entrada" />
+            <label>Modelo/Versão</label><input id="mv${n}" class="entrada" />
+          </div>
+          <div class="rodape"><button id="salvar${n}" class="btn btn-primary">Salvar</button></div>
+        </div>
+      </section>`;
+
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">${[1, 2, 3].map(item).join("\n")}</div>
+    </body></html>`;
+
+    const eventos = { salvos: [] };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w, c) => {
+        w.document.querySelectorAll(".seta").forEach((b) => {
+          b.addEventListener("click", () => {
+            const bloco = b.closest(".item");
+            const painel = bloco.querySelector(".detalhes");
+            if (bloco.dataset.item === "2") {
+              setTimeout(() => {
+                painel.style.display = "block";
+              }, 600);
+              return;
+            }
+            painel.style.display = "block";
+          });
+        });
+
+        w.document.querySelectorAll("button[id^='salvar']").forEach((botao) => {
+          botao.addEventListener("click", () => {
+            eventos.salvos.push(botao.id.replace("salvar", ""));
+            c.salvos.push(botao.id);
+            const aviso = w.document.createElement("div");
+            aviso.setAttribute("role", "alert");
+            aviso.className = "alert alert-success";
+            aviso.textContent = "Item salvo com sucesso";
+            botao.closest(".item").appendChild(aviso);
+          });
+        });
+      },
+    });
+
+    // Chega fora de ordem de propósito: 3, 1, 2.
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [
+        { item: 3, valorUnitario: "33,0000", marcaFabricante: "ACME 3", modeloVersao: "X3" },
+        { item: 1, valorUnitario: "11,0000", marcaFabricante: "ACME 1", modeloVersao: "X1" },
+        { item: 2, valorUnitario: "22,0000", marcaFabricante: "ACME 2", modeloVersao: "X2" },
+      ],
+    });
+
+    const valor = (n) => window.document.getElementById(`vu${n}`).value;
+    checar(r.filled === 3, `preencheu os 3 itens, sem pular nenhum (${r.filled} de ${r.total})`);
+    checar(r.errors.length === 0, `nenhum erro de item (${JSON.stringify(r.errors)})`);
+    checar(
+      JSON.stringify(eventos.salvos) === JSON.stringify(["1", "2", "3"]),
+      `salvou na ordem do item: 1, 2, 3 (${JSON.stringify(eventos.salvos)})`,
+    );
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1, 2, 3]), `savedItems = ${JSON.stringify(r.savedItems)}`);
+    checar(valor(1) === "11,0000", `item 1 ficou com o valor do item 1 (${valor(1)})`);
+    checar(valor(2) === "22,0000", `item 2 ficou com o valor do item 2 (${valor(2)})`);
+    checar(valor(3) === "33,0000", `item 3 ficou com o valor do item 3 (${valor(3)})`);
   }
 
   return falhas;

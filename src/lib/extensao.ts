@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.2";
+export const VERSAO_EXTENSAO = "1.7.3";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,15 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.3",
+    itens: [
+      "O valor unitário é lançado UMA vez só: o bot escreve no formato do portal e só corrige se a máscara do site realmente ler errado (não fica mais relançando o valor)",
+      "Rodar de novo em item já preenchido não relança o valor (não mexe no que já está certo)",
+      "Preenchimento na ordem do Item: 1, 2, 3... mesmo que a planilha chegue fora de ordem",
+      "Não pula mais item: o bot espera o painel do item terminar de abrir e a página parar de redesenhar antes de desistir",
+    ],
+  },
   {
     versao: "1.7.2",
     itens: [
