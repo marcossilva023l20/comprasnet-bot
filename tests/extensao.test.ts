@@ -59,15 +59,22 @@ test("versaoValida aceita 1 a 4 partes numéricas", () => {
 });
 
 test("novidadesDesde mostra só o que é mais novo que a versão instalada", () => {
-  const de13 = novidadesDesde("1.3.0").map((n) => n.versao);
-  assert.deepEqual(de13, ["1.4.0"]);
+  // Compatível com novas versões: o esperado é calculado a partir do histórico.
+  const esperado = (base: string) =>
+    NOVIDADES_EXTENSAO.filter((n) => compararVersoes(n.versao, base) > 0)
+      .map((n) => n.versao)
+      .sort((a, b) => compararVersoes(b, a));
 
-  const de14 = novidadesDesde("1.4.0");
-  assert.equal(de14.length, 0);
+  for (const base of ["1.2.0", "1.3.0", "1.4.0"]) {
+    assert.deepEqual(novidadesDesde(base).map((n) => n.versao), esperado(base), `base ${base}`);
+  }
 
-  // versão antiga vê o histórico inteiro, mais recente primeiro
-  const de12 = novidadesDesde("1.2.0").map((n) => n.versao);
-  assert.deepEqual(de12, ["1.4.0", "1.3.0"]);
+  // quem já está na última versão não vê novidade nenhuma
+  assert.equal(novidadesDesde(VERSAO_EXTENSAO).length, 0);
+
+  // o histórico inclui as versões da leitura de itens e da atualização em 1 clique
+  const todas = novidadesDesde("0.0.1").map((n) => n.versao);
+  for (const versao of ["1.3.0", "1.4.0"]) assert.ok(todas.includes(versao), `histórico sem ${versao}`);
 
   // sem versão instalada, mostra tudo (a extensão decide o que fazer)
   assert.equal(novidadesDesde(null).length, NOVIDADES_EXTENSAO.length);

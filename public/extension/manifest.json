@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.4.0",
-  "description": "Lê os itens da página do ComprasNet no sistema, preenche propostas a partir da planilha e se atualiza em um clique quando o app é atualizado.",
+  "version": "1.5.0",
+  "description": "Lê os itens da página do ComprasNet, preenche propostas (item a item, com Salvar) e se atualiza em um clique quando o app é atualizado.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -38,7 +38,9 @@
         "https://*.compras.gov.br/*",
         "https://www.gov.br/compras*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],

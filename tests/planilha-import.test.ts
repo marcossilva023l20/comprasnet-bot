@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import * as XLSX from "xlsx";
+import { lerLinhasDaPlanilha, montarPayloadImportacao } from "../src/lib/planilha-import";
+import { COLUNAS_EXPORTACAO, LARGURAS_EXPORTACAO, montarLinhasExportacao } from "../src/lib/planilha-export";
+
+/** Linha no formato entregue por `XLSX.utils.sheet_to_json(sheet, { defval: "" })`. */
+const linhaExportada = (over: Record<string, unknown> = {}) => ({
+  Item: 1,
+  Descrição: "PNEU 175/70 R13",
+  "Descrição Detalhada": "PNEU 175/70 R13 82T",
+  Quantidade: 4,
+  Unidade: "UNIDADE",
+  "Valor Estimado (R$)": 37553.33,
+  "Valor Unitário (R$)": 1234.56,
+  "Marca/Fabricante": "MICHELIN",
+  "Modelo/Versão": "PRIMACY 4",
+  Enviado: "Não",
+  ...over,
+});
+
+test("planilha exportada pelo sistema: lê número, valores BR e colunas presentes", () => {
+  const { linhas, modo, invalidos, duplicados } = lerLinhasDaPlanilha([
+    linhaExportada(),
+    linhaExportada({ Item: 2, Descrição: "CÂMARA DE AR", "Valor Unitário (R$)": "R$ 1.234,50" }),
+  ]);
+
+  assert.equal(modo, "atualizar");
+  assert.deepEqual(invalidos, []);
+  assert.deepEqual(duplicados, []);
+  assert.equal(linhas.length, 2);
+  assert.equal(linhas[0].numeroItem, 1);
+  assert.equal(linhas[1].numeroItem, 2);
+  assert.equal(linhas[0].descricao, "PNEU 175/70 R13");
+  assert.equal(linhas[0].quantidade, "4");
+  assert.equal(linhas[0].valorEstimado, "37553.33");
+  assert.equal(linhas[1].valorUnitario, "1234.50");
+  assert.equal(linhas[0].marcaFabricante, "MICHELIN");
+  assert.deepEqual(linhas[0].colunas, {
+    descricaoDetalhada: true,
+    quantidade: true,
+    unidade: true,
+    valorEstimado: true,
+    valorUnitario: true,
+    marcaFabricante: true,
+    modeloVersao: true,
+  });
+});
+
+test("colunas ausentes não são tocadas e célula em branco em coluna presente apaga o valor", () => {
+  const { linhas } = lerLinhasDaPlanilha([
+    { Item: 1, Descrição: "PARAFUSO", "Valor Unitário (R$)": "" },
+    { Nº: 2, Descricao: "ARRUELA", "Marca/Fabricante": "  " },
+  ]);
+
+  // 1ª linha: só Item/Descrição/Valor Unitário vieram na planilha
+  assert.equal(linhas[0].colunas.valorUnitario, true);
+  assert.equal(linhas[0].valorUnitario, null); // branco = apagar
+  assert.equal(linhas[0].colunas.marcaFabricante, false);
+  assert.equal(linhas[0].colunas.quantidade, false);
+  assert.equal(linhas[0].quantidade, null);
+  assert.equal(linhas[0].marcaFabricante, null);
+
+  // 2ª linha: Marca em branco apaga; Descrição lida do alias "Descricao"
+  assert.equal(linhas[1].numeroItem, 2);
+  assert.equal(linhas[1].marcaFabricante, null);
+  assert.equal(linhas[1].colunas.marcaFabricante, true);
+  assert.equal(linhas[1].descricao, "ARRUELA");
+});
+
+test("planilha sem números é somada à proposta, depois do último item", () => {
+  const { linhas, modo } = lerLinhasDaPlanilha(
+    [{ Descrição: "CANETA", Quantidade: 10 }, { Descrição: "LÁPIS", Quantidade: 5 }],
+    { numeroBase: 7 },
+  );
+
+  assert.equal(modo, "adicionar");
+  assert.deepEqual(linhas.map((l) => l.numeroItem), [8, 9]);
+});
+
+test("planilha mista: quem tem número atualiza, quem não tem entra depois do maior número", () => {
+  const { linhas, modo } = lerLinhasDaPlanilha(
+    [
+      { Item: 3, Descrição: "ITEM TRÊS" },
+      { Descrição: "ITEM NOVO SEM NÚMERO" },
+      { Item: 1, Descrição: "ITEM UM" },
+    ],
+    { numeroBase: 2 },
+  );
+
+  assert.equal(modo, "atualizar");
+  assert.deepEqual(linhas.map((l) => l.numeroItem), [3, 4, 1]);
+  assert.deepEqual(linhas.map((l) => l.descricao), ["ITEM TRÊS", "ITEM NOVO SEM NÚMERO", "ITEM UM"]);
+});
+
+test("linhas sem descrição são ignoradas sem derrubar a importação", () => {
+  const { linhas, ignoradasSemDescricao } = lerLinhasDaPlanilha([
+    { Item: 1, Descrição: "" },
+    { Item: 2, Descrição: "   " },
+    { Item: 3, Descrição: "VÁLIDO" },
+  ]);
+
+  assert.equal(ignoradasSemDescricao, 2);
+  assert.deepEqual(linhas.map((l) => l.descricao), ["VÁLIDO"]);
+});
+
+test("números repetidos na planilha são recusados com a linha de cada um", () => {
+  const { linhas, duplicados, invalidos } = lerLinhasDaPlanilha([
+    { Item: 5, Descrição: "PRIMEIRO" },
+    { Item: 5, Descrição: "SEGUNDO" },
+  ]);
+
+  assert.deepEqual(linhas, []);
+  assert.deepEqual(duplicados, [5]);
+  assert.equal(invalidos.length, 1);
+  assert.match(invalidos[0], /linha 3: item 5 repetido/);
+});
+
+test("valores inválidos apontam a linha e o campo", () => {
+  const { invalidos } = lerLinhasDaPlanilha([
+    { Item: "abc", Descrição: "NÚMERO RUIM" },
+    { Item: 2, Descrição: "VALOR RUIM", "Valor Unitário (R$)": "mil reais" },
+    { Item: 3, Descrição: "QUANTIDADE RUIM", Quantidade: "vários" },
+  ]);
+
+  assert.equal(invalidos.length, 3);
+  assert.match(invalidos[0], /linha 2: número do item/);
+  assert.match(invalidos[1], /linha 3: valor unitário/);
+  assert.match(invalidos[2], /linha 4: quantidade/);
+});
+
+test("payload do Postgres usa snake_case e sinaliza as colunas presentes", () => {
+  const { linhas } = lerLinhasDaPlanilha([{ Item: 9, Descrição: "ITEM", "Marca/Fabricante": "ACME" }]);
+
+  assert.deepEqual(montarPayloadImportacao(linhas), [
+    {
+      numero_item: 9,
+      descricao: "ITEM",
+      descricao_detalhada: null,
+      quantidade: null,
+      unidade: null,
+      valor_estimado: null,
+      valor_unitario: null,
+      marca_fabricante: "ACME",
+      modelo_versao: null,
+      set_descricao_detalhada: false,
+      set_quantidade: false,
+      set_unidade: false,
+      set_valor_estimado: false,
+      set_valor_unitario: false,
+      set_marca_fabricante: true,
+      set_modelo_versao: false,
+    },
+  ]);
+});
+
+test("ida e volta: exportar → editar no Excel → importar devolve os mesmos itens", () => {
+  const itens = [
+    {
+      numeroItem: 1,
+      descricao: "PNEU 175/70 R13",
+      descricaoDetalhada: "PNEU 175/70 R13 82T DIANTEIRO",
+      quantidade: "4.0000",
+      unidade: "UNIDADE",
+      valorEstimado: "37553.3300",
+      valorUnitario: "1234.5600",
+      marcaFabricante: "MICHELIN",
+      modeloVersao: "PRIMACY 4",
+      enviado: true,
+    },
+    {
+      numeroItem: 7,
+      descricao: "CAMARA DE AR 175/70",
+      descricaoDetalhada: null,
+      quantidade: "2.0000",
+      unidade: "PAR",
+      valorEstimado: null,
+      valorUnitario: null,
+      marcaFabricante: null,
+      modeloVersao: null,
+      enviado: false,
+    },
+  ];
+
+  // 1) exporta igual ao GET /api/propostas/:id/exportar
+  const linhas = montarLinhasExportacao(itens);
+  assert.deepEqual(Object.keys(linhas[0]), [...COLUNAS_EXPORTACAO]);
+  assert.equal(LARGURAS_EXPORTACAO.length, COLUNAS_EXPORTACAO.length);
+  const ws = XLSX.utils.json_to_sheet(linhas, { header: [...COLUNAS_EXPORTACAO] });
+  ws["!cols"] = LARGURAS_EXPORTACAO.map((wch) => ({ wch }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Itens");
+  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  // 2) o usuário abre no Excel, edita e salva — aqui só simulamos a releitura
+  const lido = XLSX.read(buffer, { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(lido.Sheets[lido.SheetNames[0]], { defval: "" });
+
+  // 3) importa
+  const { linhas: importadas, modo, invalidos, ignoradasSemDescricao } = lerLinhasDaPlanilha(rows);
+
+  assert.deepEqual(invalidos, []);
+  assert.equal(ignoradasSemDescricao, 0);
+  assert.equal(modo, "atualizar");
+  assert.equal(importadas.length, 2);
+
+  const original = (indice: number) => ({
+    numeroItem: itens[indice].numeroItem,
+    descricao: itens[indice].descricao,
+    descricaoDetalhada: itens[indice].descricaoDetalhada,
+    quantidade: Number(itens[indice].quantidade),
+    unidade: itens[indice].unidade,
+    valorEstimado: itens[indice].valorEstimado === null ? null : Number(itens[indice].valorEstimado),
+    valorUnitario: itens[indice].valorUnitario === null ? null : Number(itens[indice].valorUnitario),
+    marcaFabricante: itens[indice].marcaFabricante,
+    modeloVersao: itens[indice].modeloVersao,
+  });
+  const relido = (indice: number) => ({
+    numeroItem: importadas[indice].numeroItem,
+    descricao: importadas[indice].descricao,
+    descricaoDetalhada: importadas[indice].descricaoDetalhada,
+    quantidade: importadas[indice].quantidade === null ? null : Number(importadas[indice].quantidade),
+    unidade: importadas[indice].unidade,
+    valorEstimado: importadas[indice].valorEstimado === null ? null : Number(importadas[indice].valorEstimado),
+    valorUnitario: importadas[indice].valorUnitario === null ? null : Number(importadas[indice].valorUnitario),
+    marcaFabricante: importadas[indice].marcaFabricante,
+    modeloVersao: importadas[indice].modeloVersao,
+  });
+
+  assert.deepEqual(relido(0), original(0));
+  assert.deepEqual(relido(1), original(1));
+  // todas as colunas vieram: a importação atualiza tudo o que foi exportado
+  assert.deepEqual(importadas[1].colunas, {
+    descricaoDetalhada: true,
+    quantidade: true,
+    unidade: true,
+    valorEstimado: true,
+    valorUnitario: true,
+    marcaFabricante: true,
+    modeloVersao: true,
+  });
+});

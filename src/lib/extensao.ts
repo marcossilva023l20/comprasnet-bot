@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.4.0";
+export const VERSAO_EXTENSAO = "1.5.0";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,15 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.5.0",
+    itens: [
+      "Ler itens da página agora clica na seta “mostrar detalhes” — nunca mais em Favoritos",
+      "Lista escondida atrás de “Mostrar todos os itens” é aberta automaticamente",
+      "Descrição e descrição detalhada lidas corretamente (o painel expandido não vira a descrição principal)",
+      "Preenchimento item a item, salvando cada item no seu próprio botão Salvar",
+    ],
+  },
   {
     versao: "1.4.0",
     itens: [

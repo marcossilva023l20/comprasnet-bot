@@ -196,8 +196,11 @@ Além de preencher o ComprasNet, a extensão lê a lista de itens publicada na p
 e envia para o sistema — assim os itens deixam de ser digitados/planilhados à mão:
 
 1. abra a página de cadastro de propostas do ComprasNet com os itens visíveis;
-2. no popup, clique em **📥 Ler itens da página** (a extensão pode expandir cada
-   item — "mostrar detalhes" — para trazer a descrição completa);
+2. no popup, clique em **📥 Ler itens da página** — a extensão clica na **seta
+   "mostrar detalhes"** de cada item (botões como "Favoritos" são reconhecidos e nunca
+   clicados) para trazer a descrição completa; se a lista estiver atrás de um
+   **"Mostrar todos os itens"**, ela abre sozinha. A descrição resumida vem da coluna do
+   item e a detalhada, do painel que abre com a seta;
 3. confira os itens lidos e o destino detectado (UASG / número da compra);
 4. marque a confirmação e clique em **⬆️ Enviar para o sistema**.
 
@@ -217,11 +220,39 @@ itens anteriores intactos (o driver HTTP do Neon não suporta transações, e es
 solução não depende delas). Linhas que o ComprasNet não mostra (valor unitário,
 marca e modelo) ficam em branco, prontas para o preenchimento pelo bot.
 
+### Exportar → editar no Excel → importar (atualiza, não duplica)
+
+Depois de trazer os itens da página (ou importar uma planilha), dá para trabalhar no Excel:
+
+1. na proposta, clique em **📤 Exportar Planilha** (`GET /api/propostas/:id/exportar`);
+2. edite as colunas que quiser (Valor Unitário, Marca/Fabricante, Modelo/Versão...) e salve;
+3. na proposta, clique em **📥 Importar Planilha** (`POST /api/propostas/:id/importar`).
+
+Como a importação decide o que fazer (`src/lib/planilha-import.ts`):
+
+| Na planilha | O que acontece |
+| --- | --- |
+| Número da coluna `Item` que já existe | O item é **atualizado** (não duplica) |
+| Número novo | Vira um item novo |
+| Coluna ausente | O valor que está no sistema é preservado |
+| Coluna presente com célula em branco | O valor é **apagado** (é assim que se limpa pelo Excel) |
+| Planilha sem a coluna `Item` | Os itens entram **depois** do último número existente |
+| Números repetidos / valores inválidos | A importação é recusada inteira (nada é alterado) |
+
+`Quantidade` e `Unidade` são obrigatórias: célula em branco nelas mantém o valor atual.
+Itens cujo preenchimento mudou voltam para `enviado = false`, ou seja, entram de novo na
+fila do bot. Tudo roda em **um único statement** (CTE com `UPDATE` + `INSERT`), então uma
+falha no meio não deixa a proposta pela metade.
+
+O ciclo tem teste de ida-e-volta: a planilha exportada é relida e reimportada em
+`tests/planilha-import.test.ts`, garantindo que exportar → editar → importar devolve os
+mesmos itens (a coluna `Item` é a chave).
+
 ## Como usar
 
-1. Crie uma proposta e importe a planilha Excel com os itens
-2. Preencha Valor Unitário, Marca/Fabricante e Modelo/Versão
+1. Crie uma proposta e importe a planilha Excel com os itens (ou traga os itens da página do ComprasNet)
+2. Preencha Valor Unitário, Marca/Fabricante e Modelo/Versão — no sistema ou na planilha exportada
 3. Instale a extensão Chrome
 4. Acesse o ComprasNet → Cadastrar Propostas e expanda os itens
 5. Abra a extensão, selecione a proposta e clique **Ler página** para mapear os campos
-6. Confira os campos encontrados e clique **Executar Bot!**
+6. Confira os campos encontrados e clique **Executar Bot!** — o preenchimento é **item a item** e cada item é salvo no seu próprio botão **Salvar**

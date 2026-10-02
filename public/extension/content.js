@@ -499,6 +499,7 @@ async function fillSingleItem(item, allowUnassignedFields) {
   }
 
   await sleep(200);
+  showNotification(`💾 Item ${itemNumber}: salvando...`, "info");
   const saved = await clickSalvar(itemNumber, allowUnassignedFields);
   if (!saved) {
     warnings.push(`Item ${itemNumber}: campos preenchidos; não localizei um botão Salvar dentro do item. Confira a página antes de enviar.`);
@@ -523,39 +524,40 @@ function getFieldsForItem(itemNumber, allowUnassignedFields) {
 
 async function tryExpandItem(itemNumber) {
   const target = normalizeItemNumber(itemNumber);
-  const selectors = [
-    'button[aria-expanded="false"]',
-    'a[aria-expanded="false"]',
-    'button[data-toggle="collapse"]',
-    'button[data-bs-toggle="collapse"]',
-    'a[data-toggle="collapse"]',
-    '[class*="accordion"] button',
-    '[class*="collapse-header"]',
-    '[class*="item-header"]',
-  ];
-  const seen = new Set();
+  const visto = new Set();
+  const candidatos = [];
 
   for (const doc of collectDocuments()) {
-    for (const element of doc.querySelectorAll(selectors.join(","))) {
-      if (seen.has(element) || !isVisible(element)) continue;
-      seen.add(element);
+    for (const el of doc.querySelectorAll(
+      'button, a, [role="button"], [aria-expanded], [data-toggle="collapse"], [data-bs-toggle="collapse"]',
+    )) {
+      if (visto.has(el) || !isVisible(el)) continue;
+      visto.add(el);
 
-      const state = element.getAttribute("aria-expanded");
-      if (state === "true") continue;
+      const pontos = pontuarBotaoExpandir(el);
+      if (pontos <= 0) continue; // "Favoritos", "Salvar", "Imprimir"... nunca.
+      if (el.getAttribute("aria-expanded") === "true") continue;
 
-      const directText = `${element.textContent || ""} ${element.getAttribute("aria-label") || ""}`;
-      const directNumbers = getExplicitItemNumbers(directText);
-      const context = findItemContext(element);
-      const matchesItem = directNumbers.includes(target) || context?.number === target;
-      if (!matchesItem) continue;
+      const direto = `${el.textContent || ""} ${el.getAttribute("aria-label") || ""}`;
+      const contexto = findItemContext(el);
+      const combina = getExplicitItemNumbers(direto).includes(target) || contexto?.number === target;
+      if (!combina) continue;
 
-      element.click();
-      await sleep(400);
-      return true;
+      candidatos.push({ el, pontos });
     }
   }
 
-  return false;
+  candidatos.sort((a, b) => b.pontos - a.pontos);
+  const melhor = candidatos[0]?.el;
+  if (!melhor) return false;
+
+  try {
+    melhor.click();
+  } catch (_) {
+    return false;
+  }
+  await sleep(400);
+  return true;
 }
 
 async function setInputValue(input, rawValue) {
@@ -598,30 +600,65 @@ async function setInputValue(input, rawValue) {
   return true;
 }
 
+/**
+ * Textos aceitos como "Salvar" (o ComprasNet varia entre telas: "Salvar",
+ * "Salvar Item", "Gravar", "Confirmar", com/sem ícone dentro).
+ */
+const TEXTO_BOTAO_SALVAR = /^(salvar|gravar|confirmar|save)(\s+(item|itens|dados|altera[cç][õo]es|e\s+[a-zçãõéíóú]+))?$/;
+
+function ehBotaoSalvar(el) {
+  if (!el || !isVisible(el) || el.disabled) return false;
+  const texto = normalizeText(
+    el.textContent || el.value || el.getAttribute("aria-label") || el.title || "",
+  );
+  if (!texto) return false;
+  return TEXTO_BOTAO_SALVAR.test(texto);
+}
+
 async function clickSalvar(itemNumber, allowUnassignedFields) {
   const state = scanPage();
   const key = normalizeItemNumber(itemNumber);
   const group = latestScanState?.itemGroups.get(key);
-  const candidates = [];
 
+  // Escopos em ordem de preferência: o contêiner exato do item, o contexto do
+  // item um pouco mais acima e — só quando a página não tem itens numerados —
+  // o documento inteiro.
+  const escopos = [];
   if (group?.container) {
-    candidates.push(...group.container.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'));
-  } else if (allowUnassignedFields && state.itemCount === 0) {
-    for (const doc of collectDocuments()) {
-      candidates.push(...doc.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'));
+    escopos.push(group.container);
+    const contexto = findItemContext(group.container);
+    if (contexto?.container && contexto.container !== group.container) escopos.push(contexto.container);
+  }
+  if (allowUnassignedFields && state.itemCount === 0) escopos.push(...collectDocuments());
+
+  for (const escopo of escopos) {
+    const botao = [...escopo.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')]
+      .find(ehBotaoSalvar);
+    if (botao) {
+      botao.click();
+      await sleep(600);
+      return true;
     }
   }
 
-  const button = candidates.find((candidate) => {
-    if (!isVisible(candidate) || candidate.disabled) return false;
-    const text = normalizeText(candidate.textContent || candidate.value || candidate.getAttribute("aria-label"));
-    return /^(salvar|salvar item|save|save item|gravar|gravar item|confirmar|confirmar item)$/.test(text);
-  });
+  // Último recurso: existe exatamente um "Salvar" visível na página (itens em
+  // modal ou um formulário por vez) — clica nele em vez de deixar o item sem
+  // salvar.
+  const globais = [];
+  for (const doc of collectDocuments()) {
+    globais.push(
+      ...[...doc.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"], a')].filter(
+        ehBotaoSalvar,
+      ),
+    );
+  }
+  if (globais.length === 1) {
+    globais[0].click();
+    await sleep(600);
+    return true;
+  }
 
-  if (!button) return false;
-  button.click();
-  await sleep(600);
-  return true;
+  return false;
 }
 
 // ─── Leitura dos itens da página (extensão → sistema) ────────────────────────
@@ -641,11 +678,66 @@ const PAGE_LABELS = [
   /declara[cç][aã]o/i,
 ];
 
+/**
+ * Texto que é *só* o rótulo de um campo (nada de descrição). Ancorado de
+ * propósito: "PEÇA COM MARCA FABRICANTE DEFINIDA" continua sendo descrição.
+ */
+const ROTULO_DE_CAMPO = new RegExp(
+  "^(?:valor\\s+unit[aá]rio(?:\\s*\\(\\s*r\\$\\s*\\))?|marca(?:\\s*\\/\\s*|\\s+)fabricante|" +
+    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|quantidade(?:\\s+solicitada)?|unidade(?:\\s+de\\s+fornecimento)?|" +
+    "descri[cç][aã]o(?:\\s+detalhada)?|termo\\s+de\\s+aceita[cç][aã]o)\\s*:?\\s*\\*?$",
+  "i",
+);
+
+/**
+ * "Expandir/Mostrar todos os itens": algumas telas do ComprasNet só montam a
+ * lista depois desse clique. Só é usado quando a busca normal não achou item
+ * nenhum — assim não interfere na leitura item a item.
+ */
+async function expandirTodos(delay) {
+  const candidatos = [];
+
+  for (const doc of collectDocuments()) {
+    for (const el of doc.querySelectorAll('button, a, [role="button"], [class*="expand"], [class*="collapse"]')) {
+      if (!isVisible(el)) continue;
+      const rotulo = `${textoDoBotao(el)} ${pistasDoBotao(el)}`;
+      if (!/(expandir|mostrar|abrir|ver)\s+(todos|tudo|todas)/.test(rotulo)) continue;
+      if (BOTAO_EXPANDIR_BLOQUEADO.test(rotulo)) continue;
+      candidatos.push({ el, pontos: pontuarBotaoExpandir(el) + 20 });
+    }
+  }
+
+  candidatos.sort((a, b) => b.pontos - a.pontos);
+  const botao = candidatos[0]?.el;
+  if (!botao) return false;
+
+  try {
+    botao.click();
+  } catch (_) {
+    return false;
+  }
+  await sleep(delay + 300);
+  return true;
+}
+
 async function readPageItems({ expandir = true, delay = 400 } = {}) {
   const avisos = [];
   const identificacao = readPageIdentificacao();
 
-  const blocos = findItemBlocks();
+  let blocos = findItemBlocks();
+  let expandiuTodos = false;
+
+  // A lista pode estar atrás de um "Mostrar todos os itens" — tenta esse clique
+  // antes de desistir.
+  if (blocos.length === 0) {
+    expandiuTodos = await expandirTodos(delay);
+    if (expandiuTodos) blocos = findItemBlocks();
+  }
+
+  // Última tentativa: itens montados mas escondidos (o conteúdo só aparece
+  // depois de abrir cada um) — mantém o comportamento anterior da extensão.
+  if (blocos.length === 0) blocos = findItemBlocks({ exigirVisivel: false });
+
   if (blocos.length === 0) {
     return {
       ok: false,
@@ -669,14 +761,16 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
 
     const numero = itemNumberFromBlock(bloco) || String(index + 1);
 
+    // A seta "mostrar detalhes" costuma ficar no cabeçalho do item, fora do
+    // bloco de detalhes — então a busca usa o escopo do item (que nunca engole
+    // outro item) e acontece antes de expandir.
+    const escopo = findItemScope(bloco, blocos);
+
     if (expandir) {
-      const abriu = await expandItemBlock(bloco, delay);
+      const abriu = await expandItemBlock(escopo, delay);
       if (abriu) expandidos += 1;
     }
 
-    // Depois de expandir, o painel de detalhes pode estar num irmão do bloco:
-    // amplia o escopo enquanto ele não engolir outro item da lista.
-    const escopo = findItemScope(bloco, blocos);
     const dados = extractItemData(escopo, numero);
     if (!dados.descricao) {
       avisos.push(`Item ${numero}: não consegui ler a descrição; confira na página antes de enviar.`);
@@ -695,6 +789,7 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
     itens,
     total: itens.length,
     expandidos,
+    expandiuTodos,
     avisos,
   };
 }
@@ -761,7 +856,28 @@ function numeroCompraDaUrl() {
  *   - contém "Valor estimado" ou um valor em R$.
  * Blocos repetidos (contêineres maiores que envolvem os itens) são descartados.
  */
-function findItemBlocks() {
+/**
+ * Texto que está de fato aparecendo, ignorando nós escondidos (display:none).
+ * É o que evita "achar" um item cujo conteúdo só aparece depois de clicar em
+ * "Mostrar todos os itens".
+ */
+function textoVisivel(el) {
+  const partes = [];
+  try {
+    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const pai = node.parentElement;
+      if (!pai || !isVisible(pai)) continue;
+      partes.push(node.nodeValue);
+    }
+  } catch (_) {
+    return (el.textContent || "").replace(/\s+/g, " ").trim();
+  }
+  return partes.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function findItemBlocks({ exigirVisivel = true } = {}) {
   const candidatos = [];
 
   for (const doc of collectDocuments()) {
@@ -773,6 +889,13 @@ function findItemBlocks() {
       if (!bruto || bruto.length > 3000) continue;
       if (!/quantidade\s+solicitada/i.test(bruto)) continue;
       if (!/valor\s+estimado/i.test(bruto) && !/r\$/i.test(bruto)) continue;
+
+      // Confirma pelo que está VISÍVEL: itens escondidos atrás de um
+      // "Mostrar todos os itens" não contam (quem cuida disso é expandirTodos).
+      if (exigirVisivel) {
+        const visivel = textoVisivel(el);
+        if (!visivel || !/quantidade\s+solicitada/i.test(visivel)) continue;
+      }
 
       const numero = itemNumberFromBlock(el);
       if (!numero) continue;
@@ -835,7 +958,7 @@ function findItemScope(bloco, todosOsBlocos) {
 }
 
 function extractItemData(bloco, numero) {
-  const bruto = (bloco.textContent || "").replace(/\s+/g, " ").trim();
+  const bruto = textoVisivel(bloco) || (bloco.textContent || "").replace(/\s+/g, " ").trim();
 
   const quantidade =
     firstMatch(bruto, /quantidade\s+solicitada\s*:?\s*([0-9][0-9.,]*)/i) || "";
@@ -845,7 +968,12 @@ function extractItemData(bloco, numero) {
     firstMatch(bruto, /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?\s*:?\s*(R\$\s*[0-9][0-9.,]*|[0-9][0-9.,]*)/i) || "";
 
   const trechos = collectCleanTexts(bloco);
-  const descricao = escolherDescricao(trechos, collectAttributeTexts(bloco));
+  const resumo = collectCleanTexts(bloco, { ignorarDetalhes: true });
+  const atributosResumo = collectAttributeTexts(bloco, { ignorarDetalhes: true });
+  const descricao = escolherDescricao(
+    resumo.length ? resumo : trechos,
+    atributosResumo.length ? atributosResumo : collectAttributeTexts(bloco),
+  );
   const descricaoDetalhada = escolherDescricaoDetalhada(bloco, trechos, descricao);
 
   return {
@@ -863,8 +991,23 @@ function firstMatch(texto, regex) {
   return match ? String(match[1]).trim() : "";
 }
 
-/** Texto de cada nó do bloco, já sem rótulos, números soltos e ruído de UI. */
-function collectCleanTexts(bloco) {
+/** Contêineres do painel que abre com a "seta" (descrição detalhada). */
+const PAINEL_DE_DETALHES = '[class*="detalh"], [class*="detail"], [class*="collapse"], [class*="accordion"]';
+
+function dentroDePainelDeDetalhes(el) {
+  try {
+    return Boolean(el?.closest?.(PAINEL_DE_DETALHES));
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Texto de cada nó do bloco, já sem rótulos, números soltos e ruído de UI.
+ * Com `ignorarDetalhes`, pula o painel que abre com a seta — é o que separa a
+ * descrição resumida (coluna do item) da descrição detalhada.
+ */
+function collectCleanTexts(bloco, { ignorarDetalhes = false } = {}) {
   const textos = [];
   const vistos = new Set();
 
@@ -883,6 +1026,7 @@ function collectCleanTexts(bloco) {
       const pai = node.parentElement;
       if (!pai || !isVisible(pai)) continue;
       if (pai.tagName === "SCRIPT" || pai.tagName === "STYLE") continue;
+      if (ignorarDetalhes && dentroDePainelDeDetalhes(pai)) continue;
       adicionar(node.nodeValue);
     }
   } catch (_) {
@@ -893,6 +1037,7 @@ function collectCleanTexts(bloco) {
   // Títulos/atributos costumam guardar o texto completo que a célula corta.
   for (const el of bloco.querySelectorAll("[title], [aria-label]")) {
     if (!isVisible(el)) continue;
+    if (ignorarDetalhes && dentroDePainelDeDetalhes(el)) continue;
     adicionar(el.getAttribute("title"));
     adicionar(el.getAttribute("aria-label"));
   }
@@ -900,11 +1045,12 @@ function collectCleanTexts(bloco) {
   return textos;
 }
 
-function collectAttributeTexts(el) {
+function collectAttributeTexts(el, { ignorarDetalhes = false } = {}) {
   const textos = [];
   const vistos = new Set();
   for (const alvo of el.querySelectorAll("[title], [aria-label]")) {
     if (!isVisible(alvo)) continue;
+    if (ignorarDetalhes && dentroDePainelDeDetalhes(alvo)) continue;
     for (const bruto of [alvo.getAttribute("title"), alvo.getAttribute("aria-label")]) {
       const texto = limparDescricao(bruto);
       if (!texto || texto.length < 8 || vistos.has(texto)) continue;
@@ -926,7 +1072,10 @@ function collectAttributeTexts(el) {
 function limparDescricao(valor) {
   let texto = String(valor || "").replace(/\s+/g, " ").trim();
   if (!texto) return "";
-  if (PAGE_LABELS.some((regex) => regex.test(texto))) return "";
+  if (ROTULO_DE_CAMPO.test(texto)) return "";
+
+  // Rótulos conhecidos ("Quantidade Solicitada: 4") saem, o valor fica.
+  for (const regex of PAGE_LABELS) texto = texto.replace(new RegExp(regex.source, "gi"), " ");
 
   texto = texto
     .replace(/r\$\s*[0-9][0-9.,]*/gi, " ")
@@ -976,43 +1125,125 @@ function escolherDescricaoDetalhada(bloco, trechos, descricao) {
 
   const todos = [...candidatos, ...trechos]
     .filter((texto) => texto && texto !== descricao)
-    .filter((texto) => texto.length >= 30);
+    .filter((texto) => texto.length >= 15 && /[A-Za-zÀ-ÿ]{3}/.test(texto))
+    .filter((texto) => texto.split(" ").length >= 2);
 
   if (todos.length === 0) return "";
 
   const melhor = todos.sort((a, b) => b.length - a.length)[0];
-  if (descricao && melhor.length <= descricao.length + 15) return "";
+  if (descricao && melhor.length <= descricao.length + 5) return "";
   return melhor.slice(0, 4000);
 }
 
-function findExpandButton(bloco) {
-  const candidatos = [...bloco.querySelectorAll('button, a, [role="button"], [aria-expanded]')].filter(isVisible);
-  if (candidatos.length === 0) return null;
+// Botões que nunca são o "mostrar detalhes": o clique errado cai neles quando
+// o item tem um botão de Favoritos com ícone de estrela/coração (que parece
+// uma seta). Bloquear pelo texto, aria-label, classe e ícones filhos.
+const BOTAO_EXPANDIR_BLOQUEADO = /\b(favorit\w*|favourite\w*|curtir|curtida|like|estrela\w*|star|heart|coracao|bookmark|marcador|salvar|save|gravar|enviar|submit|excluir|deletar|remov\w*|editar|alterar|cancelar|voltar|copiar|duplicar\w*|imprimir|print|baixar|download|anexo\w*|attach\w*|compartilh\w*|share)\b/i;
+const BOTAO_EXPANDIR_PISTAS = /(detalh|detalhe|expand|mostrar|ocultar|chevron|arrow|angle|caret|seta|toggle|abrir|accordion|collapse|down|baixo|mais|indicator|sinal)/i;
+const BOTAO_EXPANDIR_TEXTO = /(detalh|mostrar|ocultar|expandir|ver mais|abrir|mais informa)/i;
 
-  const porEstado = candidatos.find((el) => el.getAttribute("aria-expanded") === "false");
-  if (porEstado) return porEstado;
-
-  const porAtributo = candidatos.find((el) => {
-    const pistas = `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${
-      typeof el.className === "string" ? el.className : ""
-    }`;
-    return /detalh|detalhe|expand|mostrar|chevron|toggle|abrir/i.test(pistas);
-  });
-  if (porAtributo) return porAtributo;
-
-  const porTexto = candidatos.find((el) => /detalh|mostrar|ocultar|expandir/i.test(normalizeText(el.textContent || "")));
-  if (porTexto) return porTexto;
-
-  // Botão só com ícone (chevron) dentro do item.
-  return candidatos.find((el) => !normalizeText(el.textContent || "").trim() && el.querySelector("svg, i, img")) || null;
+function textoDoBotao(el) {
+  return normalizeText(
+    `${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.title || ""} ${el.value || ""}`,
+  );
 }
 
-async function expandItemBlock(bloco, delay) {
-  const botao = findExpandButton(bloco);
-  if (!botao) return false;
+/** Texto, título, classe e classes/alt dos ícones filhos (fonte das pistas). */
+function pistasDoBotao(el) {
+  const classe = typeof el.className === "string" ? el.className : "";
+  const filhos = [...el.querySelectorAll("i, svg, img, span, use")]
+    .map((filho) => {
+      const classeFilho = typeof filho.className === "string" ? filho.className : "";
+      return `${classeFilho} ${filho.getAttribute?.("src") || ""} ${filho.getAttribute?.("alt") || ""} ${
+        filho.getAttribute?.("title") || ""
+      } ${filho.getAttribute?.("href") || ""}`;
+    })
+    .join(" ");
+
+  return normalizeText(
+    `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${classe} ${el.id || ""} ${
+      el.getAttribute("data-testid") || ""
+    } ${el.getAttribute("data-toggle") || ""} ${el.getAttribute("data-bs-toggle") || ""} ${filhos}`,
+  );
+}
+
+/**
+ * Pontua um candidato a "mostrar detalhes". Devolve <= 0 para o que nunca deve
+ * ser clicado (Favoritos, Salvar...), por mais que pareça uma seta.
+ */
+function pontuarBotaoExpandir(el) {
+  const texto = textoDoBotao(el);
+  const pistas = pistasDoBotao(el);
+  const rotulo = `${texto} ${pistas}`;
+
+  if (BOTAO_EXPANDIR_BLOQUEADO.test(rotulo)) return -1000;
+  if (el.matches?.('input[type="submit"], button[type="submit"], [aria-disabled="true"]')) return -500;
+
+  let pontos = 0;
+  if (el.getAttribute("aria-expanded") === "false") pontos += 60;
+  const toggle = `${el.getAttribute("data-toggle") || ""} ${el.getAttribute("data-bs-toggle") || ""}`;
+  if (/collapse/.test(toggle)) pontos += 45;
+  if (BOTAO_EXPANDIR_PISTAS.test(pistas)) pontos += 30;
+  if (BOTAO_EXPANDIR_TEXTO.test(texto)) pontos += 25;
+  if (el.tagName === "BUTTON") pontos += 6;
+  if (!normalizeText(el.textContent || "").trim() && el.querySelector("svg, i, img")) pontos += 15;
+  if (el.matches?.('a[href]')) pontos -= 10;
+
+  return pontos;
+}
+
+/** Sobe do ícone até o elemento clicável mais próximo (dentro do escopo). */
+function elementoClicavel(el, escopo) {
+  const clicavel = 'button, a, [role="button"], [onclick], [data-toggle], [data-bs-toggle], label, summary';
+  let node = el;
+  while (node && node !== escopo) {
+    if (node.matches?.(clicavel)) return node;
+    node = node.parentElement;
+  }
+  return el;
+}
+
+function findExpandButton(escopo) {
+  const seletor = [
+    'button[aria-expanded="false"]',
+    'a[aria-expanded="false"]',
+    "button",
+    "a",
+    '[role="button"]',
+    '[data-toggle="collapse"]',
+    '[data-bs-toggle="collapse"]',
+    '[class*="chevron"]',
+    '[class*="arrow"]',
+    '[class*="seta"]',
+    '[class*="caret"]',
+    '[class*="expand"]',
+  ].join(",");
+
+  return (
+    [...escopo.querySelectorAll(seletor)]
+      .filter((el) => isVisible(el))
+      .map((el) => ({ el, pontos: pontuarBotaoExpandir(el) }))
+      .filter((candidato) => candidato.pontos > 0)
+      .sort((a, b) => b.pontos - a.pontos)[0]?.el || null
+  );
+}
+
+/** Painéis de detalhes que estão de fato aparecendo dentro do escopo. */
+function contarPaineisVisiveis(raiz) {
+  return [...raiz.querySelectorAll(PAINEL_DE_DETALHES)].filter(isVisible).length;
+}
+
+async function expandItemBlock(escopo, delay) {
+  const candidato = findExpandButton(escopo);
+  if (!candidato) return false;
+
+  const botao = elementoClicavel(candidato, escopo);
   if (botao.getAttribute("aria-expanded") === "true") return false;
 
-  const tamanhoAntes = (bloco.textContent || "").length;
+  const tamanhoAntes = (escopo.textContent || "").length;
+  const alturaAntes = escopo.getBoundingClientRect?.().height || 0;
+  const paineisAntes = contarPaineisVisiveis(escopo);
+
   try {
     botao.click();
   } catch (_) {
@@ -1020,8 +1251,18 @@ async function expandItemBlock(bloco, delay) {
   }
   await sleep(delay);
 
-  const tamanhoDepois = (bloco.textContent || "").length;
-  return botao.getAttribute("aria-expanded") === "true" || tamanhoDepois > tamanhoAntes + 10;
+  const tamanhoDepois = (escopo.textContent || "").length;
+  const alturaDepois = escopo.getBoundingClientRect?.().height || 0;
+
+  // Três sinais de que abriu: o botão avisou, o conteúdo cresceu ou um painel
+  // de detalhes passou a aparecer (o que funciona mesmo com o painel montado
+  // escondido, como o site faz).
+  return (
+    botao.getAttribute("aria-expanded") === "true" ||
+    tamanhoDepois > tamanhoAntes + 10 ||
+    alturaDepois > alturaAntes + 10 ||
+    contarPaineisVisiveis(escopo) > paineisAntes
+  );
 }
 
 // ─── Visibilidade e utilidades ────────────────────────────────────────────────

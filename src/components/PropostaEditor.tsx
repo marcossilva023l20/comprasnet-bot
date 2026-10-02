@@ -205,6 +205,14 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
 
         <div className="flex items-center gap-2 flex-wrap">
           <input type="file" ref={fileInputRef} onChange={handleImport} accept=".xlsx,.xls,.csv" className="hidden" />
+          <a
+            href={`/api/propostas/${propostaId}/exportar`}
+            download
+            title="Baixa a planilha com Item, Descrição, Quantidade, Valor Estimado, Valor Unitário, Marca e Modelo — edite no Excel e importe de volta"
+            className="bg-white text-[#1351b4] border border-[#1351b4] hover:bg-blue-50 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+          >
+            📤 Exportar Planilha
+          </a>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={importLoading}
@@ -226,6 +234,19 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
           </button>
         </div>
       </div>
+
+      {/* Dica do ciclo planilha ↔ sistema */}
+      {items.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 text-xs text-blue-800 flex items-start gap-2">
+          <span>💡</span>
+          <span>
+            <strong>Exportar → editar no Excel → Importar:</strong> a planilha exportada traz os itens com a coluna{" "}
+            <code className="bg-white/70 px-1 rounded">Item</code>. Ao importar de volta, os itens são{" "}
+            <strong>atualizados pelo número</strong> (não duplicam) e só as colunas que existirem na planilha são
+            alteradas. Números novos viram itens novos; para apagar um valor, deixe a célula em branco.
+          </span>
+        </div>
+      )}
 
       {/* Add Item Modal */}
       {showAddItem && (

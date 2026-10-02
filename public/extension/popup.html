@@ -290,6 +290,12 @@
         <div class="card-title" style="margin-bottom:6px;">Itens lidos na página</div>
         <div class="items-list" id="import-list"></div>
       </div>
+      <div class="alert alert-info mt-2">
+        <strong>Editando os itens no Excel:</strong> abra a proposta no sistema,
+        clique em <strong>📤 Exportar Planilha</strong>, altere valor/marca/modelo e
+        devolva em <strong>📥 Importar Planilha</strong>. Os itens são atualizados
+        pelo número da coluna <strong>Item</strong> — nada é duplicado.
+      </div>
       <div id="import-envio" class="hidden mt-2">
         <label style="display:flex; align-items:flex-start; gap:6px; font-weight:600;">
           <input type="checkbox" id="import-confirmar" style="width:auto; margin-top:1px;" />
@@ -433,6 +439,16 @@
     </div>
 
     <div class="card">
+      <div class="card-title">📤 Editar os itens no Excel</div>
+      <div class="text-xs" style="line-height:1.8;">
+        <strong>1.</strong> No sistema, abra a proposta e clique em <strong>📤 Exportar Planilha</strong><br>
+        <strong>2.</strong> Edite no Excel (valor unitário, marca, modelo...) e salve<br>
+        <strong>3.</strong> Volte à proposta e clique em <strong>📥 Importar Planilha</strong><br>
+        <strong>4.</strong> Os itens são atualizados pelo número da coluna <strong>Item</strong> (sem duplicar)
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">📥 Importar itens da página</div>
       <div class="text-xs" style="line-height:1.8;">
         <strong>1.</strong> Abra a página de cadastro de propostas do ComprasNet com os itens visíveis<br>
@@ -464,7 +480,13 @@
         • <strong>Unidade</strong> — ex: Unidade, Rolo<br>
         • <strong>Valor Unitário (R$)</strong> — seu preço<br>
         • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
-        • <strong>Modelo/Versão</strong> — ex: ADVANCED
+        • <strong>Modelo/Versão</strong> — ex: ADVANCED<br>
+        • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet (📥 Ler itens da página)
+      </div>
+      <div class="alert alert-info mt-2" style="margin-bottom:0;">
+        A coluna <strong>Item</strong> é a chave: ao importar, itens com o mesmo número são
+        <strong>atualizados</strong> (não duplicam) e números novos viram itens novos. Só as
+        colunas presentes na planilha são alteradas; para apagar um valor, deixe a célula em branco.
       </div>
     </div>
   </div>
