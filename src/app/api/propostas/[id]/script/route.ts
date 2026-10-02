@@ -23,6 +23,7 @@ export async function GET(
     const payload = rows
       .filter((i) => i.valorUnitario && i.marcaFabricante)
       .map((i) => ({
+        id: i.id,
         item: i.numeroItem,
         // 4 casas como no portal: 44,0000 (2 casas a máscara do site lê errado)
         valorUnitario: formatarValorBR(i.valorUnitario),

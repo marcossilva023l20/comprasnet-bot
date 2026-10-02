@@ -15,6 +15,7 @@
  * 13) Máscara de 2 casas: o bot ajusta o formato para o valor ficar certo
  * 14) Formulário tipo Angular (ng-pristine): o reforço faz o site registrar o valor
  * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
+ * 16) Portal só contabiliza com tecla real: o Backspace do bot faz o total sair de 0,0000
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -614,6 +615,87 @@ export async function rodarSalvar() {
     checar(s0?.confirmado === false, "não confirmado");
     checar(JSON.stringify(r.savedItems) === JSON.stringify([]), "NÃO entra em savedItems");
     checar(r.warnings.some((w) => /RECUSOU/.test(w)), "avisa que o site recusou");
+  }
+
+  console.log("\n── 16) Portal só contabiliza com tecla real (Backspace resolve) ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <div id="lista">
+        <section class="item" data-item="1">
+          <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+            <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">4</span></div></div>
+            <button class="seta" title="Mostrar detalhes do item"><svg></svg></button></div>
+          <div class="detalhes">
+            <div class="campos">
+              <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+              <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+              <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+              <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+            </div>
+            <div class="rodape"><button id="salvar1" class="btn btn-primary">Salvar</button></div>
+          </div>
+        </section>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvos: [], teclas: [] };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelectorAll(".seta").forEach((b) => b.addEventListener("click", () => {
+          b.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+
+        const campo = w.document.getElementById("vu1");
+        // Portal "Angular": o modelo só é atualizado quando chega uma TECLA de
+        // verdade (keydown). Eventos de input sozinhos não contam — por isso o
+        // valor aparecia na tela mas o total continuava R$ 0,0000.
+        campo.addEventListener("keydown", (e) => {
+          eventos.teclas.push(e.key);
+          if (e.key === "Backspace") {
+            const numero = Number(String(campo.value).replace(/\./g, "").replace(",", ".")) || 0;
+            w.document.getElementById("total1").textContent =
+              "R$ " + (numero * 4).toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+            campo.className = "entrada ng-dirty ng-touched ng-valid";
+          }
+        });
+
+        // Máscara: formata o que estiver no campo.
+        campo.addEventListener("input", () => {
+          const digitos = campo.value.replace(/\D/g, "");
+          if (!digitos) return;
+          campo.value = (Number(digitos) / 10000).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          });
+        });
+
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          if (w.document.getElementById("total1").textContent === "R$ 0,0000") {
+            const erro = w.document.createElement("div");
+            erro.setAttribute("role", "alert");
+            erro.className = "alert alert-danger";
+            erro.textContent = 'O campo "Valor unitário" é obrigatório.';
+            w.document.querySelector(".item").appendChild(erro);
+            return;
+          }
+          eventos.salvos.push(campo.value);
+          const ok = w.document.createElement("div");
+          ok.setAttribute("role", "alert");
+          ok.className = "alert alert-success";
+          ok.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(ok);
+        });
+      },
+    });
+
+    const r = await enviar(preencher([1]));
+    const total = window.document.getElementById("total1").textContent;
+    checar(eventos.teclas.includes("Backspace"), `o bot apertou Backspace (${JSON.stringify(eventos.teclas.slice(-3))})`);
+    checar(/4\.939,?\d*/i.test(total.replace("R$ ", "")) || total !== "R$ 0,0000", `o total saiu de 0,0000 (${total})`);
+    checar(eventos.salvos.length === 1, `o site salvou (${JSON.stringify(eventos.salvos)})`);
+    checar(r.salvamentos[0]?.confirmado === true && !r.salvamentos[0]?.recusado, "relatório: salvo e confirmado");
+    checar(JSON.stringify(r.savedItems) === JSON.stringify([1]), "savedItems = [1]");
   }
 
   return falhas;

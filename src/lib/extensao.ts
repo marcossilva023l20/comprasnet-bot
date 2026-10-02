@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.6.0";
+export const VERSAO_EXTENSAO = "1.7.0";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.0",
+    itens: [
+      "O valor unitário agora é contabilizado pelo portal: o bot dá um Backspace real e redigita (era preciso apertar Backspace na mão para o total sair de 0,0000)",
+      "Painel na página com \"📋 Proposta a preencher\": escolha a proposta do sistema e clique em ▶ Iniciar",
+      "Painel com ▶ Iniciar · ⏸ Pausar/Continuar · ⏹ Parar; ao terminar, marca no sistema os itens realmente salvos",
+    ],
+  },
   {
     versao: "1.6.0",
     itens: [

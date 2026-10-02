@@ -719,7 +719,12 @@ function campoVazio(el) {
 /** Dispara um evento do tipo certo, sem quebrar em navegadores antigos. */
 function disparar(el, tipo, view, dados = {}) {
   const ehInput = tipo === "input" || tipo === "beforeinput";
-  const Evento = ehInput && typeof view.InputEvent === "function" ? view.InputEvent : view.Event;
+  const ehTecla = tipo.startsWith("key");
+  const Evento = ehInput && typeof view.InputEvent === "function"
+    ? view.InputEvent
+    : ehTecla && typeof view.KeyboardEvent === "function"
+      ? view.KeyboardEvent
+      : view.Event;
   try {
     el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, composed: true, ...dados }));
   } catch (_) {
@@ -791,15 +796,13 @@ function limparCampo(input, view) {
  * moeda do portal aceitam (cada dígito reformata o campo). O execCommand
  * insere como se fosse teclado; sem ele, o valor é composto a cada tecla.
  */
-async function digitarDeVerdade(input, value, view) {
-  limparCampo(input, view);
-
+/** Insere texto caractere por caractere SEM limpar o campo (usado no nudge). */
+async function inserirTexto(input, texto, view) {
   const doc = input.ownerDocument;
   const podeInsertText = !input.isContentEditable && typeof doc.execCommand === "function";
-  const caracteres = [...String(value)];
-  let composto = "";
+  let composto = String(input.value ?? "");
 
-  for (const ch of caracteres) {
+  for (const ch of [...String(texto)]) {
     const codigo = ch === " " ? "Space" : /[0-9]/.test(ch) ? `Digit${ch}` : /[a-z]/i.test(ch) ? `Key${ch.toUpperCase()}` : "";
     const tecla = { key: ch, code: codigo, char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
     disparar(input, "keydown", view, tecla);
@@ -814,7 +817,7 @@ async function digitarDeVerdade(input, value, view) {
       }
     }
     if (!inseriu) {
-      composto = composto ? composto + ch : ch;
+      composto = composto + ch;
       aplicarValor(input, composto, view);
       disparar(input, "input", view, { data: ch, inputType: "insertText" });
     }
@@ -825,8 +828,74 @@ async function digitarDeVerdade(input, value, view) {
     await sleep(12);
   }
 
+  return !campoVazio(input);
+}
+
+async function digitarDeVerdade(input, value, view) {
+  limparCampo(input, view);
+  await inserirTexto(input, value, view);
   disparar(input, "change", view, { data: String(input.value ?? "") });
   return !campoVazio(input);
+}
+
+/**
+ * "Cutuca" o campo com um Backspace de verdade e redigita o último caractere.
+ *
+ * O portal (Angular) não atualiza o modelo do formulário com eventos
+ * sintéticos: o valor aparece na tela mas continua contando como 0,0000 e o
+ * site acusa "campo obrigatório". O usuário descobriu que apertar Backspace
+ * uma vez resolve — é a tecla real que faz o formulário reler o campo.
+ * Fazemos exatamente isso: Backspace + redigitar o caractere apagado, e
+ * restauramos o texto original se a máscara reagir de forma inesperada.
+ */
+async function cutucarCampo(input, view) {
+  const antes = String(input.value ?? "");
+  if (!antes) return false;
+  const numeroAntes = valorNumerico(antes);
+
+  const semUltimo = antes.slice(0, -1);
+  const ultimo = antes.slice(-1);
+
+  disparar(input, "keydown", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
+
+  let apagou = false;
+  const doc = input.ownerDocument;
+  if (!input.isContentEditable && typeof doc.execCommand === "function") {
+    try {
+      apagou = doc.execCommand("delete", false, null); // apaga a seleção/último caractere
+    } catch (_) {
+      apagou = false;
+    }
+  }
+  if (!apagou) {
+    aplicarValor(input, semUltimo, view);
+    disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
+  }
+  disparar(input, "keyup", view, { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 });
+  await sleep(40);
+
+  // Redigita o caractere apagado (com as teclas reais do caractere).
+  await inserirTexto(input, ultimo, view);
+  disparar(input, "change", view, { data: String(input.value ?? "") });
+  await sleep(60);
+
+  const depois = String(input.value ?? "");
+  const numeroDepois = valorNumerico(depois);
+  const bateu =
+    numeroAntes !== null || numeroDepois !== null
+      ? mesmoNumero(numeroAntes, numeroDepois)
+      : depois === antes;
+
+  if (!bateu) {
+    // A máscara não voltou ao valor certo (ou rejeitou o input do Backspace):
+    // devolve o texto original SEM disparar input — máscaras que rejeitam
+    // eventos sintéticos apagariam o campo de novo.
+    aplicarValor(input, antes, view);
+    disparar(input, "change", view, { data: antes });
+    return mesmoNumero(valorNumerico(input.value), numeroAntes);
+  }
+
+  return true;
 }
 
 /**
@@ -953,6 +1022,13 @@ async function preencherCampo(input, value, view) {
   if (!campoVazio(input) && pistasDeFramework(input)) {
     await reforcarValor(input, view);
     await acordarCampo(input, view);
+  }
+
+  // Campos de valor: cutuca com um Backspace real (é o que faz o portal
+  // contabilizar o valor — sem isso o total fica 0,0000 e o site reclama).
+  if (valorNumerico(input.value) !== null) {
+    await cutucarCampo(input, view);
+    await sleep(80);
   }
 }
 
@@ -2704,13 +2780,31 @@ function definirStatusDoPainel(texto) {
 function atualizarPainel() {
   const painel = document.getElementById(PAINEL_ID);
   if (!painel) return;
+
+  const ocupado = Boolean(rodandoAgora || rodandoPeloPainel);
+  const iniciar = document.getElementById(`${PAINEL_ID}_iniciar`);
+  if (iniciar) {
+    iniciar.disabled = ocupado;
+    iniciar.style.opacity = ocupado ? "0.6" : "1";
+    iniciar.textContent = ocupado ? "⏳ Rodando..." : "▶ Iniciar";
+  }
   const pausar = document.getElementById(`${PAINEL_ID}_pausar`);
   if (pausar) {
+    // Pausar fica sempre disponível: dá para deixar o bot já pausado antes de
+    // iniciar (ele espera você mandar continuar).
     pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
     pausar.style.background = botPausado ? "#168821" : "#1351b4";
   }
   const parar = document.getElementById(`${PAINEL_ID}_parar`);
-  if (parar) parar.disabled = !rodandoAgora && !botPausado;
+  if (parar) {
+    parar.disabled = !ocupado;
+    parar.style.opacity = ocupado ? "1" : "0.6";
+  }
+  const recarregar = document.getElementById(`${PAINEL_ID}_recarregar`);
+  if (recarregar) recarregar.disabled = ocupado;
+  const seletor = document.getElementById(`${PAINEL_ID}_proposta`);
+  if (seletor) seletor.disabled = ocupado;
+
   const el = document.getElementById(`${PAINEL_ID}_status`);
   if (el) el.textContent = botPausado ? `⏸ Pausado — ${painelStatus}` : painelStatus;
 }
@@ -2758,18 +2852,29 @@ function mostrarPainel() {
       <button id="${PAINEL_ID}_fechar" title="Fechar painel" style="background:transparent;border:0;color:#fff;cursor:pointer;font-size:14px;">✕</button>
     </div>
     <div style="padding:10px;">
+      <label style="display:block;font-weight:600;margin-bottom:4px;color:#334155;" for="${PAINEL_ID}_proposta">📋 Proposta a preencher</label>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <select id="${PAINEL_ID}_proposta" style="flex:1;min-width:0;padding:6px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;">
+          <option value="">Carregando propostas…</option>
+        </select>
+        <button id="${PAINEL_ID}_recarregar" title="Recarregar propostas" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;cursor:pointer;">🔄</button>
+      </div>
       <div id="${PAINEL_ID}_status" style="font-weight:600;margin-bottom:8px;">Pronto.</div>
       <div style="display:flex;gap:6px;">
+        <button id="${PAINEL_ID}_iniciar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#168821;color:#fff;font:inherit;font-weight:700;cursor:pointer;">▶ Iniciar</button>
         <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#1351b4;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
         <button id="${PAINEL_ID}_parar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#e52207;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏹ Parar</button>
       </div>
-      <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font:11px/1.4 monospace;color:#475569;"></pre>
+      <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:11px;line-height:1.4;color:#475569;"></pre>
       <div style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
     </div>`;
 
   document.body.appendChild(painel);
 
   document.getElementById(`${PAINEL_ID}_fechar`).addEventListener("click", removerPainel);
+  document.getElementById(`${PAINEL_ID}_recarregar`).addEventListener("click", () => carregarPropostasNoPainel());
+  document.getElementById(`${PAINEL_ID}_proposta`).addEventListener("change", () => atualizarPainel());
+  document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => iniciarPeloPainel());
   document.getElementById(`${PAINEL_ID}_pausar`).addEventListener("click", () => {
     botPausado = !botPausado;
     registrarNoPainel(botPausado ? "⏸ Bot pausado." : "▶ Bot retomado.");
@@ -2812,6 +2917,161 @@ function mostrarPainel() {
   const area = document.getElementById(`${PAINEL_ID}_log`);
   if (area) area.textContent = painelLog.join("\n");
   atualizarPainel();
+  carregarPropostasNoPainel();
+}
+
+// ─── Propostas e execução pelo painel ───────────────────────────────────────
+
+let propostasDoPainel = [];
+let rodandoPeloPainel = false;
+
+/** URL do sistema configurada no popup (⚙️ Config). */
+async function lerApiUrl() {
+  try {
+    const cfg = await chrome.storage.local.get(["apiUrl"]);
+    return String(cfg?.apiUrl || "").replace(/\/+$/, "");
+  } catch (_) {
+    return "";
+  }
+}
+
+/** Lê as propostas do sistema e monta o seletor "📋 Proposta a preencher". */
+async function carregarPropostasNoPainel() {
+  const select = document.getElementById(`${PAINEL_ID}_proposta`);
+  if (!select) return;
+
+  const apiUrl = await lerApiUrl();
+  if (!apiUrl) {
+    select.innerHTML = '<option value="">Configure a URL do sistema (⚙️ Config)</option>';
+    definirStatusDoPainel("Configure a URL do sistema no popup (⚙️ Config).");
+    atualizarPainel();
+    return;
+  }
+
+  select.innerHTML = '<option value="">Carregando propostas…</option>';
+  try {
+    const resposta = await fetch(`${apiUrl}/api/propostas`);
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+    const propostas = await resposta.json();
+
+    propostasDoPainel = Array.isArray(propostas) ? propostas : [];
+    if (propostasDoPainel.length === 0) {
+      select.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
+      definirStatusDoPainel("Nenhuma proposta no sistema ainda.");
+      atualizarPainel();
+      return;
+    }
+
+    const anterior = select.value;
+    select.innerHTML = propostasDoPainel
+      .map((p) => {
+        const preenchidos = `${p.itensPreenchidos ?? 0}/${p.totalItens ?? 0}`;
+        const env = p.itensEnviados ? ` · ${p.itensEnviados} enviados` : "";
+        const uasg = p.uasg ? ` · UASG ${p.uasg}` : "";
+        return `<option value="${p.id}">${escapeHtml(p.numeroDispensa || `Proposta ${p.id}`)}${uasg} — ${preenchidos} prontos${env}</option>`;
+      })
+      .join("");
+
+    if (anterior && propostasDoPainel.some((p) => String(p.id) === anterior)) select.value = anterior;
+    definirStatusDoPainel(`${propostasDoPainel.length} proposta(s) no sistema.`);
+  } catch (erro) {
+    select.innerHTML = '<option value="">Erro ao carregar propostas</option>';
+    definirStatusDoPainel(`Não consegui ler as propostas: ${erro.message}`);
+  }
+  atualizarPainel();
+}
+
+function escapeHtml(texto) {
+  return String(texto ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/** O botão "▶ Iniciar" do painel: preenche os itens da proposta escolhida. */
+async function iniciarPeloPainel() {
+  if (rodandoPeloPainel || rodandoAgora) {
+    registrarNoPainel("⏳ Já existe um preenchimento em andamento.");
+    return;
+  }
+
+  const select = document.getElementById(`${PAINEL_ID}_proposta`);
+  const propostaId = select?.value;
+  if (!propostaId) {
+    definirStatusDoPainel("Escolha a proposta antes de iniciar.");
+    atualizarPainel();
+    return;
+  }
+
+  const apiUrl = await lerApiUrl();
+  if (!apiUrl) {
+    definirStatusDoPainel("Configure a URL do sistema no popup (⚙️ Config).");
+    atualizarPainel();
+    return;
+  }
+
+  const proposta = propostasDoPainel.find((p) => String(p.id) === String(propostaId));
+  definirStatusDoPainel("Buscando os itens da proposta…");
+  atualizarPainel();
+
+  let dados;
+  try {
+    const resposta = await fetch(`${apiUrl}/api/propostas/${propostaId}/script`);
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+    dados = await resposta.json();
+  } catch (erro) {
+    definirStatusDoPainel(`Não consegui ler os itens: ${erro.message}`);
+    atualizarPainel();
+    return;
+  }
+
+  const itens = Array.isArray(dados?.itens) ? dados.itens : [];
+  if (itens.length === 0) {
+    definirStatusDoPainel("Essa proposta não tem itens prontos (valor + marca) para preencher.");
+    atualizarPainel();
+    return;
+  }
+
+  rodandoPeloPainel = true;
+  abortRequested = false;
+  botPausado = false;
+  atualizarPainel();
+  registrarNoPainel(`🚀 Iniciando ${itens.length} item(ns) de ${proposta?.numeroDispensa || `proposta ${propostaId}`}...`);
+
+  try {
+    const resultado = await fillItems(itens, 800);
+    const salvos = new Set(resultado.savedItems || []);
+
+    // Marca como enviado no sistema só o que foi realmente salvo na página.
+    const paraMarcar = itens.filter((i) => i.id && salvos.has(normalizeItemNumero(i.item)));
+    let marcados = 0;
+    for (const item of paraMarcar) {
+      try {
+        const resposta = await fetch(`${apiUrl}/api/propostas/${propostaId}/itens/${item.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enviado: true }),
+        });
+        if (resposta.ok) marcados += 1;
+      } catch (_) {
+        // marcação é opcional: o importante é o que foi salvo na página
+      }
+    }
+
+    definirStatusDoPainel(
+      `${resultado.filled}/${resultado.total} preenchidos · ${salvos.size} salvos na página${marcados ? ` · ${marcados} marcados como enviados` : ""}`,
+    );
+    registrarNoPainel("🏁 Fim do preenchimento pelo painel.");
+  } catch (erro) {
+    definirStatusDoPainel(`Erro: ${erro.message}`);
+    registrarNoPainel(`❌ ${erro.message}`);
+  } finally {
+    rodandoPeloPainel = false;
+    atualizarPainel();
+  }
+}
+
+/** Aceita tanto número quanto texto ("03" → "3") para casar itens. */
+function normalizeItemNumero(valor) {
+  const numero = Number(String(valor ?? "").replace(/\D/g, ""));
+  return Number.isFinite(numero) && numero > 0 ? numero : String(valor ?? "");
 }
 
 /** Espera enquanto o bot estiver pausado (o Parar interrompe a espera). */

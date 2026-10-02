@@ -174,6 +174,71 @@ export async function rodarPainel() {
     checar(r.total === 3, `leitura concluída depois de retomar (${r.total} itens)`);
   }
 
+  console.log("\n── 5) Escolher proposta no painel e Iniciar ──");
+  {
+    const { window, enviar, salvos } = ambiente(3);
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+
+    const chamadas = [];
+    const propostas = [
+      {
+        id: 7,
+        numeroDispensa: "UASG 123456 - 45/2026",
+        uasg: "123456",
+        totalItens: 3,
+        itensPreenchidos: 3,
+        itensEnviados: 0,
+      },
+    ];
+    const itensDaProposta = [
+      { id: 101, item: 1, valorUnitario: "44,0000", marcaFabricante: "ACME", modeloVersao: "X1" },
+      { id: 102, item: 2, valorUnitario: "45,5000", marcaFabricante: "ACME", modeloVersao: "X2" },
+      { id: 103, item: 3, valorUnitario: "46,2500", marcaFabricante: "ACME", modeloVersao: "X3" },
+    ];
+
+    window.fetch = async (url, opcoes = {}) => {
+      chamadas.push(`${opcoes.method || "GET"} ${url}`);
+      if (String(url).endsWith("/api/propostas")) {
+        return { ok: true, status: 200, json: async () => propostas };
+      }
+      if (String(url).includes("/script")) {
+        return { ok: true, status: 200, json: async () => ({ itens: itensDaProposta }) };
+      }
+      if (opcoes.method === "PUT") {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    await enviar({ action: "painel_mostrar" });
+    await sleep(300);
+
+    const select = window.document.getElementById("__comprasnet_bot_painel___proposta");
+    checar(select?.options.length === 1, `o painel listou a proposta (${select?.options.length} opção(ões))`);
+    checar(/45\/2026/.test(select?.options[0]?.textContent || ""), `com identificação ("${select?.options[0]?.textContent}")`);
+
+    select.value = "7";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    window.document.getElementById("__comprasnet_bot_painel___iniciar").click();
+
+    // Espera o fim (o bot preenche/salva item por item, isso leva alguns segundos).
+    const limite = Date.now() + 60000;
+    const puts = () => chamadas.filter((c) => c.startsWith("PUT") && c.includes("/itens/")).length;
+    while (Date.now() < limite && puts() < 3) await sleep(250);
+
+    checar(
+      chamadas.some((c) => c.includes("/api/propostas/7/script")),
+      "buscou os itens da proposta escolhida",
+    );
+    checar(salvos.length === 3, `preencheu e salvou os 3 itens (${JSON.stringify(salvos)})`);
+    checar(
+      chamadas.filter((c) => c.startsWith("PUT") && c.includes("/itens/")).length === 3,
+      `marcou os 3 como enviados (${chamadas.filter((c) => c.startsWith("PUT")).length})`,
+    );
+    const status = window.document.getElementById("__comprasnet_bot_painel___status").textContent;
+    checar(/3\/3/.test(status) || /3/.test(status), `o painel mostra o resultado ("${status}")`);
+  }
+
   return falhas;
 }
 

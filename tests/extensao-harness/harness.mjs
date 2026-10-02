@@ -37,7 +37,22 @@ export function montarPagina(html, { url = "https://cnetmobile.estaleiro.serpro.
   preparar?.(window, cliques);
 
   let listener = null;
-  window.chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } }, sendMessage: () => {} } };
+  // O content script lê a URL do sistema e pode chamar a API (painel "Iniciar").
+  const armazenamento = {};
+  window.chrome = {
+    runtime: { onMessage: { addListener: (fn) => { listener = fn; } }, sendMessage: () => {} },
+    storage: {
+      local: {
+        get: async (chaves) =>
+          Object.fromEntries(
+            (Array.isArray(chaves) ? chaves : [chaves]).filter((k) => k in armazenamento).map((k) => [k, armazenamento[k]]),
+          ),
+        set: async (dados) => Object.assign(armazenamento, dados),
+      },
+    },
+  };
+  window.__armazenamento = armazenamento;
+  if (!window.fetch) window.fetch = async () => ({ ok: false, status: 0, json: async () => ({}) });
   const tag = window.document.createElement("script");
   tag.textContent = CONTENT;
   window.document.body.appendChild(tag);
