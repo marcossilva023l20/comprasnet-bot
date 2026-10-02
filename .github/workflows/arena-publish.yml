@@ -1,0 +1,256 @@
+# ---------------------------------------------------------------------------
+# Arena -> main: verificação e publicação automática (sem PR)
+# ---------------------------------------------------------------------------
+#
+# O que este workflow faz
+#   1. Em cada push numa branch `arena/**`, roda lint, typecheck, testes e build.
+#   2. Se tudo passar, publica AQUELA MESMA REVISÃO em `main` por fast-forward
+#      (nenhum commit novo, nenhum force-push, nada sobrescrito).
+#   3. O push em `main` dispara o deploy de produção pela integração Git da
+#      Vercel. Nenhum token da Vercel é necessário aqui.
+#
+# Garantias de segurança
+#   - O CI NÃO fala com o banco de produção: `DATABASE_URL` nunca é definida
+#     (as migrações do build ficam desligadas com SKIP_DB_MIGRATIONS=1 e há uma
+#     guarda que falha caso alguém torne um secret DATABASE_URL visível ao CI).
+#     As migrações continuam sendo aplicadas apenas no build da Vercel.
+#   - `GITHUB_TOKEN` com permissões mínimas: `contents: read` no CI e
+#     `contents: write` somente no job de publicação (nenhum outro escopo).
+#   - Nunca faz force-push nem reescreve `main`. O push é rejeitado pelo próprio
+#     Git se não for fast-forward — a checagem explícita existe só para explicar
+#     o motivo com clareza e parar sem publicar.
+#   - Publicações são serializadas (uma de cada vez); nenhuma é cancelada no
+#     meio.
+#   - Nenhum token, senha ou credencial vive neste arquivo. O único secret
+#     opcional (VERCEL_DEPLOY_HOOK) é cadastrado pelo dono do repositório no
+#     GitHub e usado apenas no job de publicação.
+#
+# Configuração necessária no GitHub: veja a seção
+# "Publicação automática (Arena -> main -> Vercel)" no README.md.
+
+name: Arena → main (CI + publicação)
+
+on:
+  push:
+    branches:
+      - "arena/**"
+  # Reexecução manual (por exemplo, depois de um ajuste de permissões).
+  # O job de publicação só roda quando a ref é uma branch `arena/**`.
+  workflow_dispatch:
+
+# Permissão mínima para tudo o que não pedir mais explicitamente.
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1) Verificações
+  # -------------------------------------------------------------------------
+  verificacoes:
+    name: Verificações (lint, typecheck, testes, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout (sem guardar credenciais no .git/config)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Instalar dependências (npm ci)
+        run: npm ci
+
+      - name: Guarda — o CI não pode falar com o banco de produção
+        env:
+          CI_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "${CI_DATABASE_URL:-}" ]; then
+            echo "::error title=CI conectado ao banco::O secret DATABASE_URL está visível para este workflow. Este CI não deve conectar no banco de produção nem aplicar migrações. Remova o secret DATABASE_URL do repositório (ele deve existir apenas na Vercel) ou ajuste este workflow."
+            exit 1
+          fi
+          echo "OK: nenhuma DATABASE_URL disponível para o CI — build e testes rodam sem banco."
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test
+
+      - name: Build (sem banco de dados e sem migrações)
+        env:
+          # Reforço da garantia acima: o build não aplica migrações aqui.
+          SKIP_DB_MIGRATIONS: "1"
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: npm run build
+
+      - name: Resumo das verificações
+        if: always()
+        run: |
+          {
+            echo "### Verificações"
+            echo ""
+            echo "| etapa | branch | revisão |"
+            echo "| --- | --- | --- |"
+            echo "| lint, typecheck, testes, build | \`${{ github.ref_name }}\` | \`${{ github.sha }}\` |"
+            echo ""
+            echo "Sem banco de dados: \`DATABASE_URL\` não é definida e \`SKIP_DB_MIGRATIONS=1\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------------
+  # 2) Publicação em main + deploy de produção na Vercel
+  # -------------------------------------------------------------------------
+  publicar:
+    name: Publicar em main (fast-forward) → Vercel
+    needs: verificacoes
+    # Só publica revisões de branches da Arena (nunca a própria main).
+    if: github.ref_type == 'branch' && startsWith(github.ref_name, 'arena/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Único escopo de escrita do workflow, e só neste job.
+    permissions:
+      contents: write
+    # Serializa as publicações: uma por vez, sem cancelar a que está rodando.
+    concurrency:
+      group: publicar-main
+      cancel-in-progress: false
+    env:
+      # Secret OPCIONAL. Sem ele, a integração Git da Vercel já dispara o deploy
+      # ao receber o push em main. Com ele, o deploy é disparado explicitamente
+      # (útil se a Vercel recusar commits automáticos — ver README).
+      VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+    steps:
+      - name: Checkout da revisão validada
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Conferir divergência e decidir se publica
+        id: revisao
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin main
+
+          REVISAO="$(git rev-parse HEAD)"
+          MAIN_ANTES="$(git rev-parse origin/main)"
+          PUBLICAR="false"
+
+          {
+            echo "revisao=$REVISAO"
+            echo "main_antes=$MAIN_ANTES"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$REVISAO" = "$MAIN_ANTES" ]; then
+            echo "main já está exatamente nesta revisão — nada a publicar."
+          elif git merge-base --is-ancestor origin/main "$REVISAO"; then
+            PUBLICAR="true"
+            echo "Publicação segura: origin/main é ancestral de $REVISAO (fast-forward)."
+          elif git merge-base --is-ancestor "$REVISAO" origin/main; then
+            echo "Esta revisão já está contida em main — nada a publicar."
+          else
+            echo "publicar=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Publicação abortada: main divergiu"
+              echo ""
+              echo "Nada foi publicado e nada foi sobrescrito."
+              echo ""
+              echo "- revisão da branch: \`$REVISAO\`"
+              echo "- main (origin): \`$MAIN_ANTES\`"
+              echo ""
+              echo "Como resolver: atualize a branch da sessão a partir de \`main\` (merge/rebase),"
+              echo "rode as verificações de novo e faça um novo push em \`arena/**\`."
+              echo "Históricos com conflito exigem decisão humana — este workflow não resolve conflitos."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=main divergiu::main não é ancestral desta revisão e esta revisão não está contida em main. Publicação interrompida sem force-push e sem sobrescrever nada."
+            exit 1
+          fi
+
+          echo "publicar=$PUBLICAR" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar em main (fast-forward, sem force)
+        id: push
+        if: steps.revisao.outputs.publicar == 'true'
+        run: |
+          set -euo pipefail
+
+          if ! git push origin HEAD:main 2> /tmp/push.err; then
+            echo "publicado=false" >> "$GITHUB_OUTPUT"
+            echo "::group::Saída do git push"
+            cat /tmp/push.err
+            echo "::endgroup::"
+            {
+              echo "### Publicação falhou (nada foi publicado)"
+              echo ""
+              echo "O \`git push\` foi rejeitado. Motivos mais comuns:"
+              echo ""
+              echo "1. **Permissão**: em GitHub → Settings → Actions → General → Workflow permissions,"
+              echo "   deixe marcado *Read and write permissions* (ou mantenha este workflow, que já"
+              echo "   pede \`contents: write\` explicitamente)."
+              echo "2. **Proteção de branch em \`main\`**: se houver regra de proteção/ruleset, adicione"
+              echo "   *GitHub Actions* à lista de exceções (bypass) e não exija pull request para"
+              echo "   publicar. Caso contrário o push é bloqueado."
+              echo "3. **Confirmação de e-mail na organização/conta** ou restrições de app podem bloquear"
+              echo "   o \`GITHUB_TOKEN\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Publicação não autorizada::git push rejeitado. Nada foi sobrescrito. Veja no resumo do job (Summary) os ajustes de permissão necessários."
+            exit 1
+          fi
+
+          # Confirma o estado real do remoto (e não apenas a intenção do push).
+          git fetch --no-tags origin main
+          MAIN_DEPOIS="$(git rev-parse origin/main)"
+          echo "main_depois=$MAIN_DEPOIS" >> "$GITHUB_OUTPUT"
+          echo "publicado=true" >> "$GITHUB_OUTPUT"
+
+          if [ "$MAIN_DEPOIS" != "$REVISAO" ]; then
+            echo "::error title=Estado inesperado::origin/main ($MAIN_DEPOIS) não é a revisão publicada ($REVISAO). Verifique manualmente antes de qualquer nova publicação."
+            exit 1
+          fi
+
+          echo "Publicado: main agora aponta para $MAIN_DEPOIS"
+
+      # Opcional: sem este secret, o push em main já dispara o deploy de produção
+      # pela integração Git da Vercel. Com ele, garantimos o disparo também nos
+      # casos em que a Vercel recusa commits automáticos (github-actions[bot]).
+      - name: Disparar deploy de produção na Vercel (opcional)
+        if: steps.push.outputs.publicado == 'true' && env.VERCEL_DEPLOY_HOOK != ''
+        run: |
+          set -euo pipefail
+
+          STATUS="$(curl -sS -o /tmp/vercel-hook.json -w '%{http_code}' -X POST "$VERCEL_DEPLOY_HOOK" || true)"
+          echo "Resposta da Vercel (HTTP $STATUS): $(cat /tmp/vercel-hook.json 2>/dev/null || true)"
+
+          if [ -z "$STATUS" ] || [ "$STATUS" -ge 400 ]; then
+            echo "::error title=Deploy Hook recusado::A Vercel recusou o Deploy Hook (HTTP ${STATUS:-sem resposta}). Confira o hook em Vercel → Project Settings → Git → Deploy Hooks."
+            exit 1
+          fi
+
+      - name: Resumo da publicação
+        if: always()
+        run: |
+          {
+            echo "## Publicação (Arena → main → Vercel)"
+            echo ""
+            echo "| item | valor |"
+            echo "| --- | --- |"
+            echo "| branch | \`${{ github.ref_name }}\` |"
+            echo "| revisão validada | \`${{ steps.revisao.outputs.revisao }}\` |"
+            echo "| main antes | \`${{ steps.revisao.outputs.main_antes }}\` |"
+            echo "| publicado em main | \`${{ steps.push.outputs.main_depois }}\` |"
+            echo "| deploy Vercel | ${{ env.VERCEL_DEPLOY_HOOK != '' && 'disparado via Deploy Hook' || 'pela integração Git (push em main)' }} |"
+            echo ""
+            if [ "${{ steps.push.outputs.publicado }}" = "true" ]; then
+              echo "Verificação: confira em Vercel → Deployments a implantação de produção com o commit \`${{ steps.push.outputs.main_depois }}\`."
+            else
+              echo "Nada foi publicado nesta execução. Veja acima/mensagens deste job o motivo."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

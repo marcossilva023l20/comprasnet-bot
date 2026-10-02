@@ -50,7 +50,67 @@ Opcionais:
   2. aplica as migrações SQL (`npm run db:migrate`),
   3. roda o `next build`.
 
-Este repositório não inclui um workflow próprio do GitHub Actions. Para deploy automático, conecte o repositório ao Vercel e configure a branch de produção em **Project Settings → Git**. Depois, cada push nessa branch (normalmente `main`) inicia um deploy; não é necessário cadastrar secrets do Vercel no GitHub.
+### Deploy automático (Arena → `main` → Vercel)
+
+O deploy de produção é automático e **sem pull request**:
+
+1. cada push numa branch `arena/**` dispara o workflow
+   [`.github/workflows/arena-publish.yml`](.github/workflows/arena-publish.yml), que roda
+   **lint, typecheck, testes e build**;
+2. se tudo passar, a **mesma revisão** (o mesmo commit validado) é publicada em `main` por
+   *fast-forward* — sem commit novo, sem force-push, sem sobrescrever nada;
+3. o push em `main` dispara o **deploy de produção na Vercel** pela integração Git do projeto
+   (Project Settings → Git, branch de produção `main`). Nenhum token da Vercel é necessário no
+   GitHub.
+
+As publicações são **serializadas** (uma de cada vez). Se `main` tiver divergido, se o `git push`
+for recusado ou se qualquer verificação falhar, **nada é publicado** e o resumo do job explica o
+motivo. Conflitos de histórico exigem decisão humana: o workflow nunca resolve conflitos sozinho.
+
+#### O que o CI nunca faz (configuração segura)
+
+- **Não conecta no banco de produção**: `DATABASE_URL` não é definida em lugar nenhum do CI e o
+  build roda com `SKIP_DB_MIGRATIONS=1`, então **nenhuma migração é aplicada**. As migrações
+  continuam rodando apenas no build da Vercel, como sempre (`npm run build` → `db:migrate`).
+- Há uma **guarda** que falha o workflow se algum dia o secret `DATABASE_URL` ficar visível ao CI.
+- `GITHUB_TOKEN` com o mínimo necessário: `contents: read` em todo o workflow e
+  `contents: write` **apenas** no job de publicação. Nenhum outro escopo é pedido.
+- Nenhum token, senha ou credencial fica no código ou é solicitado por aqui.
+
+#### Configuração necessária no GitHub (uma vez)
+
+| Onde | Ajuste | Por quê |
+| --- | --- | --- |
+| Settings → Actions → General → **Workflow permissions** | **Read and write permissions** | O workflow pede `contents: write` explicitamente no job de publicação (o que já costuma bastar), mas manter essa opção garante o `git push` do `GITHUB_TOKEN`. |
+| Settings → Actions → General → **Actions permissions** | permitir `actions/checkout` e `actions/setup-node` | Se o repositório bloquear ações de terceiros, o workflow não roda. |
+| Settings → **Branches / Rulesets** (`main`) | manter `main` **sem exigir PR**; se houver proteção, incluir **GitHub Actions** nas exceções (bypass) | Um push de bot em branch protegida sem bypass é recusado — e aí o fluxo para sem publicar. |
+
+O token `GITHUB_TOKEN` é criado automaticamente pelo GitHub a cada execução. Nada precisa ser
+cadastrado em *Secrets* para o fluxo básico.
+
+#### Opcional: garantir o deploy com um Deploy Hook
+
+A Vercel pode recusar deploys de commits cujo autor não seja o dono da conta
+(*"Git author must have access to the project on Vercel"*). Como a publicação vem dos commits da
+sessão da Arena (autor = seu usuário do GitHub), isso normalmente não acontece. Se acontecer:
+
+1. Vercel → Project → **Settings → Git → Deploy Hooks → Create Hook** (branch `main`);
+2. copie a URL e cadastre em GitHub → Settings → Secrets and variables → Actions →
+   **New repository secret**, com o nome `VERCEL_DEPLOY_HOOK`;
+3. pronto — o workflow passa a disparar o deploy explicitamente depois de publicar em `main`,
+   sem nenhuma credencial no código.
+
+#### Como verificar que a publicação automática funcionou
+
+1. **GitHub → Actions** → execução do workflow da branch `arena/**`: os jobs *Verificações* e
+   *Publicar em main* devem ficar verdes. O **Summary** do job mostra a revisão publicada e o
+   estado de `main`.
+2. **GitHub → `main`**: o topo de `main` deve ser exatamente o commit da branch, por exemplo
+   `git fetch origin main && git rev-parse origin/main`.
+3. **Vercel → Deployments**: deve existir um deploy de **Production** (`Ready`) para esse mesmo
+   commit. Se `main` avançou e a Vercel não mostrou deploy, veja a seção do Deploy Hook acima.
+4. **Produção**: `https://SEU-APP.vercel.app/api/health` deve responder
+   `{"ok":true,...}` (ver seção 4 abaixo).
 
 ### 4. Verificação
 
@@ -92,6 +152,7 @@ npm run dev                 # http://localhost:3000
 | `npm run db:push` | envia o schema direto (atalho, sem arquivo de migração) |
 | `npm run db:studio` | abre o Drizzle Studio |
 | `npm run typecheck` / `npm run lint` / `npm test` | validações e testes automatizados |
+| `scripts/publish-main.sh` | publicação manual (legado) — só funciona com a branch local `main`. O fluxo normal é o workflow `arena/**` → `main` descrito acima |
 
 ## Extensão Chrome
 
