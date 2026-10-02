@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ComprasNet Bot</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    width: 380px;
+    min-height: 480px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+    background: #f0f4f8;
+    color: #1a202c;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #1351b4 0%, #0c326f 100%);
+    color: white;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header-icon {
+    width: 40px; height: 40px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .header h1 { font-size: 15px; font-weight: 700; line-height: 1.2; }
+  .header p { font-size: 11px; opacity: 0.8; margin-top: 2px; }
+
+  /* Body */
+  .body { padding: 16px; space-y: 12px; }
+
+  /* Card */
+  .card {
+    background: white;
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #64748b;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* Inputs */
+  input, select {
+    width: 100%;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+    background: #f8fafc;
+    color: #1a202c;
+  }
+  input:focus, select:focus { border-color: #1351b4; background: white; }
+  label { display: block; font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px; }
+  .field { margin-bottom: 10px; }
+
+  /* Buttons */
+  .btn {
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: inherit;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: #1351b4; color: white; }
+  .btn-primary:hover:not(:disabled) { background: #0c326f; }
+  .btn-success { background: #168821; color: white; }
+  .btn-success:hover:not(:disabled) { background: #0e5716; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(22,136,33,0.3); }
+  .btn-outline { background: white; color: #1351b4; border: 1.5px solid #1351b4; }
+  .btn-outline:hover:not(:disabled) { background: #eff6ff; }
+  .btn-danger { background: #e52207; color: white; }
+  .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+  .btn-sm { padding: 6px 12px; font-size: 11px; width: auto; border-radius: 6px; }
+
+  /* Status */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status-ok { background: #dcfce7; color: #166534; }
+  .status-ok .status-dot { background: #16a34a; }
+  .status-error { background: #fee2e2; color: #991b1b; }
+  .status-error .status-dot { background: #dc2626; }
+  .status-warn { background: #fef9c3; color: #854d0e; }
+  .status-warn .status-dot { background: #ca8a04; }
+  .status-idle { background: #f1f5f9; color: #475569; }
+  .status-idle .status-dot { background: #94a3b8; }
+
+  /* Progress bar */
+  .progress-wrap { background: #e2e8f0; border-radius: 10px; height: 8px; overflow: hidden; margin: 8px 0; }
+  .progress-bar { height: 100%; border-radius: 10px; transition: width 0.4s ease; background: linear-gradient(90deg, #1351b4, #168821); }
+
+  /* Item list */
+  .items-list { max-height: 160px; overflow-y: auto; }
+  .item-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    margin-bottom: 3px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+  }
+  .item-row.filled { border-color: #86efac; background: #f0fdf4; }
+  .item-row.sending { border-color: #93c5fd; background: #eff6ff; }
+  .item-row.done { border-color: #6ee7b7; background: #ecfdf5; }
+  .item-row.error { border-color: #fca5a5; background: #fef2f2; }
+  .item-num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: #1351b4;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .item-desc { flex: 1; font-size: 10px; font-weight: 500; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item-val { font-size: 10px; font-family: monospace; color: #059669; font-weight: 700; }
+  .item-status { font-size: 14px; flex-shrink: 0; }
+
+  /* Divider */
+  .divider { border: none; border-top: 1px solid #e2e8f0; margin: 4px 0 12px; }
+
+  /* Log area */
+  .log-area {
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 8px 10px;
+    max-height: 80px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 10px;
+    line-height: 1.6;
+  }
+  .log-info { color: #93c5fd; }
+  .log-success { color: #6ee7b7; }
+  .log-error { color: #fca5a5; }
+  .log-warn { color: #fcd34d; }
+
+  /* Grid */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  /* Stat box */
+  .stat { text-align: center; background: #f8fafc; border-radius: 8px; padding: 8px; border: 1px solid #e2e8f0; }
+  .stat-num { font-size: 20px; font-weight: 800; }
+  .stat-label { font-size: 10px; color: #64748b; margin-top: 1px; }
+
+  /* Spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 1s linear infinite; }
+
+  /* Link */
+  a { color: #1351b4; text-decoration: none; font-weight: 600; }
+  a:hover { text-decoration: underline; }
+
+  .text-xs { font-size: 11px; color: #64748b; line-height: 1.5; }
+  .text-center { text-align: center; }
+  .mt-2 { margin-top: 8px; }
+  .gap-2 { gap: 8px; }
+  .flex { display: flex; }
+  .flex-col { flex-direction: column; }
+
+  /* Tabs */
+  .tabs { display: flex; border-bottom: 2px solid #e2e8f0; margin-bottom: 12px; }
+  .tab { flex: 1; padding: 8px 4px; text-align: center; font-size: 11px; font-weight: 600; color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }
+  .tab.active { color: #1351b4; border-bottom-color: #1351b4; }
+  .tab:hover:not(.active) { color: #1351b4; background: #f0f4f8; }
+
+  .hidden { display: none; }
+
+  /* Alert */
+  .alert { padding: 10px 12px; border-radius: 8px; font-size: 11px; line-height: 1.5; margin-bottom: 10px; }
+  .alert-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .alert-warning { background: #fef9c3; border: 1px solid #fde68a; color: #92400e; }
+  .alert-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #14532d; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-icon">🤖</div>
+  <div>
+    <h1>ComprasNet Bot</h1>
+    <p>Preenchedor Automático de Propostas</p>
+  </div>
+</div>
+
+<div class="body">
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" id="tab-bot" onclick="showTab('bot')">🚀 Bot</div>
+    <div class="tab" id="tab-config" onclick="showTab('config')">⚙️ Config</div>
+    <div class="tab" id="tab-ajuda" onclick="showTab('ajuda')">❓ Ajuda</div>
+  </div>
+
+  <!-- ══════════════════ TAB: BOT ══════════════════ -->
+  <div id="panel-bot">
+
+    <!-- Page status -->
+    <div class="card">
+      <div class="card-title">📡 Status da Página</div>
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span id="page-status-badge" class="status-badge status-idle">
+          <span class="status-dot"></span>
+          <span id="page-status-text">Verificando...</span>
+        </span>
+        <button class="btn btn-outline btn-sm" onclick="checkPage()">🔄 Verificar</button>
+      </div>
+      <div id="page-url" class="text-xs mt-2" style="color:#94a3b8; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+    </div>
+
+    <!-- Proposta selector -->
+    <div class="card">
+      <div class="card-title">📋 Proposta a Preencher</div>
+      <div class="field">
+        <label>Selecione a Proposta</label>
+        <select id="proposta-select" onchange="loadItems()">
+          <option value="">-- Carregando propostas... --</option>
+        </select>
+      </div>
+
+      <!-- Stats -->
+      <div class="grid-2" id="stats-grid" style="display:none;">
+        <div class="stat">
+          <div class="stat-num" id="stat-total" style="color:#1351b4;">0</div>
+          <div class="stat-label">Total de Itens</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num" id="stat-prontos" style="color:#168821;">0</div>
+          <div class="stat-label">Prontos p/ enviar</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Items list -->
+    <div class="card" id="items-card" style="display:none;">
+      <div class="card-title" style="justify-content:space-between;">
+        <span>📦 Itens</span>
+        <span style="display:flex;gap:4px;">
+          <button class="btn btn-outline btn-sm" onclick="selectAll()">Todos</button>
+          <button class="btn btn-outline btn-sm" onclick="selectFilled()">Prontos</button>
+          <button class="btn btn-outline btn-sm" onclick="clearSel()" style="color:#dc2626;border-color:#dc2626;">Limpar</button>
+        </span>
+      </div>
+      <div class="items-list" id="items-list"></div>
+    </div>
+
+    <!-- Speed -->
+    <div class="card" id="run-card" style="display:none;">
+      <div class="card-title">⚡ Velocidade de Preenchimento</div>
+      <div class="field">
+        <label>Delay entre itens</label>
+        <select id="delay-select">
+          <option value="600">Rápido (0.6s)</option>
+          <option value="1000" selected>Normal (1s)</option>
+          <option value="1500">Lento (1.5s)</option>
+          <option value="2500">Muito lento (2.5s)</option>
+        </select>
+      </div>
+
+      <!-- Progress -->
+      <div id="progress-wrap" style="display:none;">
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:#64748b; margin-bottom:4px;">
+          <span id="progress-text">Preenchendo...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Log -->
+      <div class="log-area" id="log-area" style="display:none;"></div>
+
+      <div class="mt-2">
+        <button class="btn btn-success" id="run-btn" onclick="runBot()">
+          🚀 Executar Bot (<span id="sel-count">0</span> itens)
+        </button>
+        <button class="btn btn-danger" id="stop-btn" onclick="stopBot()" style="display:none; margin-top:8px;">
+          ⏹ Parar
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /panel-bot -->
+
+  <!-- ══════════════════ TAB: CONFIG ══════════════════ -->
+  <div id="panel-config" class="hidden">
+    <div class="card">
+      <div class="card-title">🌐 URL do Sistema</div>
+      <div class="field">
+        <label>URL da sua instalação</label>
+        <input type="url" id="api-url" placeholder="https://seu-app.vercel.app" />
+      </div>
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Salvar</button>
+      <div class="text-xs mt-2" style="color:#64748b;">
+        Cole aqui a URL do seu app no Vercel (ou localhost:3000 para desenvolvimento).
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔗 Links Rápidos</div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <button class="btn btn-outline" onclick="openApp()">📊 Abrir Sistema</button>
+        <button class="btn btn-outline" onclick="openComprasNet()">🏛️ Abrir ComprasNet</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ TAB: AJUDA ══════════════════ -->
+  <div id="panel-ajuda" class="hidden">
+    <div class="card">
+      <div class="card-title">📖 Como usar</div>
+      <div class="text-xs" style="line-height:1.8;">
+        <strong>1.</strong> Configure a URL do sistema na aba ⚙️<br>
+        <strong>2.</strong> No sistema, crie uma proposta e importe a planilha com os valores<br>
+        <strong>3.</strong> Acesse o ComprasNet → Cadastrar Propostas<br>
+        <strong>4.</strong> Abra este popup e selecione a proposta<br>
+        <strong>5.</strong> Clique em <strong>"Executar Bot"</strong><br>
+        <strong>6.</strong> O bot preenche automaticamente! ✅
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">⚠️ Importante</div>
+      <div class="alert alert-warning">
+        O bot preenche os campos visíveis na tela. Certifique-se de estar na página correta do ComprasNet antes de executar.
+      </div>
+      <div class="alert alert-info">
+        Se a página usar frames (iframes), role até os itens ficarem visíveis na tela antes de executar.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📋 Colunas da planilha</div>
+      <div class="text-xs" style="line-height:2;">
+        • <strong>Item</strong> — número do item<br>
+        • <strong>Descrição</strong> — nome do produto<br>
+        • <strong>Quantidade</strong> — qtd solicitada<br>
+        • <strong>Unidade</strong> — ex: Unidade, Rolo<br>
+        • <strong>Valor Unitário (R$)</strong> — seu preço<br>
+        • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
+        • <strong>Modelo/Versão</strong> — ex: ADVANCED
+      </div>
+    </div>
+  </div>
+
+</div><!-- /body -->
+
+<script src="popup.js"></script>
+</body>
+</html>
