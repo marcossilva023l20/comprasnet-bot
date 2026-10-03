@@ -17,6 +17,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   aplicarVelocidadeNaTela(cfg.delayMs);
 
   bindEvents();
+  if (new URLSearchParams(location.search).get("modo") === "disputa") showTab("disputa");
   await getCurrentTab();
   checkPage();
   loadPropostas();
@@ -53,6 +54,16 @@ function bindEvents() {
   on("btn-check-page", "click", checkPage);
   on("btn-read-page", "click", () => readPage());
   on("proposta-select", "change", loadItems);
+  on("disputa-proposta-select", "change", () => {
+    const principal = document.getElementById("proposta-select");
+    const disputa = document.getElementById("disputa-proposta-select");
+    if (principal && disputa && principal.value !== disputa.value) {
+      principal.value = disputa.value;
+      loadItems();
+    } else {
+      renderDisputaItems();
+    }
+  });
   on("btn-select-all", "click", selectAll);
   on("btn-select-filled", "click", selectFilled);
 
@@ -61,6 +72,7 @@ function bindEvents() {
     botao.addEventListener("click", async () => {
       const ms = aplicarVelocidadeNaTela(Number(botao.dataset.delay) * 1000);
       await salvarVelocidade(ms);
+      atualizarVelocidadeDisputa();
       addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens (vale para digitação e esperas).`);
     });
   });
@@ -68,6 +80,7 @@ function bindEvents() {
   campoDelay?.addEventListener("change", async () => {
     const ms = aplicarVelocidadeNaTela(delayDaTela());
     await salvarVelocidade(ms);
+    atualizarVelocidadeDisputa();
     addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens.`);
   });
   on("btn-clear-sel", "click", clearSel);
@@ -75,7 +88,9 @@ function bindEvents() {
   on("stop-btn", "click", stopBot);
   on("pause-btn", "click", alternarPausa);
   on("pin-btn", "click", fixarPainelNaPagina);
-  on("float-btn", "click", abrirJanelaFlutuante);
+  on("float-btn", "click", () => abrirJanelaFlutuante("bot"));
+  on("disputa-pin-btn", "click", fixarPainelDisputaNaPagina);
+  on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -123,10 +138,15 @@ async function getCurrentTab() {
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 function showTab(name) {
-  ["bot", "config", "ajuda"].forEach((t) => {
+  ["bot", "disputa", "config", "ajuda"].forEach((t) => {
     document.getElementById(`panel-${t}`)?.classList.toggle("hidden", t !== name);
     document.getElementById(`tab-${t}`)?.classList.toggle("active", t === name);
   });
+  if (name === "disputa") {
+    syncDisputaPropostas();
+    renderDisputaItems();
+    atualizarVelocidadeDisputa();
+  }
 }
 
 // ─── Page Status / Leitura ────────────────────────────────────────────────────
@@ -557,6 +577,8 @@ async function loadPropostas() {
   if (!apiUrl) {
     const sel = document.getElementById("proposta-select");
     sel.innerHTML = '<option value="">⚠️ Configure a URL do sistema na aba ⚙️</option>';
+    syncDisputaPropostas();
+    renderDisputaItems();
     return;
   }
 
@@ -567,6 +589,8 @@ async function loadPropostas() {
     const sel = document.getElementById("proposta-select");
     if (!Array.isArray(data) || data.length === 0) {
       sel.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
+      syncDisputaPropostas();
+      renderDisputaItems();
       return;
     }
 
@@ -577,18 +601,102 @@ async function loadPropostas() {
       opt.textContent = `Nº ${p.numeroDispensa}${p.uasg ? " — " + p.uasg : ""}`;
       sel.appendChild(opt);
     });
+    syncDisputaPropostas();
   } catch (e) {
+    syncDisputaPropostas();
     addLog("error", "Erro ao carregar propostas: " + e.message);
   }
 }
 
 // ─── Load Items ───────────────────────────────────────────────────────────────
+function syncDisputaPropostas() {
+  const principal = document.getElementById("proposta-select");
+  const disputa = document.getElementById("disputa-proposta-select");
+  if (!principal || !disputa) return;
+
+  const selecionada = disputa.value;
+  disputa.innerHTML = principal.innerHTML;
+  const existeSelecionada = [...disputa.options].some((option) => option.value === selecionada);
+  disputa.value = existeSelecionada ? selecionada : principal.value;
+}
+
+function atualizarVelocidadeDisputa() {
+  const label = document.getElementById("disputa-speed");
+  if (label) label.textContent = `Usa a mesma velocidade do Modo Proposta: ${formatarSegundos(delayDaTela())} entre itens.`;
+}
+
+function renderDisputaItems() {
+  const card = document.getElementById("disputa-items-card");
+  const list = document.getElementById("disputa-items-list");
+  const select = document.getElementById("disputa-proposta-select");
+  if (!card || !list || !select) return;
+
+  const propostaSelecionada = select.value;
+  const propostaPrincipal = document.getElementById("proposta-select")?.value || "";
+  if (!propostaSelecionada || propostaSelecionada !== propostaPrincipal) {
+    card.style.display = "none";
+    list.innerHTML = "";
+    return;
+  }
+
+  card.style.display = "block";
+  list.innerHTML = "";
+  if (!Array.isArray(allItems) || allItems.length === 0) {
+    const vazio = document.createElement("div");
+    vazio.className = "text-xs";
+    vazio.textContent = "Nenhum item cadastrado nesta proposta.";
+    list.appendChild(vazio);
+    return;
+  }
+
+  allItems.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "item-row";
+
+    const num = document.createElement("div");
+    num.className = "item-num";
+    num.textContent = String(item.numeroItem);
+
+    const desc = document.createElement("div");
+    desc.className = "item-desc";
+    desc.title = item.descricao || "";
+    desc.textContent = item.descricao || "(sem descrição)";
+
+    const values = document.createElement("div");
+    values.style.cssText = "font-size:9px;color:#475569;text-align:right;white-space:nowrap;";
+    const atual = item.valorUnitario ? `Atual ${formatValor(item.valorUnitario)}` : "Sem preço";
+    const minimo = item.valorMinimo ? `Mín. ${formatValor(item.valorMinimo)}` : "Mín. não informado";
+    values.textContent = `${atual} · ${minimo}`;
+    values.title = `Valor unitário: ${item.valorUnitario ? formatValor(item.valorUnitario) : "não informado"}; Valor Mínimo: ${item.valorMinimo ? formatValor(item.valorMinimo) : "não informado"}`;
+
+    row.append(num, desc, values);
+    list.appendChild(row);
+  });
+}
+
+async function fixarPainelDisputaNaPagina() {
+  if (!currentTab?.id) {
+    addLog("warn", "Abra a página do ComprasNet primeiro.");
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "disputa" });
+    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Monitoramento e lances ainda estão desativados.");
+  } catch (_) {
+    addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
+  }
+}
+
 async function loadItems() {
   const propostaId = document.getElementById("proposta-select").value;
+  const disputaSelect = document.getElementById("disputa-proposta-select");
+  if (disputaSelect && disputaSelect.value !== propostaId) disputaSelect.value = propostaId;
   if (!propostaId) {
+    allItems = [];
     document.getElementById("stats-grid").style.display = "none";
     document.getElementById("items-card").style.display = "none";
     document.getElementById("run-card").style.display = "none";
+    renderDisputaItems();
     return;
   }
 
@@ -603,6 +711,7 @@ async function loadItems() {
 
     renderItems();
     updateStats();
+    renderDisputaItems();
 
     document.getElementById("stats-grid").style.display = "grid";
     document.getElementById("items-card").style.display = "block";
@@ -852,7 +961,7 @@ async function fixarPainelNaPagina() {
     return;
   }
   try {
-    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar" });
+    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "proposta" });
     addLog("info", "📌 Painel fixado na página — ele continua aberto mesmo se você fechar este popup.");
   } catch (_) {
     addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
@@ -860,11 +969,12 @@ async function fixarPainelNaPagina() {
 }
 
 /** Abre o popup numa janela separada, que não fecha ao clicar fora. */
-async function abrirJanelaFlutuante() {
+async function abrirJanelaFlutuante(modo = "bot") {
   try {
-    if (currentTab?.id) await chrome.storage.session.set({ janelaTabId: currentTab.id });
+    if (currentTab?.id) await chrome.storage.session.set({ janelaTabId: currentTab.id, janelaModo: modo });
+    const query = new URLSearchParams({ janela: "1", modo });
     await chrome.windows.create({
-      url: chrome.runtime.getURL("popup.html?janela=1"),
+      url: `${chrome.runtime.getURL("popup.html")}?${query.toString()}`,
       type: "popup",
       width: 440,
       height: 700,

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.14";
+export const VERSAO_EXTENSAO = "1.7.15";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.15",
+    itens: [
+      "Adiciona o campo Valor Mínimo (R$) no sistema e na planilha, com edição por item, tabela, inclusão manual e importação/exportação",
+      "Cria a estrutura inicial do Modo Disputa e uma janela flutuante com a mesma velocidade configurada no Modo Proposta",
+      "Monitoramento dos concorrentes e envio automático de lances permanecem desativados até a validação com uma licitação ativa",
+    ],
+  },
   {
     versao: "1.7.14",
     itens: [

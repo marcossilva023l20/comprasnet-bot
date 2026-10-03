@@ -28,6 +28,7 @@ export type LinhaDaPlanilha = {
   unidade: string | null;
   valorEstimado: string | null;
   valorUnitario: string | null;
+  valorMinimo: string | null;
   marcaFabricante: string | null;
   modeloVersao: string | null;
   /** Colunas presentes na planilha — só elas são alteradas ao atualizar. */
@@ -37,6 +38,7 @@ export type LinhaDaPlanilha = {
     unidade: boolean;
     valorEstimado: boolean;
     valorUnitario: boolean;
+    valorMinimo: boolean;
     marcaFabricante: boolean;
     modeloVersao: boolean;
   };
@@ -71,6 +73,7 @@ const COLUNAS = {
     "preço",
     "preco",
   ],
+  valorMinimo: ["valor mínimo (r$)", "valor minimo (r$)", "valor mínimo", "valor minimo", "mínimo", "minimo"],
   marcaFabricante: ["marca/fabricante", "marca", "fabricante"],
   modeloVersao: ["modelo/versão", "modelo/versao", "modelo", "versão", "versao"],
 } as const;
@@ -144,12 +147,15 @@ export function lerLinhasDaPlanilha(
       unidade: false,
       valorEstimado: false,
       valorUnitario: false,
+      valorMinimo: false,
       marcaFabricante: false,
       modeloVersao: false,
     };
 
     const lerColunaNumerica = (aliases: readonly string[], rotulo: string, nome: keyof typeof colunasPresentes) => {
       const { presente, valor } = lerColuna(celulas, aliases);
+      // Coluna opcional ausente = null e preservação. undefined abaixo é
+      // reservado exclusivamente para sinalizar um valor não vazio inválido.
       if (!presente) return null;
       colunasPresentes[nome] = true;
       if (isBlankNumericValue(valor)) return null;
@@ -167,6 +173,8 @@ export function lerLinhasDaPlanilha(
     if (valorEstimado === undefined) continue;
     const valorUnitario = lerColunaNumerica(COLUNAS.valorUnitario, "valor unitário", "valorUnitario");
     if (valorUnitario === undefined) continue;
+    const valorMinimo = lerColunaNumerica(COLUNAS.valorMinimo, "valor mínimo", "valorMinimo");
+    if (valorMinimo === undefined) continue;
 
     const lerColunaTexto = (aliases: readonly string[], nome: keyof typeof colunasPresentes) => {
       const { presente, valor } = lerColuna(celulas, aliases);
@@ -185,6 +193,7 @@ export function lerLinhasDaPlanilha(
         unidade: lerColunaTexto(COLUNAS.unidade, "unidade"),
         valorEstimado,
         valorUnitario,
+        valorMinimo,
         marcaFabricante: lerColunaTexto(COLUNAS.marcaFabricante, "marcaFabricante"),
         modeloVersao: lerColunaTexto(COLUNAS.modeloVersao, "modeloVersao"),
         colunas: colunasPresentes,
@@ -231,6 +240,7 @@ export function montarPayloadImportacao(linhas: LinhaDaPlanilha[]) {
     unidade: linha.unidade,
     valor_estimado: linha.valorEstimado,
     valor_unitario: linha.valorUnitario,
+    valor_minimo: linha.valorMinimo,
     marca_fabricante: linha.marcaFabricante,
     modelo_versao: linha.modeloVersao,
     set_descricao_detalhada: linha.colunas.descricaoDetalhada,
@@ -238,6 +248,7 @@ export function montarPayloadImportacao(linhas: LinhaDaPlanilha[]) {
     set_unidade: linha.colunas.unidade,
     set_valor_estimado: linha.colunas.valorEstimado,
     set_valor_unitario: linha.colunas.valorUnitario,
+    set_valor_minimo: linha.colunas.valorMinimo,
     set_marca_fabricante: linha.colunas.marcaFabricante,
     set_modelo_versao: linha.colunas.modeloVersao,
   }));

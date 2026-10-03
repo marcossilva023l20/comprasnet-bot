@@ -50,7 +50,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === "painel_mostrar") {
-    mostrarPainel();
+    mostrarPainel(msg.modo);
     sendResponse({ ok: true });
     return true;
   }
@@ -84,6 +84,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === "fill_items") {
+    mostrarPainel("proposta");
     fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || DELAY_PADRAO_MS)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
@@ -3555,6 +3556,7 @@ const PAINEL_ID = "__comprasnet_bot_painel__";
 const PAINEL_POSICAO = "__comprasnet_bot_painel_pos__";
 
 let rodandoAgora = false;
+let painelModo = "proposta";
 let painelStatus = "Pronto.";
 const painelLog = [];
 
@@ -3579,21 +3581,62 @@ function definirStatusDoPainel(texto) {
   if (el) el.textContent = texto;
 }
 
+function definirModoPainel(modo) {
+  const novoModo = modo === "disputa" ? "disputa" : "proposta";
+  if ((rodandoAgora || rodandoPeloPainel) && novoModo !== painelModo) return;
+  if (novoModo === painelModo) return;
+
+  painelModo = novoModo;
+  painelStatus = novoModo === "disputa"
+    ? "Estrutura pronta; monitoramento e envio de lances aguardam integração."
+    : "Pronto.";
+  registrarNoPainel(novoModo === "disputa" ? "⚔️ Modo Disputa selecionado. Nenhum lance será enviado nesta versão." : "📝 Modo Proposta selecionado.");
+  atualizarPainel();
+  if (novoModo === "disputa") carregarItensDisputaNoPainel();
+}
+
 function atualizarPainel() {
   const painel = document.getElementById(PAINEL_ID);
   if (!painel) return;
 
   const ocupado = Boolean(rodandoAgora || rodandoPeloPainel);
+  const emDisputa = painelModo === "disputa";
   const iniciar = document.getElementById(`${PAINEL_ID}_iniciar`);
   if (iniciar) {
-    iniciar.disabled = ocupado;
-    iniciar.style.opacity = ocupado ? "0.6" : "1";
-    iniciar.textContent = ocupado ? "⏳ Rodando..." : "▶ Iniciar";
+    iniciar.disabled = ocupado || emDisputa;
+    iniciar.style.opacity = ocupado || emDisputa ? "0.6" : "1";
+    iniciar.textContent = ocupado ? "⏳ Rodando..." : emDisputa ? "⏳ Em preparação" : "▶ Iniciar";
+    iniciar.title = emDisputa ? "Monitoramento e envio de lances ainda não estão habilitados." : "";
+  }
+  const modoProposta = document.getElementById(`${PAINEL_ID}_modo_proposta`);
+  const modoDisputa = document.getElementById(`${PAINEL_ID}_modo_disputa`);
+  if (modoProposta) {
+    modoProposta.style.background = emDisputa ? "#fff" : "#ede9fe";
+    modoProposta.style.color = emDisputa ? "#475569" : "#5b21b6";
+    modoProposta.style.borderColor = emDisputa ? "#cbd5e1" : "#8b5cf6";
+    modoProposta.disabled = ocupado;
+  }
+  if (modoDisputa) {
+    modoDisputa.style.background = emDisputa ? "#ede9fe" : "#fff";
+    modoDisputa.style.color = emDisputa ? "#5b21b6" : "#475569";
+    modoDisputa.style.borderColor = emDisputa ? "#8b5cf6" : "#cbd5e1";
+    modoDisputa.disabled = ocupado;
+  }
+  const avisoDisputa = document.getElementById(`${PAINEL_ID}_aviso_disputa`);
+  if (avisoDisputa) avisoDisputa.style.display = emDisputa ? "block" : "none";
+  const itensDisputa = document.getElementById(`${PAINEL_ID}_itens_disputa`);
+  if (itensDisputa) itensDisputa.style.display = emDisputa ? "block" : "none";
+  const rodape = document.getElementById(`${PAINEL_ID}_rodape`);
+  if (rodape) {
+    rodape.textContent = emDisputa
+      ? "Estrutura em preparação · nenhum lance será enviado"
+      : "Preenche e salva item por item · 10 itens por página";
   }
   const pausar = document.getElementById(`${PAINEL_ID}_pausar`);
   if (pausar) {
-    // Pausar fica sempre disponível: dá para deixar o bot já pausado antes de
-    // iniciar (ele espera você mandar continuar).
+    // Pausar fica disponível no Modo Proposta; o Modo Disputa ainda não executa.
+    pausar.disabled = emDisputa && !ocupado;
+    pausar.style.opacity = pausar.disabled ? "0.6" : "1";
     pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
     pausar.style.background = botPausado ? "#168821" : "#6d28d9";
   }
@@ -3611,9 +3654,11 @@ function atualizarPainel() {
   if (el) el.textContent = botPausado ? `⏸ Pausado — ${painelStatus}` : painelStatus;
 }
 
-function mostrarPainel() {
+function mostrarPainel(modo) {
+  if (modo === "disputa" || modo === "proposta") definirModoPainel(modo);
   if (document.getElementById(PAINEL_ID)) {
     atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
     return;
   }
 
@@ -3654,7 +3699,18 @@ function mostrarPainel() {
       <button id="${PAINEL_ID}_fechar" title="Fechar painel" style="background:transparent;border:0;color:#fff;cursor:pointer;font-size:14px;">✕</button>
     </div>
     <div style="padding:10px;">
-      <label style="display:block;font-weight:600;margin-bottom:4px;color:#334155;" for="${PAINEL_ID}_proposta">📋 Proposta a preencher</label>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button id="${PAINEL_ID}_modo_proposta" type="button" style="flex:1;padding:6px;border:1px solid #8b5cf6;border-radius:8px;background:#ede9fe;color:#5b21b6;font:inherit;font-weight:700;cursor:pointer;">📝 Proposta</button>
+        <button id="${PAINEL_ID}_modo_disputa" type="button" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font:inherit;font-weight:700;cursor:pointer;">⚔️ Disputa</button>
+      </div>
+      <div id="${PAINEL_ID}_aviso_disputa" role="status" style="display:none;margin-bottom:8px;padding:7px;border:1px solid #fde68a;border-radius:8px;background:#fef9c3;color:#92400e;font-size:10px;">
+        Estrutura inicial: monitoramento e envio automático de lances desativados. Será usada a mesma velocidade do Modo Proposta.
+      </div>
+      <div id="${PAINEL_ID}_itens_disputa" style="display:none;margin-bottom:8px;">
+        <div style="font-weight:700;font-size:10px;color:#475569;margin-bottom:4px;">📦 Itens e valores cadastrados</div>
+        <div id="${PAINEL_ID}_lista_disputa" role="list" style="max-height:120px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#f8fafc;color:#475569;font-size:10px;">Selecione uma proposta para consultar os valores.</div>
+      </div>
+      <label style="display:block;font-weight:600;margin-bottom:4px;color:#334155;" for="${PAINEL_ID}_proposta">📋 Proposta / licitação</label>
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <select id="${PAINEL_ID}_proposta" style="flex:1;min-width:0;padding:6px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;">
           <option value="">Carregando propostas…</option>
@@ -3668,15 +3724,27 @@ function mostrarPainel() {
         <button id="${PAINEL_ID}_parar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#e52207;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏹ Parar</button>
       </div>
       <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:11px;line-height:1.4;color:#475569;"></pre>
-      <div style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
+      <div id="${PAINEL_ID}_rodape" style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
     </div>`;
 
   document.body.appendChild(painel);
 
   document.getElementById(`${PAINEL_ID}_fechar`).addEventListener("click", removerPainel);
   document.getElementById(`${PAINEL_ID}_recarregar`).addEventListener("click", () => carregarPropostasNoPainel());
-  document.getElementById(`${PAINEL_ID}_proposta`).addEventListener("change", () => atualizarPainel());
-  document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => iniciarPeloPainel());
+  document.getElementById(`${PAINEL_ID}_proposta`).addEventListener("change", () => {
+    atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
+  });
+  document.getElementById(`${PAINEL_ID}_modo_proposta`).addEventListener("click", () => definirModoPainel("proposta"));
+  document.getElementById(`${PAINEL_ID}_modo_disputa`).addEventListener("click", () => definirModoPainel("disputa"));
+  document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => {
+    if (painelModo === "disputa") {
+      definirStatusDoPainel("Modo Disputa ainda não envia lances. Aguardando dados da licitação ativa.");
+      registrarNoPainel("⏳ Monitoramento de disputa ainda está desativado.");
+      return;
+    }
+    iniciarPeloPainel();
+  });
   document.getElementById(`${PAINEL_ID}_pausar`).addEventListener("click", () => {
     botPausado = !botPausado;
     registrarNoPainel(botPausado ? "⏸ Bot pausado." : "▶ Bot retomado.");
@@ -3785,6 +3853,7 @@ async function carregarPropostasNoPainel() {
     select.innerHTML = '<option value="">Configure a URL do sistema (⚙️ Config)</option>';
     definirStatusDoPainel("Configure a URL do sistema no popup (⚙️ Config).");
     atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
     return;
   }
 
@@ -3801,6 +3870,7 @@ async function carregarPropostasNoPainel() {
       select.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
       definirStatusDoPainel("Nenhuma proposta no sistema ainda.");
       atualizarPainel();
+      if (painelModo === "disputa") carregarItensDisputaNoPainel();
       return;
     }
 
@@ -3837,6 +3907,80 @@ async function carregarPropostasNoPainel() {
     );
   }
   atualizarPainel();
+  if (painelModo === "disputa") carregarItensDisputaNoPainel();
+}
+
+let requisicaoItensDisputa = 0;
+
+/** Mostra itens e valores de referência, sem executar nenhuma ação de disputa. */
+async function carregarItensDisputaNoPainel() {
+  const select = document.getElementById(`${PAINEL_ID}_proposta`);
+  const lista = document.getElementById(`${PAINEL_ID}_lista_disputa`);
+  if (!select || !lista || painelModo !== "disputa") return;
+
+  const propostaId = select.value;
+  const requisicao = ++requisicaoItensDisputa;
+  if (!propostaId) {
+    lista.textContent = "Selecione uma proposta para consultar os valores.";
+    return;
+  }
+
+  lista.textContent = "Carregando itens e valores…";
+  const apiUrl = await lerApiUrl();
+  if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+  if (!apiUrl) {
+    lista.textContent = "Configure a URL do sistema no popup para consultar os itens.";
+    return;
+  }
+
+  try {
+    const resposta = await chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(propostaId)}/itens`);
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+    if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+
+    const itens = Array.isArray(resposta.dados) ? resposta.dados : [];
+    lista.replaceChildren();
+    if (itens.length === 0) {
+      lista.textContent = "Nenhum item cadastrado nesta proposta.";
+      return;
+    }
+
+    for (const item of itens) {
+      const linha = document.createElement("div");
+      linha.setAttribute("role", "listitem");
+      linha.style.cssText = "display:flex;gap:6px;padding:5px 3px;border-bottom:1px solid #e2e8f0;";
+
+      const numero = document.createElement("strong");
+      numero.textContent = String(item.numeroItem ?? "—");
+      numero.style.cssText = "min-width:22px;color:#6d28d9;";
+
+      const dados = document.createElement("div");
+      dados.style.cssText = "min-width:0;flex:1;";
+      const descricao = document.createElement("div");
+      descricao.textContent = String(item.descricao || "(sem descrição)");
+      descricao.title = descricao.textContent;
+      descricao.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;";
+
+      const valores = document.createElement("div");
+      valores.textContent = `Atual ${formatarValorPainelDisputa(item.valorUnitario)} · Mín. ${formatarValorPainelDisputa(item.valorMinimo)}`;
+      valores.style.cssText = "font-size:9px;color:#64748b;white-space:normal;";
+
+      dados.append(descricao, valores);
+      linha.append(numero, dados);
+      lista.appendChild(linha);
+    }
+  } catch (erro) {
+    if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+    lista.textContent = `Não consegui carregar os itens (${erro?.message || "erro desconhecido"}).`;
+  }
+}
+
+function formatarValorPainelDisputa(valor) {
+  if (valor === null || valor === undefined || valor === "") return "não informado";
+  const numero = Number(valor);
+  return Number.isFinite(numero)
+    ? numero.toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+    : String(valor);
 }
 
 function escapeHtml(texto) {
@@ -3845,6 +3989,13 @@ function escapeHtml(texto) {
 
 /** O botão "▶ Iniciar" do painel: preenche os itens da proposta escolhida. */
 async function iniciarPeloPainel() {
+  if (painelModo === "disputa") {
+    definirStatusDoPainel("Modo Disputa ainda não envia lances. Aguardando dados da licitação ativa.");
+    registrarNoPainel("⏳ Nenhum lance foi enviado; a integração está em preparação.");
+    atualizarPainel();
+    return;
+  }
+
   if (rodandoPeloPainel || rodandoAgora) {
     registrarNoPainel("⏳ Já existe um preenchimento em andamento.");
     return;

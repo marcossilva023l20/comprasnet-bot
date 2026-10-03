@@ -13,6 +13,7 @@ interface Item {
   unidade: string;
   valorEstimado: string | null;
   valorUnitario: string | null;
+  valorMinimo: string | null;
   marcaFabricante: string | null;
   modeloVersao: string | null;
   enviado: boolean | null;
@@ -28,6 +29,7 @@ interface EditItemForm {
   unidade: string;
   valorEstimado: string;
   valorUnitario: string;
+  valorMinimo: string;
   marcaFabricante: string;
   modeloVersao: string;
 }
@@ -35,6 +37,7 @@ interface EditItemForm {
 interface BulkItemDraft {
   baseUpdatedAt: string;
   valorUnitario: string;
+  valorMinimo: string;
   marcaFabricante: string;
   modeloVersao: string;
 }
@@ -62,7 +65,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
   const [newItem, setNewItem] = useState({
     numeroItem: "", descricao: "", descricaoDetalhada: "",
     quantidade: "1", unidade: "Unidade",
-    valorEstimado: "", valorUnitario: "", marcaFabricante: "", modeloVersao: "",
+    valorEstimado: "", valorUnitario: "", valorMinimo: "", marcaFabricante: "", modeloVersao: "",
   });
 
   const showToast = (type: "success" | "error", text: string) => {
@@ -122,7 +125,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
       const [novo] = await res.json();
       setItems((p) => [...p, novo].sort((a, b) => a.numeroItem - b.numeroItem));
       setShowAddItem(false);
-      setNewItem({ numeroItem: "", descricao: "", descricaoDetalhada: "", quantidade: "1", unidade: "Unidade", valorEstimado: "", valorUnitario: "", marcaFabricante: "", modeloVersao: "" });
+      setNewItem({ numeroItem: "", descricao: "", descricaoDetalhada: "", quantidade: "1", unidade: "Unidade", valorEstimado: "", valorUnitario: "", valorMinimo: "", marcaFabricante: "", modeloVersao: "" });
       showToast("success", "Item adicionado!");
       setExpandedItem(novo.id);
     }
@@ -217,7 +220,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
           <a
             href={`/api/propostas/${propostaId}/exportar`}
             download
-            title="Baixa a planilha com Item, Descrição, Quantidade, Valor Estimado, Valor Unitário, Marca e Modelo — edite no Excel e importe de volta"
+            title="Baixa a planilha com Item, Descrição, Quantidade, Valores Estimado, Unitário e Mínimo, Marca e Modelo — edite no Excel e importe de volta"
             className="bg-white text-[#6d28d9] border border-[#6d28d9] hover:bg-purple-50 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
           >
             📤 Exportar Planilha
@@ -249,10 +252,10 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
         <div className="bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3 text-xs text-purple-800 flex items-start gap-2">
           <span>💡</span>
           <span>
-            <strong>Exportar → editar no Excel → Importar:</strong> a planilha exportada traz os itens com a coluna{" "}
-            <code className="bg-white/70 px-1 rounded">Item</code>. Ao importar de volta, os itens são{" "}
-            <strong>atualizados pelo número</strong> (não duplicam) e só as colunas que existirem na planilha são
-            alteradas. Números novos viram itens novos; para apagar um valor, deixe a célula em branco.
+            <strong>Exportar → editar no Excel → Importar:</strong> a planilha inclui a coluna{" "}
+            <code className="bg-white/70 px-1 rounded">Valor Mínimo (R$)</code>, usada como referência no Modo Disputa. Os itens são{" "}
+            <strong>atualizados pelo número</strong> (não duplicam) e só as colunas existentes na planilha são alteradas.
+            Números novos viram itens novos; célula em branco apaga o valor da respectiva coluna. O monitoramento e o envio automático de lances ainda não estão ativos nesta estrutura inicial.
           </span>
         </div>
       )}
@@ -284,7 +287,7 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Descrição Detalhada</label>
                 <textarea value={newItem.descricaoDetalhada} onChange={(e) => setNewItem({ ...newItem, descricaoDetalhada: e.target.value })} rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50 resize-none" />
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Quantidade</label>
                   <input type="text" value={newItem.quantidade} onChange={(e) => setNewItem({ ...newItem, quantidade: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
@@ -295,7 +298,11 @@ export default function PropostaEditor({ propostaId, initialItens }: PropostaEdi
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Val. Unitário (R$)</label>
-                  <input type="text" value={newItem.valorUnitario} onChange={(e) => setNewItem({ ...newItem, valorUnitario: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
+                  <input type="text" inputMode="decimal" value={newItem.valorUnitario} onChange={(e) => setNewItem({ ...newItem, valorUnitario: e.target.value })} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Valor Mínimo (R$)</label>
+                  <input type="text" inputMode="decimal" value={newItem.valorMinimo} onChange={(e) => setNewItem({ ...newItem, valorMinimo: e.target.value })} placeholder="Opcional" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -396,6 +403,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
     unidade: item.unidade,
     valorEstimado: item.valorEstimado || "",
     valorUnitario: item.valorUnitario || "",
+    valorMinimo: item.valorMinimo || "",
     marcaFabricante: item.marcaFabricante || "",
     modeloVersao: item.modeloVersao || "",
   }));
@@ -482,7 +490,7 @@ function EditItemModal({ item, saving, onClose, onSave }: {
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label htmlFor="edit-item-quantity" className="block text-xs font-semibold text-slate-600 mb-1">Quantidade *</label>
               <input
@@ -513,6 +521,17 @@ function EditItemModal({ item, saving, onClose, onSave }: {
                 placeholder="0,0000"
                 value={form.valorUnitario}
                 onChange={(event) => updateField("valorUnitario", event.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-item-minimum" className="block text-xs font-semibold text-slate-600 mb-1">Valor Mínimo (R$)</label>
+              <input
+                id="edit-item-minimum"
+                inputMode="decimal"
+                placeholder="Opcional"
+                value={form.valorMinimo}
+                onChange={(event) => updateField("valorMinimo", event.target.value)}
                 className={inputClass}
               />
             </div>
@@ -575,6 +594,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
 }) {
   const [vals, setVals] = useState({
     valorUnitario: item.valorUnitario || "",
+    valorMinimo: item.valorMinimo || "",
     marcaFabricante: item.marcaFabricante || "",
     modeloVersao: item.modeloVersao || "",
   });
@@ -598,6 +618,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
           <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500 flex-wrap">
             <span>Qtd: <strong>{parseFloat(item.quantidade)}</strong> {item.unidade}</span>
             {item.valorEstimado && <span>Est: <strong>{fmt(item.valorEstimado)}</strong></span>}
+            {item.valorMinimo && <span className="text-amber-700">Mín.: <strong>{fmt(item.valorMinimo)}</strong></span>}
             {isFilled && <span className="text-green-600 font-semibold">{fmt(item.valorUnitario)} · {item.marcaFabricante}</span>}
           </div>
         </div>
@@ -622,7 +643,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
       {/* Expanded Form */}
       {isExpanded && (
         <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-5">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1">Quantidade ofertada</label>
               <div className="bg-slate-100 rounded-xl px-3 py-2.5 text-sm text-slate-600">{parseFloat(item.quantidade)} {item.unidade}</div>
@@ -647,6 +668,18 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
                   maximumFractionDigits: 4,
                 })}
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1.5">Valor Mínimo (R$)</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={vals.valorMinimo}
+                onChange={(event) => setVals({ ...vals, valorMinimo: event.target.value })}
+                placeholder="Opcional"
+                title="Valor de referência para o Modo Disputa; o envio automático de lances ainda não está ativo."
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white"
+              />
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
@@ -676,7 +709,7 @@ function ItemCard({ item, isExpanded, onToggle, onSave, onDelete, onEdit, isSavi
               🗑 Excluir
             </button>
             <button
-              onClick={() => onSave(item.id, { valorUnitario: vals.valorUnitario || null, marcaFabricante: vals.marcaFabricante || null, modeloVersao: vals.modeloVersao || null })}
+              onClick={() => onSave(item.id, { valorUnitario: vals.valorUnitario || null, valorMinimo: vals.valorMinimo || null, marcaFabricante: vals.marcaFabricante || null, modeloVersao: vals.modeloVersao || null })}
               disabled={isSaving}
               className="bg-[#6d28d9] hover:bg-[#4c1d95] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-50 flex items-center gap-2"
             >
@@ -705,6 +738,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
     return {
       id: item.id,
       valorUnitario: item.valorUnitario || "",
+      valorMinimo: item.valorMinimo || "",
       marcaFabricante: item.marcaFabricante || "",
       modeloVersao: item.modeloVersao || "",
     };
@@ -718,6 +752,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
       [item.id]: {
         baseUpdatedAt: String(item.updatedAt),
         valorUnitario: current.valorUnitario,
+        valorMinimo: current.valorMinimo,
         marcaFabricante: current.marcaFabricante,
         modeloVersao: current.modeloVersao,
         [field]: value,
@@ -735,7 +770,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
         const res = await fetch(`/api/propostas/${propostaId}/itens/${row.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ valorUnitario: row.valorUnitario || null, marcaFabricante: row.marcaFabricante || null, modeloVersao: row.modeloVersao || null }),
+          body: JSON.stringify({ valorUnitario: row.valorUnitario || null, valorMinimo: row.valorMinimo || null, marcaFabricante: row.marcaFabricante || null, modeloVersao: row.modeloVersao || null }),
         });
         if (res.ok) updated[i] = await res.json();
         else failed++;
@@ -768,6 +803,7 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-20">Qtd</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-28">Val. Estimado</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-32">Valor Unitário *</th>
+              <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-32">Valor Mínimo</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-40">Marca/Fabricante *</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-40">Modelo/Versão</th>
               <th className="px-3 py-2.5 w-12 text-center font-semibold text-slate-500">Pronto</th>
@@ -787,6 +823,9 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
                 </td>
                 <td className="px-3 py-2">
                   <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
+                </td>
+                <td className="px-3 py-2">
+                  <input value={rows[idx]?.valorMinimo || ""} onChange={(e) => change(item, "valorMinimo", e.target.value)} placeholder="Opcional" title="Referência para o Modo Disputa" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
                 </td>
                 <td className="px-3 py-2">
                   <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />

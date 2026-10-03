@@ -239,6 +239,58 @@ export async function rodarPainel() {
     checar(/3\/3/.test(status) || /3/.test(status), `o painel mostra o resultado ("${status}")`);
   }
 
+  console.log("\n── 6) Modo Disputa fica só na estrutura e não inicia lances ──");
+  {
+    const { window, enviar, salvos } = ambiente(1);
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    const chamadas = [];
+    window.fetch = async (url, opcoes = {}) => {
+      chamadas.push(`${opcoes.method || "GET"} ${url}`);
+      if (String(url).endsWith("/api/propostas")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ id: 7, numeroDispensa: "45/2026", totalItens: 1, itensPreenchidos: 1 }],
+        };
+      }
+      if (String(url).endsWith("/api/propostas/7/itens")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ numeroItem: 1, descricao: "ITEM DE TESTE", valorUnitario: "20.0000", valorMinimo: "12.3400" }],
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    await enviar({ action: "painel_mostrar", modo: "disputa" });
+
+    const painel = window.document.getElementById("__comprasnet_bot_painel__");
+    const iniciar = window.document.getElementById("__comprasnet_bot_painel___iniciar");
+    const aviso = window.document.getElementById("__comprasnet_bot_painel___aviso_disputa");
+    checar(Boolean(painel), "abriu o painel flutuante do Modo Disputa");
+    checar(iniciar?.disabled === true, "o botão de iniciar disputa permanece desativado");
+    checar(aviso?.style.display === "block", "o painel avisa que monitoramento e lances estão desativados");
+    checar(/Em preparação/.test(iniciar?.textContent || ""), "o controle indica que a integração está em preparação");
+    const lista = window.document.getElementById("__comprasnet_bot_painel___lista_disputa");
+    const limite = Date.now() + 3000;
+    while (Date.now() < limite && !lista?.textContent.includes("Mín. 12,3400")) await sleep(20);
+    checar(lista?.textContent.includes("ITEM DE TESTE"), "exibe a descrição do item cadastrado");
+    checar(lista?.textContent.includes("Mín. 12,3400"), "exibe o Valor Mínimo com quatro casas decimais");
+    checar(lista?.textContent.includes("Atual 20,0000"), "exibe também o valor unitário atual");
+
+    // Mesmo se algum evento de clique escapar do estado disabled, o handler
+    // precisa recusar a execução pelo modo, sem chamar a lógica de proposta.
+    iniciar.disabled = false;
+    iniciar.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    checar(salvos.length === 0, "nenhum item foi preenchido ou salvo no Modo Disputa");
+    checar(!chamadas.some((c) => c.includes("/script") || c.startsWith("PUT")), "não buscou script nem enviou alterações/lances");
+    checar(
+      /ainda não envia lances/.test(window.document.getElementById("__comprasnet_bot_painel___status").textContent),
+      "o handler bloqueia a execução mesmo se acionado diretamente",
+    );
+  }
+
   return falhas;
 }
 

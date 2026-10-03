@@ -32,6 +32,7 @@ export const itens = pgTable("itens", {
   unidade: varchar("unidade", { length: 50 }).notNull().default("Unidade"),
   valorEstimado: numeric("valor_estimado", { precision: 14, scale: 4 }),
   valorUnitario: numeric("valor_unitario", { precision: 14, scale: 4 }),
+  valorMinimo: numeric("valor_minimo", { precision: 14, scale: 4 }),
   marcaFabricante: varchar("marca_fabricante", { length: 255 }),
   modeloVersao: varchar("modelo_versao", { length: 255 }),
   enviado: boolean("enviado").default(false),

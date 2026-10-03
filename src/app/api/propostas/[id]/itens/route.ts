@@ -48,11 +48,13 @@ export async function POST(
       const item = row as Record<string, unknown>;
       const valorEstimado = parseLocalizedNumber(item.valorEstimado);
       const valorUnitario = parseLocalizedNumber(item.valorUnitario);
+      const valorMinimo = parseLocalizedNumber(item.valorMinimo);
       const quantidade = parseLocalizedNumber(item.quantidade);
 
       for (const [field, raw, parsed] of [
         ["valor estimado", item.valorEstimado, valorEstimado],
         ["valor unitário", item.valorUnitario, valorUnitario],
+        ["valor mínimo", item.valorMinimo, valorMinimo],
         ["quantidade", item.quantidade, quantidade],
       ] as const) {
         if (!isBlankNumericValue(raw) && parsed === null) {
@@ -74,6 +76,7 @@ export async function POST(
         unidade: typeof item.unidade === "string" && item.unidade.trim() ? item.unidade.trim() : "Unidade",
         valorEstimado,
         valorUnitario,
+        valorMinimo,
         marcaFabricante: typeof item.marcaFabricante === "string" && item.marcaFabricante.trim() ? item.marcaFabricante.trim() : null,
         modeloVersao: typeof item.modeloVersao === "string" && item.modeloVersao.trim() ? item.modeloVersao.trim() : null,
         enviado: false,

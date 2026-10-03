@@ -227,7 +227,7 @@
   <div class="header-icon">🤖</div>
   <div>
     <h1>ComprasNet Bot</h1>
-    <p>Preenchedor Automático de Propostas</p>
+    <p>Propostas e Modo Disputa</p>
   </div>
 </div>
 
@@ -235,7 +235,8 @@
 
   <!-- TABS -->
   <div class="tabs">
-    <div class="tab active" id="tab-bot" data-action="tab" data-tab="bot">🚀 Bot</div>
+    <div class="tab active" id="tab-bot" data-action="tab" data-tab="bot">🚀 Proposta</div>
+    <div class="tab" id="tab-disputa" data-action="tab" data-tab="disputa">⚔️ Disputa</div>
     <div class="tab" id="tab-config" data-action="tab" data-tab="config">⚙️ Config</div>
     <div class="tab" id="tab-ajuda" data-action="tab" data-tab="ajuda">❓ Ajuda</div>
   </div>
@@ -407,6 +408,41 @@
 
   </div><!-- /panel-bot -->
 
+  <!-- ══════════════════ TAB: MODO DISPUTA (estrutura inicial, sem envio de lances) ══════════════════ -->
+  <div id="panel-disputa" class="hidden">
+    <div class="card">
+      <div class="card-title">⚔️ Modo Disputa</div>
+      <div class="alert alert-warning" id="disputa-availability" role="status" aria-live="polite">
+        Estrutura inicial: esta versão não monitora concorrentes nem envia lances. Nenhum lance automático será feito até a integração ser finalizada com os dados de uma disputa ativa.
+      </div>
+      <div class="field">
+        <label for="disputa-proposta-select">Proposta / licitação</label>
+        <select id="disputa-proposta-select">
+          <option value="">-- Selecione a proposta --</option>
+        </select>
+      </div>
+      <div class="text-xs" id="disputa-speed">Velocidade compartilhada com o Modo Proposta: —</div>
+    </div>
+
+    <div class="card" id="disputa-items-card" style="display:none;">
+      <div class="card-title">📦 Itens e valores cadastrados</div>
+      <div class="text-xs mb-2">O Valor Mínimo vem da planilha/sistema e será a referência da futura lógica. Revise os valores antes da disputa.</div>
+      <div class="items-list" id="disputa-items-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🪟 Acompanhamento flutuante</div>
+      <p class="text-xs mb-2">A janela usa a mesma velocidade configurada no Modo Proposta. Os controles visuais estão prontos; monitoramento e lances continuam desativados nesta etapa.</p>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" id="disputa-pin-btn" type="button" style="flex:1;">📌 Painel na página</button>
+        <button class="btn btn-outline btn-sm" id="disputa-float-btn" type="button" style="flex:1;">🗗 Janela flutuante</button>
+      </div>
+      <button class="btn btn-success mt-2" id="disputa-start-btn" type="button" disabled title="Será habilitado quando a integração com a disputa estiver finalizada.">
+        ⏳ Monitoramento aguardando integração
+      </button>
+    </div>
+  </div>
+
   <!-- ══════════════════ TAB: CONFIG ══════════════════ -->
   <div id="panel-config" class="hidden">
     <div class="card">
@@ -505,7 +541,8 @@
         • <strong>Descrição</strong> — nome do produto<br>
         • <strong>Quantidade</strong> — qtd solicitada<br>
         • <strong>Unidade</strong> — ex: Unidade, Rolo<br>
-        • <strong>Valor Unitário (R$)</strong> — seu preço<br>
+        • <strong>Valor Unitário (R$)</strong> — seu preço para a proposta<br>
+        • <strong>Valor Mínimo (R$)</strong> — referência para o futuro Modo Disputa<br>
         • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
         • <strong>Modelo/Versão</strong> — ex: ADVANCED<br>
         • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet (📥 Ler itens da página)

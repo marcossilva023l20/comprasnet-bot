@@ -136,6 +136,7 @@ export default function ExtensaoPage() {
             <li>✅ O bot só preenche campos que conseguiu associar com segurança a um item</li>
             <li>✅ Use <strong>delay &quot;Lento&quot;</strong> se o site estiver demorando para responder</li>
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>
+            <li>📉 <strong>Valor Mínimo</strong> é importado/exportado na planilha e aparece no Modo Disputa da extensão; o monitoramento e envio automático ainda estão desativados nesta estrutura inicial</li>
             <li>⚠️ Se aparecer CAPTCHA, resolva manualmente e continue</li>
             <li>⚠️ Se a extensão avisar que não encontrou &quot;Salvar&quot;, confira manualmente se o item foi gravado</li>
             <li>🔄 <strong>Manter atualizada</strong>: aba ⚙️ → &quot;🔄 Verificar&quot; → &quot;⚡ Atualizar&quot; (a pasta da extensão é pedida só na primeira vez)</li>
