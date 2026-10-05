@@ -210,7 +210,7 @@ export async function rodarFontes() {
             <div><p>Nº UASG (UNIDADE COMPRADORA)</p><p>120641</p></div>
           </section>
           <section>
-            <h4>ITENS DA CONTRATAÇÃO <span>41</span></h4>
+            <h4>ITENS DA CONTRATAÇÃO<span>43</span></h4>
             <table>
               <thead><tr><th>#</th><th>DESCRIÇÃO</th><th>QTD.</th><th>UNID.</th><th>VL. UNITÁRIO</th><th>VL. TOTAL</th></tr></thead>
               <tbody>

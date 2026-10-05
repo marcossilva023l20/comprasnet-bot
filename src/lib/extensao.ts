@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.18";
+export const VERSAO_EXTENSAO = "1.7.19";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,12 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.19",
+    itens: [
+      "Corrige a leitura do Radar PNCP quando o contador dos itens fica colado ao título no DOM (ex.: “Itens da contratação43”)",
+    ],
+  },
   {
     versao: "1.7.18",
     itens: [

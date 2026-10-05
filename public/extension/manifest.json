@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.7.18",
+  "version": "1.7.19",
   "description": "Lê itens do ComprasNet, CNET Mobile e Radar PNCP; preenche e SALVA cada item no ComprasNet, com painel flutuante e atualização em um clique.",
   "permissions": [
     "activeTab",

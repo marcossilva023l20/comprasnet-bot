@@ -2791,7 +2791,10 @@ function encontrarTituloItensRadar() {
     .filter(isVisible)
     .filter((el) => {
       const texto = normalizeText(el.textContent);
-      return texto.length <= 80 && (texto === prefixo || texto.startsWith(`${prefixo} `) || texto.startsWith(`${prefixo}(`));
+      // O contador do Radar pode ser um badge irmão sem espaço no DOM:
+      // "Itens da contratação43". Não exija separador textual depois do título.
+      const sufixo = texto.slice(prefixo.length, prefixo.length + 1);
+      return texto.length <= 80 && texto.startsWith(prefixo) && (!sufixo || !/[a-z]/.test(sufixo));
     })
     .sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0] || null;
 }
