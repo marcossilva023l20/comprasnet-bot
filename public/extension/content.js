@@ -2653,6 +2653,7 @@ async function irParaItem(itemNumber) {
 
 const PAGE_LABELS = [
   /quantidade\s+solicitada/i,
+  /(?:qtde|qtd)\.?\s+solicitada/i,
   /unidade\s+(?:de\s+)?fornecimento/i,
   /valor\s+estimado/i,
   /proposta\s+n[aã]o\s+cadastrada/i,
@@ -2668,7 +2669,7 @@ const PAGE_LABELS = [
 const ROTULO_DE_CAMPO = new RegExp(
   "^(?:valor\\s+unit[aá]rio(?:\\s*\\(\\s*r\\$\\s*\\))?|valor\\s+total(?:\\s*\\(\\s*r\\$\\s*\\))?|" +
     "valor\\s+estimado(?:\\s*\\(\\s*unit[aá]rio\\s*\\))?|marca(?:\\s*\\/\\s*|\\s+)fabricante|" +
-    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|quantidade(?:\\s+(?:solicitada|ofertada|total))?|" +
+    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|(?:quantidade|qtde|qtd)\\.?(?:\\s+(?:solicitada|ofertada|total))?|" +
     "unidade(?:\\s+(?:de\\s+)?(?:fornecimento|medida))?|descri[cç][aã]o(?:\\s+detalhada)?|" +
     "termo\\s+de\\s+aceita[cç][aã]o|proposta\\s+n[aã]o\\s+cadastrada)\\s*:?\\s*\\*?$",
   "i",
@@ -2773,7 +2774,7 @@ async function readPageItems(options = {}) {
     if (resultado.ok) return { ...resultado, origem: fonte.nome };
     return {
       ...resultado,
-      error: 'No CNET Mobile, pesquise a compra e clique em “Acompanhar compra”; depois aguarde a lista de itens aparecer e tente ler novamente.',
+      error: 'No CNET Mobile, abra “Acompanhar compra” e aguarde os cartões de itens aparecerem. Se houver uma verificação de segurança, conclua-a manualmente e tente ler novamente.',
       identificacao: resultado.identificacao || readPageIdentificacao(),
       origem: fonte.nome,
     };
@@ -2784,29 +2785,38 @@ async function readPageItems(options = {}) {
 }
 
 function encontrarTituloItensRadar() {
-  return [...document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading']")]
-    .find((el) => normalizeText(el.textContent) === "itens da contratacao") || null;
+  const prefixo = "itens da contratacao";
+  const seletores = "h1, h2, h3, h4, h5, h6, [role='heading'], strong, b, p, div, span";
+  return [...document.querySelectorAll(seletores)]
+    .filter(isVisible)
+    .filter((el) => {
+      const texto = normalizeText(el.textContent);
+      return texto.length <= 80 && (texto === prefixo || texto.startsWith(`${prefixo} `) || texto.startsWith(`${prefixo}(`));
+    })
+    .sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0] || null;
 }
 
 function encontrarRaizDetalheRadar() {
   const titulo = encontrarTituloItensRadar();
   if (!titulo) return null;
+  const dialogo = titulo.closest('dialog[open], [role="dialog"], [aria-modal="true"]');
+  if (dialogo) return dialogo;
+
   let atual = titulo;
-  for (let nivel = 0; atual && nivel < 12; nivel += 1, atual = atual.parentElement) {
-    if (atual.matches?.('[role="dialog"], [aria-modal="true"]')) return atual;
+  for (let nivel = 0; atual && nivel < 20; nivel += 1, atual = atual.parentElement) {
     if (atual.classList?.contains("fixed") && atual.classList?.contains("inset-0")) return atual;
   }
   return titulo.closest("section")?.parentElement?.parentElement || titulo.parentElement;
 }
 
 function encontrarTabelaItensRadar() {
-  const titulo = encontrarTituloItensRadar();
-  if (!titulo) return null;
-
-  let escopo = titulo.closest("section") || titulo.parentElement;
-  for (let nivel = 0; escopo && nivel < 4; nivel += 1, escopo = escopo.parentElement) {
-    const tabela = [...escopo.querySelectorAll("table")].find(isVisible);
-    if (tabela && analisarCabecalhoTabelaItens(tabela)?.colunas.numero >= 0) return tabela;
+  if (!encontrarTituloItensRadar()) return null;
+  const raiz = encontrarRaizDetalheRadar() || document;
+  const tabelas = [...raiz.querySelectorAll("table")].filter(isVisible);
+  for (const tabela of tabelas) {
+    const analisada = analisarCabecalhoTabelaItens(tabela);
+    if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) continue;
+    return tabela;
   }
   return null;
 }
@@ -3065,7 +3075,8 @@ function readRadarIdentificacao() {
   const texto = String(raiz.innerText || raiz.textContent || "").replace(/\s+/g, " ").trim();
   const numeroCompra = (
     firstMatch(texto, /n[ºo°.]?\s*(?:da\s*)?compra\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
-    firstMatch(texto, /n[ºo°.]?\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i)
+    firstMatch(texto, /n[ºo°.]?\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
+    firstMatch(texto, /\b(\d{14}-\d-\d{4,10}\/\d{4})\b/)
   ).replace(/\s+/g, "");
   const tituloObjeto = raiz.querySelector("header h1, header h2, header h3")?.textContent?.trim() || "";
   const objetoRotulado = firstMatch(texto, /objeto\s*:?\s*(.{10,300}?)(?=\s+(?:cnpj|unidade|uasg|processo|sistema de origem)\b|$)/i);
@@ -3251,6 +3262,7 @@ function readPageIdentificacao() {
     "";
 
   const numeroCompra =
+    firstMatch(texto, /dispensa\s+eletr[oô]nica\s+n[ºo°.]?\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
     firstMatch(texto, /(?:n[ºo°.]?\s*(?:da\s*)?compra|n[uú]mero\s+da\s+compra)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
     firstMatch(texto, /(?:processo|n[ºo°.]?\s*processo)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
     firstMatch(texto, /\b(\d{15,20})\b/) ||
@@ -3310,7 +3322,7 @@ function numeroCompraDaUrl() {
 /**
  * Encontra os blocos de item. Um bloco é o menor elemento visível que:
  *   - começa com o número do item;
- *   - contém "Quantidade solicitada";
+ *   - contém "Quantidade solicitada" ou "Qtde solicitada";
  *   - contém "Valor estimado" ou um valor em R$.
  * Blocos repetidos (contêineres maiores que envolvem os itens) são descartados.
  */
@@ -3345,14 +3357,14 @@ function findItemBlocks({ exigirVisivel = true } = {}) {
       if (!isVisible(el)) continue;
       const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
       if (!bruto || bruto.length > 3000) continue;
-      if (!/quantidade\s+solicitada/i.test(bruto)) continue;
+      if (!/(?:quantidade|qtde|qtd)\.?\s+solicitada/i.test(bruto)) continue;
       if (!/valor\s+estimado/i.test(bruto) && !/r\$/i.test(bruto)) continue;
 
       // Confirma pelo que está VISÍVEL: itens escondidos atrás de um
       // "Mostrar todos os itens" não contam (quem cuida disso é expandirTodos).
       if (exigirVisivel) {
         const visivel = textoVisivel(el);
-        if (!visivel || !/quantidade\s+solicitada/i.test(visivel)) continue;
+        if (!visivel || !/(?:quantidade|qtde|qtd)\.?\s+solicitada/i.test(visivel)) continue;
       }
 
       const numero = itemNumberFromBlock(el);
@@ -3392,7 +3404,7 @@ function itemNumberFromBlock(el) {
   const porAtributo = getItemNumberFromAttributes(el);
   if (porAtributo) return porAtributo;
 
-  const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
+  const bruto = (textoVisivel(el) || el.textContent || "").replace(/\s+/g, " ").trim();
   const porTexto = getLeadingItemNumber(bruto);
   if (porTexto) return porTexto;
 
@@ -3449,11 +3461,13 @@ function valorDoCampo(bloco, regexRotulo, regexValor) {
 
 function extractItemData(bloco, numero) {
   const quantidade =
-    valorDoCampo(bloco, /quantidade\s+(?:solicitada|ofertada)/i, /[0-9][0-9.,]*/) ||
-    valorDoCampo(bloco, /quantidade/i, /[0-9][0-9.,]*/);
+    valorDoCampo(bloco, /(?:quantidade|qtde|qtd)\.?\s+(?:solicitada|ofertada)/i, /[0-9][0-9.,]*/) ||
+    valorDoCampo(bloco, /(?:quantidade|qtde|qtd)\b/i, /[0-9][0-9.,]*/);
   const unidade =
-    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?fornecimento/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
-    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?medida/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/);
+    valorDoCampo(bloco, /unidade\s+(?:de\s+)?fornecimento/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /unidade\s+(?:de\s+)?medida/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /unidade(?!\s+(?:de\s+)?(?:fornecimento|medida))/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /\bunid\.?\b/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/);
   const valorEstimado = valorDoCampo(
     bloco,
     /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?/i,

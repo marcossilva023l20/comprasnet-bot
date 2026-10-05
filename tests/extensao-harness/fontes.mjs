@@ -60,7 +60,55 @@ export async function rodarFontes() {
     window.close();
   }
 
-  console.log("\n── 2) CNET Mobile: captura detalhes em modal e fecha para continuar a lista ──");
+  console.log("\n── 2) CNET Mobile: lê o cartão/accordion real com “Qtde solicitada” ──");
+  {
+    const html = `<!doctype html><html><body>
+      <main>
+        <h1>Acompanhar Contratação</h1>
+        <p>Dispensa Eletrônica Nº 25/2026 (Lei 14.133/2021)</p>
+        <p>UASG 795140 - 3.BATALHÃO DE INFANTARIA DE FUZILEIROS NAVAIS</p>
+        <div class="item-card" data-item="1">
+          <div class="item-heading">
+            <span>1</span><span>MÓDULO MEMÓRIA</span>
+            <button id="expandir-item" aria-label="Expandir detalhes do item 1" aria-expanded="false"><svg class="chevron-down"></svg></button>
+          </div>
+          <div class="resumo">
+            <div><span>Qtde solicitada</span><span>8</span></div>
+            <div><span>Valor estimado (unitário)</span><span>R$ 176,0000</span></div>
+          </div>
+          <div id="detalhes-item" class="accordion" style="display:none">
+            <div><span>Unidade de fornecimento</span><span>UNIDADE</span></div>
+            <div><span>Descrição detalhada</span><span>Módulo de memória para computador, capacidade compatível com o equipamento.</span></div>
+          </div>
+        </div>
+      </main>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra?compra=79514006000252026",
+      preparar: (w) => {
+        w.document.getElementById("expandir-item").addEventListener("click", (event) => {
+          event.currentTarget.setAttribute("aria-expanded", "true");
+          w.document.getElementById("detalhes-item").style.display = "block";
+        });
+      },
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: true, delay: 0 });
+    checar(resultado.ok, `leitura do cartão CNET concluiu (${resultado.error || "sem erro"})`);
+    checar(resultado.itens?.length === 1, `leu o cartão do item (${resultado.itens?.length})`);
+    checar(resultado.itens?.[0]?.numeroItem === "1", `número do cartão preservado (${resultado.itens?.[0]?.numeroItem})`);
+    checar(resultado.itens?.[0]?.descricao === "MÓDULO MEMÓRIA", `descrição do cabeçalho lida (${resultado.itens?.[0]?.descricao})`);
+    checar(resultado.itens?.[0]?.quantidade === "8", `Qtde solicitada lida (${resultado.itens?.[0]?.quantidade})`);
+    checar(resultado.itens?.[0]?.unidade === "UNIDADE", `unidade lida do accordion (${resultado.itens?.[0]?.unidade})`);
+    checar(resultado.itens?.[0]?.valorEstimado === "R$ 176,0000", `valor estimado lido (${resultado.itens?.[0]?.valorEstimado})`);
+    checar(/capacidade compatível/i.test(resultado.itens?.[0]?.descricaoDetalhada || ""), "descrição detalhada lida após expandir a seta");
+    checar(resultado.identificacao?.uasg === "795140", `UASG lida (${resultado.identificacao?.uasg})`);
+    checar(resultado.identificacao?.numeroCompra === "25/2026", `número da dispensa preferido ao código da URL (${resultado.identificacao?.numeroCompra})`);
+    checar(resultado.expandidos === 1, `expandiu o cartão (${resultado.expandidos})`);
+    window.close();
+  }
+
+  console.log("\n── 3) CNET Mobile: captura detalhes em modal e fecha para continuar a lista ──");
   {
     const html = `<!doctype html><html><body>
       <main><table>
@@ -102,24 +150,27 @@ export async function rodarFontes() {
     window.close();
   }
 
-  console.log("\n── 3) Radar PNCP: ler a tabela “Itens da contratação” ──");
+  console.log("\n── 4) Radar PNCP: ler os itens do modal real com contador no título ──");
   {
     const html = `<!doctype html><html><body>
       <article class="resultado"><p>UASG 111111</p><p>Nº / ano</p><p>99/2099</p></article>
       <div class="fixed inset-0 z-50">
         <div class="relative">
-          <header><h2>Fornecimento de material de expediente</h2></header>
-          <section class="identificacao">
-            <div><p>Nº da compra / ano</p><p>25/2026</p></div>
-            <div><p>UASG</p><p>795140</p></div>
-            <div><p>Encerramento das propostas</p><p>30/11/2026</p></div>
-          </section>
+          <header>
+            <h2>2.1. A Escola de Sargentos das Armas (ESA) é responsável pelo Curso de Formação e Graduação de Sargentos</h2>
+            <p>00394452000103-1-021036/2026</p>
+          </header>
+          <section class="documentos"><p>61/2026.pdf</p></section>
           <section>
-            <div class="mb-2 flex items-center justify-between"><h4>Itens da contratação</h4></div>
-          <div class="overflow-x-auto"><table>
-            <thead><tr><th>#</th><th>Descrição</th><th>Qtd.</th><th>Unid.</th><th>Vl. unitário</th><th>Vl. total</th></tr></thead>
-            <tbody><tr><td>3</td><td>PAPEL A4 RECICLADO</td><td>10</td><td>Resma</td><td>R$ 28,90</td><td>R$ 289,00</td></tr></tbody>
-          </table></div>
+            <div class="mb-2 flex items-center justify-between"><h4>ITENS DA CONTRATAÇÃO <span>3</span></h4></div>
+            <div class="overflow-x-auto"><table>
+              <thead><tr><th>#</th><th>DESCRIÇÃO</th><th>QTD.</th><th>UNID.</th><th>VL. UNITÁRIO</th><th>VL. TOTAL</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>Gráfico - Impressos / Plastificação / Acabamento Gráfico - Serviço de impressão colorida a laser em folha tamanho A4.</td><td>12.005</td><td>UNIDADE</td><td>R$ 1,66</td><td>R$ 19.928,30</td></tr>
+                <tr><td>2</td><td>Gráfico - Impressos / Plastificação / Acabamento Gráfico - Serviço de impressão colorida a laser em folha tamanho A3.</td><td>8.005</td><td>UNIDADE</td><td>R$ 2,53</td><td>R$ 20.252,65</td></tr>
+                <tr><td>3</td><td>Gráfico - Impressos / Plastificação / Acabamento Gráfico - Serviço de impressão colorida a laser em folha tamanho A3+.</td><td>4.005</td><td>UNIDADE</td><td>R$ 2,58</td><td>R$ 10.332,90</td></tr>
+              </tbody>
+            </table></div>
           </section>
         </div>
       </div>
@@ -131,20 +182,19 @@ export async function rodarFontes() {
     const resultado = await enviar({ action: "read_source_items", expandir: false, delay: 0 });
     checar(resultado.ok, `leitura do Radar concluiu (${resultado.error || "sem erro"})`);
     checar(resultado.origem === "Radar de Licitações PNCP", `identificou a fonte (${resultado.origem})`);
-    checar(resultado.itens?.length === 1, `leu a tabela de itens (${resultado.itens?.length})`);
-    checar(resultado.itens?.[0]?.numeroItem === "3", `número do item preservado (${resultado.itens?.[0]?.numeroItem})`);
-    checar(resultado.itens?.[0]?.descricao === "PAPEL A4 RECICLADO", `descrição lida (${resultado.itens?.[0]?.descricao})`);
-    checar(resultado.itens?.[0]?.quantidade === "10", `quantidade lida (${resultado.itens?.[0]?.quantidade})`);
-    checar(resultado.itens?.[0]?.unidade === "Resma", `unidade lida (${resultado.itens?.[0]?.unidade})`);
-    checar(resultado.itens?.[0]?.valorEstimado === "R$ 28,90", `valor unitário estimado lido (${resultado.itens?.[0]?.valorEstimado})`);
-    checar(resultado.identificacao?.numeroCompra === "25/2026", `número/ano reconhecido no detalhe (${resultado.identificacao?.numeroCompra})`);
-    checar(resultado.identificacao?.uasg === "795140", `UASG veio do modal aberto, não do card de fundo (${resultado.identificacao?.uasg})`);
-    checar(resultado.identificacao?.objeto === "Fornecimento de material de expediente", `objeto lido do modal aberto (${resultado.identificacao?.objeto})`);
-    checar(resultado.identificacao?.dataLimite === "30/11/2026", `data limite lida (${resultado.identificacao?.dataLimite})`);
+    checar(resultado.itens?.length === 3, `leu os três itens do modal (${resultado.itens?.length})`);
+    checar(resultado.itens?.[0]?.numeroItem === "1", `número do primeiro item preservado (${resultado.itens?.[0]?.numeroItem})`);
+    checar(/impressos.*tamanho A4/i.test(resultado.itens?.[0]?.descricao || ""), `descrição do primeiro item lida (${resultado.itens?.[0]?.descricao})`);
+    checar(resultado.itens?.[0]?.quantidade === "12.005", `quantidade do primeiro item lida (${resultado.itens?.[0]?.quantidade})`);
+    checar(resultado.itens?.[0]?.unidade === "UNIDADE", `unidade lida (${resultado.itens?.[0]?.unidade})`);
+    checar(resultado.itens?.[0]?.valorEstimado === "R$ 1,66", `valor unitário lido (${resultado.itens?.[0]?.valorEstimado})`);
+    checar(resultado.identificacao?.numeroCompra === "00394452000103-1-021036/2026", `controle PNCP lido do modal, não o card de fundo (${resultado.identificacao?.numeroCompra})`);
+    checar(resultado.identificacao?.uasg === "", `não reaproveitou UASG de outro card (${resultado.identificacao?.uasg})`);
+    checar(resultado.identificacao?.objeto?.startsWith("2.1. A Escola de Sargentos"), `objeto lido do cabeçalho do modal (${resultado.identificacao?.objeto})`);
     window.close();
   }
 
-  console.log("\n── 4) Radar PNCP: orienta abrir “Ver detalhes” se os itens ainda não apareceram ──");
+  console.log("\n── 5) Radar PNCP: orienta abrir “Ver detalhes” se os itens ainda não apareceram ──");
   {
     const { window, enviar } = montarPagina("<!doctype html><html><body><button>Ver detalhes</button></body></html>", {
       url: "https://marcossilva023l20.github.io/radar-licitacoes-v2/",

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.16";
+export const VERSAO_EXTENSAO = "1.7.17";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.17",
+    itens: [
+      "Ajusta a leitura do CNET Mobile para os cartões sanfonados com Qtde solicitada, como na tela Acompanhar Contratação",
+      "Corrige a leitura do Radar PNCP quando o título Itens da contratação inclui um contador e reconhece o controle PNCP do modal",
+    ],
+  },
   {
     versao: "1.7.16",
     itens: [
