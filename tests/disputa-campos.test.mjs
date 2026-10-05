@@ -377,3 +377,229 @@ test("Parar e reiniciar com piso maior não deixa uma preparação antiga enviar
   assert.ok((await env.enviar({ action: "disputa_status" })).itensNoPiso.includes("1"));
   await env.enviar({ action: "disputa_stop" });
 });
+
+// Regressões da leitura: a associação do item pode estar correta e ainda assim
+// os preços falharem por decoração/acessibilidade da interface.
+for (const decoracao of ["links", "aria-hidden", "somente-leitor-tela", "ordem-diferente"]) {
+  test(`lê preços unitários da região do rótulo com ${decoracao}, sem usar números de outras regiões`, async (t) => {
+    const env = ambiente();
+    t.after(() => env.window.close());
+    const doc = env.window.document;
+    if (decoracao === "links") {
+      doc.getElementById("melhor-1").innerHTML = '<span>R$ 127,0000</span><a href="#">Ver lances</a>';
+      doc.getElementById("meu-1").innerHTML = '<span>R$ 130,0000</span><a href="#">Detalhes</a>';
+    } else if (decoracao === "aria-hidden") {
+      doc.getElementById("melhor-1").innerHTML = '<span aria-hidden="true">R$</span><span>127,0000</span>';
+      doc.getElementById("meu-1").innerHTML = '<span aria-hidden="true">R$</span><span>130,0000</span>';
+    } else if (decoracao === "somente-leitor-tela") {
+      doc.getElementById("melhor-1").innerHTML = '<span aria-hidden="true">R$ 127,0000</span><span class="sr-only">R$ 999,0000</span>';
+      doc.getElementById("meu-1").innerHTML = '<span aria-hidden="true">R$ 130,0000</span><span class="p-sr-only">R$ 999,0000</span>';
+    } else {
+      const formulario = doc.querySelector(".formulario-lance");
+      formulario.prepend(doc.getElementById("meu-1").parentElement);
+    }
+    const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+    assert.equal(resultado.diagnostico.itens[0].melhor, "R$ 127,0000");
+    assert.equal(resultado.diagnostico.itens[0].meu, "R$ 130,0000");
+    assert.equal(resultado.diagnostico.itens[0].criterioPreco, true);
+    assert.equal(resultado.diagnostico.itens[0].campoEncontrado, true);
+    assert.deepEqual(env.chamadas, []);
+    assert.deepEqual(env.lances, []);
+  });
+}
+
+for (const [nome, trecho] of [
+  ["duas moedas monetárias na mesma região", "R$ 127,0000 e R$ 126,0000"],
+  ["valor sem unidade explícita", "127,0000"],
+  ["um total em vez do valor unitário", "Total R$ 127,0000"],
+  ["unidades de preço e desconto contraditórias", "R$ 127,0000 / 12,0000%"],
+  ["número monetário truncável", "R$ 127, 50abc"],
+]) {
+  test(`a leitura de preço não autoriza envio com ${nome}`, async (t) => {
+    const env = ambiente({}, { confirmar: true });
+    t.after(() => env.window.close());
+    env.window.document.getElementById("melhor-1").textContent = trecho;
+    const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+    assert.equal(resultado.ok, false);
+    assert.equal(env.confirmacoes.length, 0);
+    assert.deepEqual(env.lances, []);
+    assert.equal(env.window.document.getElementById("novo-1").value, "");
+  });
+}
+
+test("critério explícito de menor preço não é confundido com ajuda genérica sobre maior desconto", async (t) => {
+  const env = ambiente();
+  t.after(() => env.window.close());
+  const doc = env.window.document;
+  const criterio = doc.createElement("p");
+  criterio.textContent = "Critério de julgamento: Menor preço";
+  doc.querySelector("h1").after(criterio);
+  const ajuda = doc.createElement("aside");
+  ajuda.textContent = "Ajuda: outras compras podem usar maior desconto.";
+  doc.body.append(ajuda);
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.diagnostico.itens[0].criterioPreco, true);
+  assert.equal(resultado.diagnostico.itens[0].melhor, "R$ 127,0000");
+  assert.deepEqual(env.chamadas, []);
+  assert.deepEqual(env.lances, []);
+});
+
+test("o diagnóstico distingue motivo de critério e motivo de preço, sem esconder o campo associado", async (t) => {
+  const env = ambiente();
+  t.after(() => env.window.close());
+  env.window.document.getElementById("melhor-1").textContent = "127,0000";
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  const item = resultado.diagnostico.itens[0];
+  assert.equal(item.criterioPreco, false);
+  assert.equal(item.campoAssociado, true);
+  assert.equal(item.leitura.melhor.motivo, "moeda_ausente");
+  assert.equal(item.leitura.meu.motivo, "ok");
+  assert.equal(item.leitura.intervalo.motivo, "ok");
+  assert.equal(resultado.diagnostico.criterioPagina.bloqueado, false);
+  assert.deepEqual(env.chamadas, []);
+  assert.deepEqual(env.lances, []);
+});
+
+for (const [nome, texto] of [
+  ["menor preço e maior desconto explícitos ao mesmo tempo", "Critério de julgamento: Menor preço"],
+  ["menor preço citado apenas num exemplo", "Exemplo: Critério de julgamento: Menor preço"],
+]) {
+  test(`não relativiza um maior desconto atual com ${nome}`, async (t) => {
+    const env = ambiente({}, { confirmar: true });
+    t.after(() => env.window.close());
+    const doc = env.window.document;
+    const explicacao = doc.createElement("p");
+    explicacao.textContent = texto;
+    doc.querySelector("h1").after(explicacao);
+    const criterio = doc.createElement("p");
+    criterio.textContent = "Critério de julgamento: Maior desconto";
+    doc.querySelector("h1").after(criterio);
+    const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+    assert.equal(resultado.ok, false);
+    assert.equal(env.confirmacoes.length, 0);
+    assert.deepEqual(env.lances, []);
+  });
+}
+
+test("uma menção não explicada fora da ajuda continua ambígua mesmo com menor preço escrito", async (t) => {
+  const env = ambiente();
+  t.after(() => env.window.close());
+  const doc = env.window.document;
+  for (const texto of ["Critério de julgamento: Menor preço", "Modo da compra: maior desconto"]) {
+    const p = doc.createElement("p");
+    p.textContent = texto;
+    doc.querySelector("h1").after(p);
+  }
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.diagnostico.criterioPagina.bloqueado, true);
+  assert.equal(resultado.diagnostico.itens[0].campoAssociado, true);
+  assert.equal(resultado.diagnostico.itens[0].motivoBloqueio, "criterio_pagina");
+  assert.equal(resultado.diagnostico.itens[0].leitura.melhor.valor, "R$ 127,0000");
+  assert.equal(resultado.diagnostico.itens[0].criterioPreco, false);
+  assert.deepEqual(env.chamadas, []);
+  assert.deepEqual(env.lances, []);
+});
+
+for (const [nome, estilo] of [
+  ["clip com área zero", "position:absolute;clip:rect(0px,0px,0px,0px);width:1px;height:1px;overflow:hidden"],
+  ["clip-path integral", "clip-path:inset(50%)"],
+]) {
+  test(`não usa dinheiro visualmente oculto por ${nome}`, async (t) => {
+    const env = ambiente();
+    t.after(() => env.window.close());
+    env.window.document.getElementById("melhor-1").innerHTML = `<span>R$ 127,0000</span><span style="${estilo}">R$ 999,0000</span>`;
+    const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+    assert.equal(resultado.diagnostico.itens[0].melhor, "R$ 127,0000");
+    assert.deepEqual(env.chamadas, []);
+    assert.deepEqual(env.lances, []);
+  });
+}
+
+test("11 itens com moeda decorativa: o diagnóstico mostra as leituras e prioriza ações reais em vez do título", async (t) => {
+  const numeros = [1, 3, 6, 7, 10, 11, 12, 14, 15, 16, 17];
+  const env = ambiente({ itens: numeros.map((numero) => ({ numero })) });
+  t.after(() => env.window.close());
+  const doc = env.window.document;
+  const cabecalho = doc.createElement("app-cabecalho-compra");
+  cabecalho.innerHTML = '<div class="breadcrumb-compra"><span>Enviar lance</span></div><div><p class="titulo">Enviar lance</p></div>';
+  doc.body.prepend(cabecalho);
+  doc.querySelectorAll(".formulario-lance").forEach((el) => el.classList.add("cp-texto-item", "cp-valor-responsivo"));
+  for (const n of numeros) {
+    doc.getElementById(`melhor-${n}`).innerHTML = '<span aria-hidden="true">R$ 127,0000</span><a href="#">Ver lances</a>';
+    doc.getElementById(`meu-${n}`).innerHTML = '<span aria-hidden="true">R$ 130,0000</span>';
+  }
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.diagnostico.itens.length, 11);
+  assert.equal(resultado.diagnostico.controlesHabilitados, 11);
+  assert.equal(resultado.diagnostico.ambiguos, 0);
+  assert.ok(resultado.diagnostico.itens.every((item) => item.criterioPreco && item.campoAssociado && item.leitura.melhor.motivo === "ok"));
+  assert.ok(resultado.diagnostico.textosDeAcao.every((acao) => acao.reconhecido));
+  assert.deepEqual(env.chamadas, []);
+  assert.deepEqual(env.confirmacoes, []);
+  assert.deepEqual(env.lances, []);
+});
+
+test("a leitura decorativa continua preenchendo somente o lance calculado e nunca clica Ver lances", { timeout: 10000 }, async (t) => {
+  const env = ambiente({}, { confirmar: true });
+  t.after(() => env.window.close());
+  env.window.document.getElementById("melhor-1").innerHTML = '<span aria-hidden="true">R$ 127,0000</span><a id="ver-lances" href="#">Ver lances</a>';
+  let clicouInformacao = 0;
+  env.window.document.getElementById("ver-lances").addEventListener("click", () => { clicouInformacao += 1; });
+  const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+  assert.equal(resultado.ok, true, resultado.error);
+  assert.deepEqual(await env.envio, { numero: "1", valor: "126,0000" });
+  assert.equal(clicouInformacao, 0);
+  await env.enviar({ action: "disputa_stop" });
+});
+
+for (const intervalo of ["R$ 1,0000 (valor)", "1,0000% (diferença mínima)"]) {
+  test(`intervalo explicitamente único pode ter texto auxiliar: ${intervalo}`, async (t) => {
+    const env = ambiente({ itens: [{ numero: 1, intervalo }] });
+    t.after(() => env.window.close());
+    const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+    assert.equal(resultado.diagnostico.itens[0].leitura.intervalo.motivo, "ok");
+    assert.deepEqual(env.chamadas, []);
+    assert.deepEqual(env.lances, []);
+  });
+}
+
+for (const intervalo of ["R$ 1,0000 e 1,0000%", "R$ 1,0000 ou R$ 2,0000", "0,0000%", "R$ 0,0000"]) {
+  test(`não autoriza um intervalo contraditório, múltiplo ou zero: ${intervalo}`, async (t) => {
+    const env = ambiente({ itens: [{ numero: 1, intervalo }] }, { confirmar: true });
+    t.after(() => env.window.close());
+    const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+    assert.equal(resultado.ok, false);
+    assert.equal(env.confirmacoes.length, 0);
+    assert.deepEqual(env.lances, []);
+  });
+}
+
+test("preço sem moeda não toma emprestado o Meu valor que está antes de seu próprio rótulo", async (t) => {
+  const env = ambiente();
+  t.after(() => env.window.close());
+  const doc = env.window.document;
+  doc.getElementById("melhor-1").textContent = "aguardando lance";
+  const meu = doc.getElementById("meu-1");
+  meu.parentElement.prepend(meu);
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.diagnostico.itens[0].melhor, "não identificado");
+  assert.equal(resultado.diagnostico.itens[0].meu, "R$ 130,0000");
+  assert.equal(resultado.diagnostico.itens[0].criterioPreco, false);
+  assert.deepEqual(env.lances, []);
+});
+
+test("uma referência acessível explícita associa preço e rótulo mesmo em regiões DOM separadas", async (t) => {
+  const env = ambiente();
+  t.after(() => env.window.close());
+  const doc = env.window.document;
+  const melhor = doc.getElementById("melhor-1");
+  const rotulo = melhor.previousElementSibling;
+  rotulo.id = "rotulo-melhor";
+  melhor.setAttribute("aria-labelledby", rotulo.id);
+  doc.querySelector(".formulario-lance").append(melhor);
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.diagnostico.itens[0].melhor, "R$ 127,0000");
+  assert.equal(resultado.diagnostico.itens[0].leitura.melhor.origem, "referencia_rotulo");
+  assert.deepEqual(env.chamadas, []);
+  assert.deepEqual(env.lances, []);
+});

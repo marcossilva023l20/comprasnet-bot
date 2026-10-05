@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.4";
+export const VERSAO_EXTENSAO = "1.8.5";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.5",
+    itens: [
+      "Lê melhor/meu preço e intervalo na região do respectivo rótulo, tolerando links de informação e moeda decorativa visível; não usa cópias ocultas para leitores de tela nem escolhe entre valores ambíguos",
+      "Distingue campo associado de preço validado e detalha o motivo do bloqueio por rótulo no diagnóstico; prioriza os botões reais dos itens, sem coletar HTML completo ou valores digitados",
+      "Não confunde ajuda sobre maior desconto com critério explícito de menor preço; maior desconto atual ou contexto conflitante continuam bloqueados, preservando piso e autorização por monitoramento",
+    ],
+  },
   {
     versao: "1.8.4",
     itens: [
