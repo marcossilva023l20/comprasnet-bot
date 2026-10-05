@@ -149,14 +149,16 @@ test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
 });
 
 
-test("a instalação 1.7.19 recebe a atualização com a mesma versão do pacote", () => {
-  const estado = montarEstadoAtualizacao("1.7.19");
-  assert.ok(estado.precisaAtualizar);
-  assert.ok(!estado.adiantada);
-  assert.equal(estado.versao, manifest.version);
-  assert.equal(estado.zip.nome, `comprasnet-bot-extensao-${manifest.version}.zip`);
-  assert.ok(estado.novidades.some((novidade) => novidade.versao === manifest.version));
-});
+for (const instalada of ["1.7.19", "1.8.1"]) {
+  test(`a instalação ${instalada} recebe a atualização com a mesma versão do pacote`, () => {
+    const estado = montarEstadoAtualizacao(instalada);
+    assert.ok(estado.precisaAtualizar);
+    assert.ok(!estado.adiantada);
+    assert.equal(estado.versao, manifest.version);
+    assert.equal(estado.zip.nome, `comprasnet-bot-extensao-${manifest.version}.zip`);
+    assert.ok(estado.novidades.some((novidade) => novidade.versao === manifest.version));
+  });
+}
 
 test("o popup carrega seu script somente uma vez", () => {
   const html = readFileSync(path.join(raiz, "public", "extension", "popup.html"), "utf8");

@@ -4389,9 +4389,25 @@ function textoDaDisputa(el) {
   return String(el.innerText || el.textContent || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function normalizarNumeroDispensaDisputa(valor) {
-  const match = String(valor || "").match(/(\d{1,8})\s*\/\s*(\d{4})/);
-  return match ? `${Number(match[1])}/${match[2]}` : "";
+function normalizarNumeroDispensaDisputa(valor, uasgEsperada = "") {
+  // O código tem 17 dígitos: mantenha-o como texto para não perder precisão.
+  const texto = typeof valor === "string" ? valor.trim() : "";
+  const codigoCompra = texto.match(/^(\d{6})(\d{2})(\d{5})(\d{4})$/);
+  if (codigoCompra) {
+    // Compras.gov.br: UASG (6) + modalidade (2) + compra (5) + ano (4).
+    // Nesta tela só há integração com dispensa (06). A UASG embutida também
+    // precisa coincidir com o cadastro; a validação contra a página vem depois.
+    const [, uasgCodigo, modalidade, numero, ano] = codigoCompra;
+    if (!/^\d{6}$/.test(uasgEsperada) || uasgCodigo !== uasgEsperada || modalidade !== "06" || Number(numero) === 0) return "";
+    return `${Number(numero)}/${ano}`;
+  }
+
+  // Não ignore um código completo conflitante em favor de um número/ano que
+  // apareça no mesmo campo; formatos misturados ou ambíguos ficam bloqueados.
+  if (/\d{17}/.test(texto)) return "";
+  const numeros = [...texto.matchAll(/(?:^|\D)(\d{1,8})\s*\/\s*(\d{4})(?!\d)/g)];
+  if (numeros.length !== 1 || Number(numeros[0][1]) === 0) return "";
+  return `${Number(numeros[0][1])}/${numeros[0][2]}`;
 }
 
 function extrairIdentificacaoDisputaPagina() {
@@ -4905,12 +4921,12 @@ async function iniciarDisputaAutomatica(propostaId) {
     return { ok: false, error: `Não consegui validar a proposta e seus limites: ${erro?.message || "falha na API"}.` };
   }
 
-  const propostaNumero = normalizarNumeroDispensaDisputa(propostaDados?.numeroDispensa);
   const propostaUasg = String(propostaDados?.uasg || "").replace(/\D/g, "");
+  const propostaNumero = normalizarNumeroDispensaDisputa(propostaDados?.numeroDispensa, propostaUasg);
   if (propostaNumero !== identificacao.numeroDispensa || propostaUasg !== identificacao.uasg) {
     return {
       ok: false,
-      error: `A proposta selecionada não corresponde à página. Página: ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}; proposta: ${propostaNumero || "sem número"} · UASG ${propostaUasg || "sem UASG"}. Nenhum lance foi enviado.`,
+      error: `A proposta selecionada não corresponde à página. Página: ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}; proposta: ${propostaNumero || String(propostaDados?.numeroDispensa || "").trim() || "sem número"} · UASG ${propostaUasg || "sem UASG"}. Nenhum lance foi enviado.`,
     };
   }
 

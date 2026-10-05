@@ -72,7 +72,7 @@ const itens = (n) =>
     modeloVersao: "X1",
   }));
 
-function paginaDisputa({ numeroItem = 1, melhor = "128,0000", meu = "130,0000", intervalo = "1,0000", fase = "Fase de lances aberta" } = {}) {
+export function paginaDisputa({ numeroItem = 1, melhor = "128,0000", meu = "130,0000", intervalo = "1,0000", fase = "Fase de lances aberta" } = {}) {
   const intervaloVisivel = /%|R\$/i.test(intervalo) ? intervalo : `R$ ${intervalo}`;
   return `<!doctype html><html><head><title>Enviar lance</title></head><body>
     <h1>Enviar lance</h1>

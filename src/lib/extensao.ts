@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.1";
+export const VERSAO_EXTENSAO = "1.8.2";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.2",
+    itens: [
+      "Reconhece o código completo da compra no cadastro e o compara com o número/ano da dispensa, sem precisar renomear a proposta",
+      "Confere também a UASG embutida no código e a modalidade; compra, ano ou UASG divergentes e identificadores ambíguos continuam bloqueados antes de preencher ou enviar",
+    ],
+  },
   {
     versao: "1.8.1",
     itens: [
