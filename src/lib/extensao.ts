@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.5";
+export const VERSAO_EXTENSAO = "1.8.6";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.6",
+    itens: [
+      "Preenche o campo “Novo lance” mesmo quando a máscara do portal o deixa com zeros (0,0000): zero não é valor digitado e deixa de bloquear o lance",
+      "Espera o portal validar o valor digitado e habilitar “Enviar lance” (a validação não acontece no evento de digitação); se o portal não habilitar, explica o bloqueio em vez de apagar o valor em silêncio",
+      "Um valor realmente digitado por você continua intocado e aparece agora no status do painel quando a automação não pode sobrescrevê-lo",
+    ],
+  },
   {
     versao: "1.8.5",
     itens: [

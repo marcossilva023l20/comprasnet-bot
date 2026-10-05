@@ -957,7 +957,17 @@ async function limparCampoComTeclas(input, view) {
   // deixar o campo vazio: um campo só com zeros conta como vazio — os zeros à
   // frente não mudam o número que vai ser digitado.
   const semConteudo = () => campoVazio(input) || !/[1-9]/.test(String(input.value ?? ""));
-  if (semConteudo()) return true;
+  if (semConteudo()) {
+    // Nada a apagar, mas o conteúdo (o zero da máscara) fica selecionado para a
+    // digitação substituí-lo por inteiro em vez de ser concatenado a ele.
+    try {
+      input.focus();
+      if (typeof input.select === "function") input.select();
+    } catch (_) {
+      // segue só com o foco
+    }
+    return true;
+  }
 
   const teclaBackspace = { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 };
   try {
@@ -4379,6 +4389,9 @@ let requisicaoItensDisputa = 0;
 const DISPUTA_INTERVALO_VERIFICACAO_MS = 1200;
 const DISPUTA_INTERVALO_ENTRE_ENVIOS_MS = 1200;
 const DISPUTA_TIMEOUT_CONFIRMACAO_MS = 15000;
+// Depois de digitar, o portal valida o valor fora do evento e habilita o
+// “Enviar lance” um pouco depois; é este o tempo que esperamos por ele.
+const DISPUTA_ESPERA_HABILITAR_MS = 4000;
 let disputaAutomatica = {
   ativo: false,
   pausado: false,
@@ -4618,6 +4631,80 @@ function controleDisputaHabilitado(el) {
     el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("disabled") &&
     !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
     (el.ownerDocument.defaultView || window).getComputedStyle(el).pointerEvents !== "none";
+}
+
+/**
+ * O campo “Novo lance” está sem um valor do usuário?
+ *
+ * O portal costuma deixar a própria máscara preenchida com zeros (“0,0000” /
+ * “0.0000”); isso não é um lance digitado — é o vazio do campo. Só um número
+ * com algum dígito diferente de zero conta como valor já preenchido (e, nesse
+ * caso, a automação continua sem sobrescrever).
+ */
+function campoDeLanceVazio(input) {
+  const valor = String(input?.value ?? "").trim();
+  return !valor || !/[1-9]/.test(valor);
+}
+
+/**
+ * Espera o portal aceitar o valor digitado e habilitar “Enviar lance”.
+ *
+ * O componente de lance valida o campo fora do evento de digitação: o botão
+ * costuma habilitar alguns instantes depois. Aqui relemos a página sem clicar
+ * nada e só devolvemos o cartão quando preços, intervalo, fase, o valor
+ * digitado e os controles continuarem iguais aos que autorizaram o lance.
+ */
+async function aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento, tempoMs = DISPUTA_ESPERA_HABILITAR_MS }) {
+  const inicio = Date.now();
+  const limite = inicio + tempoMs;
+  let cutucou = false;
+  let proximaChecagemPagina = 0;
+  let motivo = "releitura";
+  for (;;) {
+    if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) return { motivo: "interrompido" };
+
+    // A compra/UASG é reconferida, mas não a cada volta (ler o corpo é caro).
+    if (Date.now() >= proximaChecagemPagina) {
+      proximaChecagemPagina = Date.now() + 600;
+      const agora = extrairIdentificacaoDisputaPagina();
+      if (!agora.telaEnviarLance || agora.numeroDispensa !== identificacao.numeroDispensa || agora.uasg !== identificacao.uasg) return { motivo: "pagina_mudou" };
+    }
+
+    const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem);
+    if (!cartao.input.isConnected && !atual) return { motivo: "valor_perdido" };
+    // O DOM pode ser remontado ao digitar: o campo do cartão novo vale tanto
+    // quanto o antigo, desde que continue com o valor que foi calculado.
+    const campoAtual = cartao.input.isConnected ? cartao.input : atual.input;
+    const valorNoCampo = parseValorUnidadesDisputa(campoAtual?.value);
+    if (valorNoCampo === null) return { motivo: "valor_perdido" };
+    if (valorNoCampo !== sugestao.unidades) return { motivo: "valor_alterado" };
+
+    if (atual) {
+      const precosIguais = atual.melhor === cartao.melhor && atual.meu === cartao.meu && intervalosIguaisDisputa(atual.intervalo, cartao.intervalo);
+      const mesmoCampo = atual.input === cartao.input || (atual.campoAssociado && parseValorUnidadesDisputa(atual.input?.value) === sugestao.unidades);
+      if (precosIguais && mesmoCampo && atual.faseAberta) {
+        if (atual.enviarHabilitado) return { motivo: "ok", cartao: atual };
+        motivo = "enviar_bloqueado";
+      } else {
+        motivo = "releitura";
+      }
+    } else {
+      motivo = "releitura";
+    }
+
+    if (Date.now() >= limite) return { motivo };
+    if (!cutucou && Date.now() - inicio > 600) {
+      cutucou = true;
+      // Alguns componentes só validam no blur: avisa o campo e sai dele UMA vez,
+      // sem reescrever o preço (a máscara continua dona do valor).
+      const view = campoAtual.ownerDocument.defaultView || window;
+      disparar(campoAtual, "change", view, { data: String(campoAtual.value ?? "") });
+      disparar(campoAtual, "blur", view, {});
+      disparar(campoAtual, "focusout", view, {});
+      try { campoAtual.blur(); } catch (_) { /* opcional */ }
+    }
+    await sleep(120);
+  }
 }
 
 function encontrarControlesEnviarLance({ incluirDesabilitados = false } = {}) {
@@ -5091,7 +5178,15 @@ async function verificarDisputaAutomatica() {
     for (const cartao of cartoes) {
       if (!cartao.faseAberta) continue;
       const itemLocal = disputaAutomatica.itensPorNumero.get(cartao.numeroItem);
-      if (!itemLocal || disputaAutomatica.itensNoPiso.has(cartao.numeroItem)) continue;
+      if (!itemLocal) {
+        const chaveAviso = `${cartao.numeroItem}:sem-item-na-proposta`;
+        if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
+          disputaAutomatica.avisosRegistrados.add(chaveAviso);
+          registrarNoPainel(`⚠️ Item ${cartao.numeroItem} da página não existe na proposta selecionada; nenhum lance foi calculado para ele.`);
+        }
+        continue;
+      }
+      if (disputaAutomatica.itensNoPiso.has(cartao.numeroItem)) continue;
       const sugestao = sugestaoDeLanceDisputa(cartao, itemLocal);
       if (!sugestao.ok) {
         if (sugestao.pararItemNoPiso) {
@@ -5115,11 +5210,13 @@ async function verificarDisputaAutomatica() {
       }
       const tentativaAnterior = disputaAutomatica.ultimasTentativas.get(cartao.numeroItem);
       if (tentativaAnterior?.meu === cartao.meu && tentativaAnterior?.melhor === cartao.melhor) continue;
-      if (String(cartao.input.value || "").trim()) {
+      if (!campoDeLanceVazio(cartao.input)) {
         const chaveAviso = `${cartao.numeroItem}:campo-preenchido`;
         if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
           disputaAutomatica.avisosRegistrados.add(chaveAviso);
-          registrarNoPainel(`⚠️ Item ${cartao.numeroItem}: o campo “Novo lance” já contém um valor; não sobrescrevi nem enviei.`);
+          const mensagem = `Item ${cartao.numeroItem}: o campo “Novo lance” já contém ${String(cartao.input.value).trim()}; não sobrescrevi nem enviei.`;
+          mostrarStatusDisputa(`⚠️ ${mensagem}`, "warning");
+          registrarNoPainel(`⚠️ ${mensagem}`);
         }
         continue;
       }
@@ -5144,46 +5241,60 @@ async function verificarDisputaAutomatica() {
         return;
       }
 
+      const desfazerPreparacao = () => {
+        // Se o portal remontou a linha, limpa também o campo que está na tela.
+        const alvos = new Set([cartao.input]);
+        if (!cartao.input.isConnected) {
+          const vivo = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem);
+          if (vivo?.input) alvos.add(vivo.input);
+        }
+        for (const campo of alvos) {
+          if (!campo || parseValorUnidadesDisputa(campo.value) !== sugestao.unidades) continue;
+          const view = campo.ownerDocument.defaultView || window;
+          aplicarValor(campo, "", view);
+          disparar(campo, "input", view, { data: null, inputType: "deleteContentBackward" });
+          disparar(campo, "change", view, {});
+        }
+      };
+
       const identificacaoAntesEnvio = extrairIdentificacaoDisputaPagina();
       if (!identificacaoAntesEnvio.telaEnviarLance || identificacaoAntesEnvio.numeroDispensa !== identificacao.numeroDispensa || identificacaoAntesEnvio.uasg !== identificacao.uasg) {
-        if (parseValorUnidadesDisputa(cartao.input.value) === sugestao.unidades) {
-          const view = cartao.input.ownerDocument.defaultView || window;
-          aplicarValor(cartao.input, "", view);
-          disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
-          disparar(cartao.input, "change", view, {});
-        }
+        desfazerPreparacao();
         pararDisputaAutomatica("A compra ou UASG mudou durante a preparação; lances automáticos interrompidos. Esta preparação não foi enviada.");
         return;
       }
 
-      // Relê e reassocia no DOM atual: o portal pode ter trocado a linha/controles ao digitar.
-      const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem && c.botao === cartao.botao);
-      if (
-        !atual ||
-        !cartao.input.isConnected ||
-        !cartao.botao.isConnected ||
-        atual.cartao !== cartao.cartao ||
-        atual.escopoLance !== cartao.escopoLance ||
-        atual.input !== cartao.input ||
-        !atual.enviarHabilitado ||
-        !atual.faseAberta ||
-        atual.melhor !== cartao.melhor ||
-        atual.meu !== cartao.meu ||
-        !intervalosIguaisDisputa(atual.intervalo, cartao.intervalo) ||
-        parseValorUnidadesDisputa(cartao.input.value) !== sugestao.unidades
-      ) {
-        if (parseValorUnidadesDisputa(cartao.input.value) === sugestao.unidades) {
-          const view = cartao.input.ownerDocument.defaultView || window;
-          aplicarValor(cartao.input, "", view);
-          disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
-          disparar(cartao.input, "change", view, {});
+      // O portal valida o valor fora do evento de digitação e só então habilita
+      // “Enviar lance”: aguarda a releitura concordar antes de decidir pelo clique.
+      const aceito = await aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento });
+      if (aceito.motivo === "interrompido") {
+        desfazerPreparacao();
+        if (disputaAutomatica === monitoramento && monitoramento.ativo) mostrarStatusDisputa("Automação pausada antes do envio; nenhum lance foi enviado.", "warning");
+        return;
+      }
+      const lance = aceito.cartao || cartao;
+      if (aceito.motivo !== "ok") {
+        desfazerPreparacao();
+        if (aceito.motivo === "valor_perdido" || aceito.motivo === "valor_alterado") {
+          disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
+          pararDisputaAutomatica(`O portal não manteve o lance calculado do item ${cartao.numeroItem}; não cliquei em “Enviar lance”.`);
+          return;
+        }
+        if (aceito.motivo === "pagina_mudou") {
+          pararDisputaAutomatica("A compra ou UASG mudou durante a preparação; lances automáticos interrompidos. Esta preparação não foi enviada.");
+          return;
         }
         // Não repete uma preparação bloqueada com os mesmos preços nem trava os demais itens.
         disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
-        mostrarStatusDisputa(`Os campos, o estado de envio ou os valores do item ${cartao.numeroItem} não passaram na releitura; lance não enviado.`, "warning");
+        const mensagem = aceito.motivo === "enviar_bloqueado"
+          ? `O portal não habilitou “Enviar lance” do item ${cartao.numeroItem} com o valor preparado (${formatarValorDisputa(sugestao.unidades)}); lance não enviado.`
+          : `Os campos, o estado de envio ou os valores do item ${cartao.numeroItem} não passaram na releitura; lance não enviado.`;
+        mostrarStatusDisputa(mensagem, "warning");
+        registrarNoPainel(`⚠️ ${mensagem}`);
         return;
       }
-      if (cartao.botao.disabled || cartao.botao.getAttribute("aria-disabled") === "true" || !isVisible(cartao.botao)) {
+      if (lance.botao.disabled || lance.botao.getAttribute("aria-disabled") === "true" || !isVisible(lance.botao)) {
+        desfazerPreparacao();
         pararDisputaAutomatica(`O botão “Enviar lance” do item ${cartao.numeroItem} ficou indisponível; automação interrompida.`);
         return;
       }
@@ -5199,7 +5310,7 @@ async function verificarDisputaAutomatica() {
       registrarNoPainel(`📤 Enviando automaticamente o item ${cartao.numeroItem}: ${formatarValorDisputa(sugestao.unidades)}.`);
       mostrarStatusDisputa(`Lance do item ${cartao.numeroItem} enviado ao portal; aguardando confirmação da página.`, "info");
       try {
-        cartao.botao.click();
+        lance.botao.click();
       } catch (erro) {
         disputaAutomatica.pendente = null;
         pararDisputaAutomatica(`Não consegui acionar “Enviar lance” no item ${cartao.numeroItem}: ${erro?.message || "erro"}.`);

@@ -22,7 +22,7 @@ function paginaEmColunas({ itens = [{ numero: 1 }], concatenado = false, tipoAca
   return `<!doctype html><html><body><h1>Enviar lance</h1><p>Dispensa Eletrônica Nº 53/2026 (Lei 14.133/2021)</p><p>UASG 781402</p><div class="lista-itens">${itens.map(linha).join("")}</div></body></html>`;
 }
 
-function ambiente(opcoes = {}, { confirmar = false, pisos = {} } = {}) {
+function ambiente(opcoes = {}, { confirmar = false, pisos = {}, preencherInicial = "", habilitarAposMs = 0 } = {}) {
   const confirmacoes = [];
   const lances = [];
   const chamadas = [];
@@ -32,6 +32,19 @@ function ambiente(opcoes = {}, { confirmar = false, pisos = {} } = {}) {
   const { window, enviar } = montarPagina(paginaEmColunas(opcoes), {
     preparar: (w) => {
       w.confirm = (mensagem) => { confirmacoes.push(mensagem); return confirmar; };
+      if (preencherInicial) {
+        w.document.querySelectorAll('[id^="novo-"]').forEach((campo) => { campo.value = preencherInicial; });
+      }
+      if (habilitarAposMs) {
+        // Portal que valida o lance fora do evento e só habilita Enviar depois.
+        w.document.querySelectorAll('[id^="enviar-"]').forEach((botao) => {
+          botao.disabled = true;
+          const campo = w.document.getElementById(botao.id.replace("enviar-", "novo-"));
+          campo.addEventListener("input", () => {
+            setTimeout(() => { botao.disabled = !/[1-9]/.test(campo.value); }, habilitarAposMs);
+          });
+        });
+      }
       w.document.querySelectorAll('[id^="enviar-"]').forEach((botao) => {
         botao.addEventListener("click", (evento) => {
           evento.preventDefault();
@@ -47,6 +60,12 @@ function ambiente(opcoes = {}, { confirmar = false, pisos = {} } = {}) {
     },
   });
   window.__armazenamento.apiUrl = "https://app.exemplo.com";
+  const mensagens = [];
+  const enviarOriginal = window.chrome.runtime.sendMessage;
+  window.chrome.runtime.sendMessage = (mensagem, ...args) => {
+    if (mensagem?.action === "disputa_progress") mensagens.push(mensagem.status);
+    return typeof enviarOriginal === "function" ? enviarOriginal(mensagem, ...args) : undefined;
+  };
   const proposta = { id: 7, numeroDispensa: "78140206000532026", uasg: "781402", totalItens: itens.length, itensPreenchidos: itens.length };
   window.fetch = async (url) => {
     chamadas.push(String(url));
@@ -54,7 +73,7 @@ function ambiente(opcoes = {}, { confirmar = false, pisos = {} } = {}) {
     if (String(url).endsWith("/itens")) return { ok: true, status: 200, json: async () => itens.map((item) => ({ numeroItem: item.numero, valorMinimo: pisos[item.numero] || "91.9000" })) };
     return { ok: true, status: 200, json: async () => [proposta] };
   };
-  return { window, enviar, confirmacoes, lances, chamadas, envio };
+  return { window, enviar, confirmacoes, lances, chamadas, envio, mensagens };
 }
 
 for (const concatenado of [false, true]) {
@@ -602,4 +621,59 @@ test("uma referência acessível explícita associa preço e rótulo mesmo em re
   assert.equal(resultado.diagnostico.itens[0].leitura.melhor.origem, "referencia_rotulo");
   assert.deepEqual(env.chamadas, []);
   assert.deepEqual(env.lances, []);
+});
+
+// Regressões do preenchimento na disputa real: a máscara do portal deixa o
+// campo com zeros e o componente de lance valida o valor fora do evento de
+// digitação, habilitando “Enviar lance” alguns instantes depois.
+for (const zeros of ["0,0000", "00,0000", "0,0000 ", " 0,0000"]) {
+  test(`o campo com os zeros da máscara do portal (${zeros}) é tratado como vazio e preenchido`, { timeout: 10000 }, async (t) => {
+    const env = ambiente({}, { confirmar: true, preencherInicial: zeros });
+    t.after(() => env.window.close());
+    assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+    assert.deepEqual(await env.envio, { numero: "1", valor: "126,0000" });
+    assert.equal(env.window.document.getElementById("novo-1").value, "126,0000");
+    assert.equal(env.lances.length, 1);
+    await env.enviar({ action: "disputa_stop" });
+  });
+}
+
+test("um valor digitado de verdade continua sendo respeitado (não é sobrescrito)", { timeout: 10000 }, async (t) => {
+  const env = ambiente({ tipoAcao: "button" }, { confirmar: true, preencherInicial: "125,0000" });
+  t.after(() => env.window.close());
+  assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  assert.deepEqual(env.lances, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "125,0000");
+  assert.ok(env.mensagens.some((mensagem) => /já contém 125,0000/.test(mensagem)), env.mensagens.join(" | "));
+  await env.enviar({ action: "disputa_stop" });
+});
+
+test("espera o portal validar o valor e habilitar Enviar lance depois da digitação", { timeout: 15000 }, async (t) => {
+  const env = ambiente({ tipoAcao: "button" }, { confirmar: true, habilitarAposMs: 900 });
+  t.after(() => env.window.close());
+  assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+  assert.deepEqual(await env.envio, { numero: "1", valor: "126,0000" });
+  assert.equal(env.window.document.getElementById("enviar-1").disabled, false);
+  assert.equal(env.lances.length, 1);
+  await env.enviar({ action: "disputa_stop" });
+});
+
+test("se o portal nunca habilitar Enviar lance, explica o bloqueio, limpa o campo e não clica", { timeout: 15000 }, async (t) => {
+  const env = ambiente({ tipoAcao: "button" }, { confirmar: true, habilitarAposMs: 60000 });
+  t.after(() => env.window.close());
+  assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+  let resolverBloqueio;
+  const bloqueio = new Promise((resolve) => { resolverBloqueio = resolve; });
+  for (const mensagem of env.mensagens.splice(0)) if (/não habilitou/.test(mensagem)) resolverBloqueio(mensagem);
+  const enviarOriginal = env.window.chrome.runtime.sendMessage;
+  env.window.chrome.runtime.sendMessage = (mensagem, ...args) => {
+    if (mensagem?.action === "disputa_progress" && /não habilitou/.test(mensagem.status || "")) resolverBloqueio(mensagem.status);
+    return enviarOriginal(mensagem, ...args);
+  };
+  assert.match(await bloqueio, /não habilitou “Enviar lance” do item 1.*lance não enviado/);
+  assert.deepEqual(env.lances, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+  assert.equal((await env.enviar({ action: "disputa_status" })).ativo, true);
+  await env.enviar({ action: "disputa_stop" });
 });
