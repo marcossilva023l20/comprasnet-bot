@@ -731,7 +731,11 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
   onEdit: (item: Item) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<number, BulkItemDraft>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const selectedCount = items.filter((item) => selectedIds.has(item.id)).length;
+  const allSelected = items.length > 0 && selectedCount === items.length;
   const rows = items.map((item) => {
     const draft = drafts[item.id];
     if (draft?.baseUpdatedAt === String(item.updatedAt)) return { id: item.id, ...draft };
@@ -758,6 +762,42 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
         [field]: value,
       },
     }));
+  };
+
+  const toggleAllSelected = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(items.map((item) => item.id)));
+  };
+
+  const excluirItens = async (todos: boolean) => {
+    const ids = todos ? items.map((item) => item.id) : items.filter((item) => selectedIds.has(item.id)).map((item) => item.id);
+    if (ids.length === 0) return;
+
+    const confirmacao = todos
+      ? `Excluir TODOS os ${ids.length} itens desta proposta? Alterações não salvas serão perdidas. Esta ação não pode ser desfeita.`
+      : `Excluir ${ids.length} item(ns) selecionado(s)? Alterações não salvas nesses itens serão perdidas.`;
+    if (!confirm(confirmacao)) return;
+
+    setDeleting(true);
+    try {
+      const response = await fetch(`/api/propostas/${propostaId}/itens`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(todos ? { todos: true } : { ids }),
+      });
+      const resultado = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(resultado?.error || "Erro ao excluir itens");
+
+      const removidos = new Set<number>(Array.isArray(resultado?.ids) ? resultado.ids : ids);
+      onUpdate(items.filter((item) => !removidos.has(item.id)));
+      setSelectedIds((anteriores) => new Set([...anteriores].filter((itemId) => !removidos.has(itemId))));
+      onToast("success", todos
+        ? `${resultado?.removidos ?? removidos.size} item(ns) excluído(s).`
+        : `${resultado?.removidos ?? removidos.size} item(ns) selecionado(s) excluído(s).`);
+    } catch (erro) {
+      onToast("error", erro instanceof Error ? erro.message : "Erro ao excluir itens");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const saveAll = async () => {
@@ -788,16 +828,50 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
 
   return (
     <div className="bg-white rounded-2xl border border-purple-200 shadow-sm overflow-hidden">
-      <div className="px-5 py-3 bg-purple-50 border-b border-purple-100 flex items-center justify-between">
-        <span className="font-bold text-purple-800 text-sm flex items-center gap-2">📋 Edição em Massa</span>
-        <button onClick={saveAll} disabled={saving} className="bg-[#168821] hover:bg-[#0e5716] text-white px-5 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50">
-          {saving ? "⏳ Salvando..." : "💾 Salvar Todos"}
-        </button>
+      <div className="px-5 py-3 bg-purple-50 border-b border-purple-100 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="font-bold text-purple-800 text-sm flex items-center gap-2">📋 Edição em Massa</span>
+          <span className="text-xs text-slate-500" aria-live="polite">{selectedCount} selecionado(s)</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => excluirItens(false)}
+            disabled={selectedCount === 0 || saving || deleting}
+            className="bg-white border border-red-200 text-red-700 hover:bg-red-50 px-3 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {deleting ? "⏳ Excluindo..." : `🗑 Excluir selecionados${selectedCount ? ` (${selectedCount})` : ""}`}
+          </button>
+          <button
+            type="button"
+            onClick={() => excluirItens(true)}
+            disabled={items.length === 0 || saving || deleting}
+            className="bg-white border border-red-300 text-red-700 hover:bg-red-50 px-3 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            🗑 Excluir todos os itens
+          </button>
+          <button onClick={saveAll} disabled={saving || deleting} className="bg-[#168821] hover:bg-[#0e5716] text-white px-5 py-2 rounded-xl text-xs font-bold transition disabled:opacity-50">
+            {saving ? "⏳ Salvando..." : "💾 Salvar Todos"}
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
+              <th className="px-3 py-2.5 text-center font-semibold text-slate-500 w-24">
+                <label className="inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAllSelected}
+                    disabled={saving || deleting || items.length === 0}
+                    aria-label={allSelected ? "Desmarcar todos os itens" : "Selecionar todos os itens"}
+                    className="accent-[#6d28d9]"
+                  />
+                  <span>Selecionar</span>
+                </label>
+              </th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-10">Nº</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500">Descrição</th>
               <th className="px-3 py-2.5 text-left font-semibold text-slate-500 w-20">Qtd</th>
@@ -812,7 +886,22 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {items.map((item, idx) => (
-              <tr key={item.id} className="hover:bg-slate-50/50">
+              <tr key={item.id} className={`${selectedIds.has(item.id) ? "bg-purple-50/60" : ""} hover:bg-slate-50/50`}>
+                <td className="px-3 py-2 text-center">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(item.id)}
+                    onChange={() => setSelectedIds((anteriores) => {
+                      const proximos = new Set(anteriores);
+                      if (proximos.has(item.id)) proximos.delete(item.id);
+                      else proximos.add(item.id);
+                      return proximos;
+                    })}
+                    disabled={saving || deleting}
+                    aria-label={`Selecionar item ${item.numeroItem}`}
+                    className="accent-[#6d28d9]"
+                  />
+                </td>
                 <td className="px-3 py-2">
                   <span className="w-6 h-6 rounded-full bg-[#6d28d9] text-white text-xs font-bold flex items-center justify-center">{item.numeroItem}</span>
                 </td>
@@ -822,16 +911,16 @@ function BulkTable({ items, propostaId, onUpdate, onToast, onEdit }: {
                   {item.valorEstimado ? parseFloat(item.valorEstimado).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.valorUnitario || ""} onChange={(e) => change(item, "valorUnitario", e.target.value)} placeholder="0,0000" disabled={deleting} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50 disabled:opacity-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.valorMinimo || ""} onChange={(e) => change(item, "valorMinimo", e.target.value)} placeholder="Opcional" title="Referência para o Modo Disputa" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.valorMinimo || ""} onChange={(e) => change(item, "valorMinimo", e.target.value)} placeholder="Opcional" title="Referência para o Modo Disputa" disabled={deleting} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50 disabled:opacity-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.marcaFabricante || ""} onChange={(e) => change(item, "marcaFabricante", e.target.value)} placeholder="Marca" disabled={deleting} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50 disabled:opacity-50" />
                 </td>
                 <td className="px-3 py-2">
-                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(item, "modeloVersao", e.target.value)} placeholder="Modelo" className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50" />
+                  <input value={rows[idx]?.modeloVersao || ""} onChange={(e) => change(item, "modeloVersao", e.target.value)} placeholder="Modelo" disabled={deleting} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-purple-500 outline-none bg-slate-50 disabled:opacity-50" />
                 </td>
                 <td className="px-3 py-2 text-center text-base">
                   {rows[idx]?.valorUnitario && rows[idx]?.marcaFabricante ? "✅" : "⚠️"}
