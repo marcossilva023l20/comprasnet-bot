@@ -28,7 +28,7 @@ export async function PUT(
     const fields = body as Record<string, unknown>;
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
-    for (const field of ["valorUnitario", "valorEstimado"] as const) {
+    for (const field of ["valorUnitario", "valorEstimado", "valorMinimo"] as const) {
       if (!(field in fields)) continue;
       const raw = fields[field];
       const parsed = parseLocalizedNumber(raw);

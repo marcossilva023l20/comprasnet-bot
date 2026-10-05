@@ -11,6 +11,7 @@ export async function GET() {
       "Unidade": "Unidade",
       "Valor Estimado (R$)": 337.47,
       "Valor Unitário (R$)": 299.90,
+      "Valor Mínimo (R$)": "",
       "Marca/Fabricante": "LORENZETTI",
       "Modelo/Versão": "ADVANCED TURBO",
     },
@@ -22,6 +23,7 @@ export async function GET() {
       "Unidade": "Unidade",
       "Valor Estimado (R$)": 34.04,
       "Valor Unitário (R$)": 28.50,
+      "Valor Mínimo (R$)": "",
       "Marca/Fabricante": "LORENZETTI",
       "Modelo/Versão": "3056-A",
     },
@@ -33,13 +35,14 @@ export async function GET() {
       "Unidade": "Unidade",
       "Valor Estimado (R$)": 9.79,
       "Valor Unitário (R$)": "",
+      "Valor Mínimo (R$)": "",
       "Marca/Fabricante": "",
       "Modelo/Versão": "",
     },
   ];
 
   const ws = XLSX.utils.json_to_sheet(data);
-  ws["!cols"] = [6, 35, 50, 12, 12, 18, 18, 25, 25].map((w) => ({ wch: w }));
+  ws["!cols"] = [6, 35, 50, 12, 12, 18, 18, 18, 25, 25].map((w) => ({ wch: w }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Modelo Proposta");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });

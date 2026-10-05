@@ -6,8 +6,9 @@
  *
  * Valida que a extensão:
  *  1) lê os itens de TODAS as páginas (1 e 2) e volta para a primeira;
- *  2) preenche e salva um item que está na página 2 (navegando até ele);
- *  3) nunca clica no Favoritos.
+ *  2) preenche e salva itens das páginas 1 e 2 na ordem correta;
+ *  3) espera uma página carregar devagar sem pular seu primeiro item;
+ *  4) nunca clica no Favoritos.
  *
  * Uso: node tests/extensao-harness/paginacao.mjs
  */
@@ -16,7 +17,7 @@ import { montarPagina, conferir } from "./harness.mjs";
 const TOTAL_ITENS = 15;
 const POR_PAGINA = 10;
 
-function paginaPaginada() {
+function paginaPaginada({ atrasoPaginaMs = 0 } = {}) {
   const itens = Array.from({ length: TOTAL_ITENS }, (_, i) => i + 1);
 
   const itemHtml = (n) => `
@@ -58,21 +59,16 @@ function paginaPaginada() {
     <script>
       const ITENS = ${JSON.stringify(itens)};
       const POR_PAGINA = ${POR_PAGINA};
+      const ATRASO_PAGINA_MS = ${atrasoPaginaMs};
       const itemHtml = ${itemHtml.toString()};
       const estado = { pagina: 1 };
 
-      function render() {
+      function montarItens() {
         const inicio = (estado.pagina - 1) * POR_PAGINA;
         document.getElementById("lista").innerHTML = ITENS
           .slice(inicio, inicio + POR_PAGINA)
           .map((n) => itemHtml(n))
           .join("");
-
-        document.querySelectorAll(".pagination .page").forEach((b) => {
-          const ativa = Number(b.textContent) === estado.pagina;
-          b.classList.toggle("active", ativa);
-          b.setAttribute("aria-current", ativa ? "page" : "false");
-        });
 
         document.querySelectorAll(".favoritar").forEach((b) =>
           b.addEventListener("click", () => { window.__favoritos = (window.__favoritos || 0) + 1; }),
@@ -95,11 +91,25 @@ function paginaPaginada() {
         );
       }
 
+      function render(adiarItens = false) {
+        document.getElementById("lista").innerHTML = "";
+        document.querySelectorAll(".pagination .page").forEach((b) => {
+          const ativa = Number(b.textContent) === estado.pagina;
+          b.classList.toggle("active", ativa);
+          b.setAttribute("aria-current", ativa ? "page" : "false");
+        });
+        document.getElementById("pg-anterior").disabled = estado.pagina === 1;
+        document.getElementById("pg-proximo").disabled = estado.pagina === Math.ceil(ITENS.length / POR_PAGINA);
+
+        if (adiarItens && ATRASO_PAGINA_MS > 0) window.setTimeout(montarItens, ATRASO_PAGINA_MS);
+        else montarItens();
+      }
+
       window.__pagina = () => estado.pagina;
       const irPara = (n) => {
         if (n < 1 || n > Math.ceil(ITENS.length / POR_PAGINA) || n === estado.pagina) return;
         estado.pagina = n;
-        render();
+        render(true);
       };
       document.getElementById("pg-1").addEventListener("click", () => irPara(1));
       document.getElementById("pg-2").addEventListener("click", () => irPara(2));
@@ -161,7 +171,30 @@ export async function rodarPaginacao() {
     );
   }
 
-  console.log("\n── 3) Item que não existe em página nenhuma ──");
+  console.log("\n── 3) Não pular o primeiro item quando a próxima página carrega devagar ──");
+  {
+    const { window, enviar } = montarPagina(paginaPaginada({ atrasoPaginaMs: 1100 }));
+    const itens = [1, 10, 11, 12, 15].map((numero) => ({
+      item: numero,
+      valorUnitario: `${numero},0000`,
+      marcaFabricante: `Marca ${numero}`,
+      modeloVersao: `Modelo ${numero}`,
+    }));
+    const r = await enviar({ action: "fill_items", delay: 5, items: itens });
+
+    checar(r.filled === itens.length, `preencheu todos os itens após a troca lenta (${r.filled}/${itens.length})`);
+    checar(
+      JSON.stringify(window.__salvos || []) === JSON.stringify(["1", "10", "11", "12", "15"]),
+      `salvou também o primeiro item da página 2, na ordem: ${JSON.stringify(window.__salvos)}`,
+    );
+    checar(
+      JSON.stringify(r.savedItems) === JSON.stringify([1, 10, 11, 12, 15]),
+      `todos aparecem como salvos: ${JSON.stringify(r.savedItems)}`,
+    );
+    checar(window.__pagina() === 2, `continuou na página 2 (${window.__pagina()})`);
+  }
+
+  console.log("\n── 4) Item que não existe em página nenhuma ──");
   {
     const { window, enviar } = montarPagina(paginaPaginada());
     const r = await enviar({

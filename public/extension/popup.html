@@ -227,7 +227,7 @@
   <div class="header-icon">🤖</div>
   <div>
     <h1>ComprasNet Bot</h1>
-    <p>Preenchedor Automático de Propostas</p>
+    <p>Propostas e Modo Disputa</p>
   </div>
 </div>
 
@@ -235,7 +235,8 @@
 
   <!-- TABS -->
   <div class="tabs">
-    <div class="tab active" id="tab-bot" data-action="tab" data-tab="bot">🚀 Bot</div>
+    <div class="tab active" id="tab-bot" data-action="tab" data-tab="bot">🚀 Proposta</div>
+    <div class="tab" id="tab-disputa" data-action="tab" data-tab="disputa">⚔️ Disputa</div>
     <div class="tab" id="tab-config" data-action="tab" data-tab="config">⚙️ Config</div>
     <div class="tab" id="tab-ajuda" data-action="tab" data-tab="ajuda">❓ Ajuda</div>
   </div>
@@ -283,8 +284,9 @@
       <div class="field">
         <label style="display:flex; align-items:flex-start; gap:6px; font-weight:600;">
           <input type="checkbox" id="import-expandir" checked style="width:auto; margin-top:1px;" />
-          <span>Expandir cada item antes de ler (descrição completa; mais lento)</span>
+          <span>Expandir detalhes antes de ler (inclui a seta do cartão no CNET; pode demorar)</span>
         </label>
+        <p class="text-xs" style="margin-top:6px;">Fontes: ComprasNet/CNET Mobile (após “Acompanhar compra”) e Radar de Licitações PNCP (após “Ver detalhes”).</p>
       </div>
       <button class="btn btn-outline" id="btn-read-items">📥 Ler itens da página</button>
       <div id="import-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
@@ -407,6 +409,42 @@
 
   </div><!-- /panel-bot -->
 
+  <!-- ══════════════════ TAB: MODO DISPUTA ══════════════════ -->
+  <div id="panel-disputa" class="hidden">
+    <div class="card">
+      <div class="card-title">⚔️ Modo Disputa · Compras.gov.br</div>
+      <div class="alert alert-warning" id="disputa-availability" role="status" aria-live="polite">
+        Automação real: aceita intervalo em R$ ou % do melhor valor. Usa o Valor Mínimo cadastrado como piso e encerra novos lances daquele item ao atingir esse limite.
+      </div>
+      <div class="field">
+        <label for="disputa-proposta-select">Proposta / licitação</label>
+        <select id="disputa-proposta-select">
+          <option value="">-- Selecione a proposta --</option>
+        </select>
+      </div>
+      <div class="text-xs" id="disputa-speed">O Modo Disputa usa as atualizações da página; a velocidade do Modo Proposta não é alterada.</div>
+    </div>
+
+    <div class="card" id="disputa-items-card" style="display:none;">
+      <div class="card-title">📦 Itens e valores cadastrados</div>
+      <div class="text-xs mb-2">O Valor Mínimo é o piso rígido de cada item. Itens sem piso configurado não recebem lance automático.</div>
+      <div class="items-list" id="disputa-items-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🪟 Acompanhamento flutuante</div>
+      <p class="text-xs mb-2">Confirme a proposta e os valores na tela. A extensão envia um lance por vez, aguarda o portal atualizar “Meu valor” e para se não conseguir confirmar o resultado.</p>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" id="disputa-pin-btn" type="button" style="flex:1;">📌 Painel na página</button>
+        <button class="btn btn-outline btn-sm" id="disputa-float-btn" type="button" style="flex:1;">🗗 Janela flutuante</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn btn-success" id="disputa-start-btn" type="button">▶ Iniciar envio automático</button>
+        <button class="btn btn-danger" id="disputa-stop-btn" type="button">⏹ Parar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ══════════════════ TAB: CONFIG ══════════════════ -->
   <div id="panel-config" class="hidden">
     <div class="card">
@@ -476,12 +514,12 @@
     </div>
 
     <div class="card">
-      <div class="card-title">📥 Importar itens da página</div>
+      <div class="card-title">📥 Importar itens de outras páginas</div>
       <div class="text-xs" style="line-height:1.8;">
-        <strong>1.</strong> Abra a página de cadastro de propostas do ComprasNet com os itens visíveis<br>
-        <strong>2.</strong> Clique em <strong>"📥 Ler itens da página"</strong> (o leitor pode expandir cada item para pegar a descrição completa)<br>
-        <strong>3.</strong> Confira os itens lidos e o destino detectado (UASG / número da compra)<br>
-        <strong>4.</strong> Marque a confirmação e clique em <strong>"⬆️ Enviar para o sistema"</strong>
+        <strong>1.</strong> No CNET Mobile, pesquise a Unidade compradora e o Número da compra e clique em <strong>“Acompanhar compra”</strong>; no Radar PNCP, abra <strong>“Ver detalhes”</strong> da licitação<br>
+        <strong>2.</strong> Deixe a lista de itens visível e clique em <strong>“📥 Ler itens da página”</strong> (a opção marcada também expande a seta dos cartões CNET)<br>
+        <strong>3.</strong> Confira descrição, quantidade, unidade, valor estimado e o destino detectado<br>
+        <strong>4.</strong> Marque a confirmação e clique em <strong>“⬆️ Enviar para o sistema”</strong>
       </div>
       <div class="alert alert-warning mt-2" style="margin-bottom:0;">
         O envio <strong>substitui</strong> os itens da proposta correspondente pelos itens lidos na página. Se a proposta não existir, ela é criada automaticamente.
@@ -505,10 +543,11 @@
         • <strong>Descrição</strong> — nome do produto<br>
         • <strong>Quantidade</strong> — qtd solicitada<br>
         • <strong>Unidade</strong> — ex: Unidade, Rolo<br>
-        • <strong>Valor Unitário (R$)</strong> — seu preço<br>
+        • <strong>Valor Unitário (R$)</strong> — seu preço para a proposta<br>
+        • <strong>Valor Mínimo (R$)</strong> — piso rígido; sem piso cadastrado o Modo Disputa não envia o item<br>
         • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
         • <strong>Modelo/Versão</strong> — ex: ADVANCED<br>
-        • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet (📥 Ler itens da página)
+        • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet, CNET Mobile ou Radar PNCP (📥 Ler itens da página)
       </div>
       <div class="alert alert-info mt-2" style="margin-bottom:0;">
         A coluna <strong>Item</strong> é a chave: ao importar, itens com o mesmo número são
@@ -520,6 +559,9 @@
 
 </div><!-- /body -->
 
+<script src="popup.js"></script>
+</body>
+</html>
 <script src="popup.js"></script>
 </body>
 </html>

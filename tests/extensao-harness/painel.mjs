@@ -72,6 +72,26 @@ const itens = (n) =>
     modeloVersao: "X1",
   }));
 
+function paginaDisputa({ numeroItem = 1, melhor = "128,0000", meu = "130,0000", intervalo = "1,0000", fase = "Fase de lances aberta" } = {}) {
+  const intervaloVisivel = /%|R\$/i.test(intervalo) ? intervalo : `R$ ${intervalo}`;
+  return `<!doctype html><html><head><title>Enviar lance</title></head><body>
+    <h1>Enviar lance</h1>
+    <p>Dispensa Eletrônica Nº 53/2026 (Lei 14.133/2021)</p>
+    <p>UASG 781402 - ESTAÇÃO RÁDIO DA MARINHA NO RIO DE JANEIRO</p>
+    <nav>Aguardando disputa · Em disputa (11) · Encerrados</nav>
+    <article class="card-item" data-numero-item="${numeroItem}">
+      <div><span>${numeroItem}</span> <span>TOALHA MESA</span></div>
+      <p>${fase}</p>
+      <div><span>Melhor valor (unitário)</span> <span id="melhor-${numeroItem}">R$ ${melhor}</span></div>
+      <div><span>Meu valor (unitário)</span> <span id="meu-${numeroItem}">R$ ${meu}</span></div>
+      <label for="novo-${numeroItem}">Novo lance (unitário)</label>
+      <input id="novo-${numeroItem}" type="text">
+      <p>Intervalo mínimo entre lances: ${intervaloVisivel}</p>
+      <button id="enviar-${numeroItem}" type="button">Enviar lance</button>
+    </article>
+  </body></html>`;
+}
+
 export async function rodarPainel() {
   let falhas = 0;
   const checar = (c, m) => { if (!c) falhas += 1; conferir(c, m); };
@@ -237,6 +257,219 @@ export async function rodarPainel() {
     );
     const status = window.document.getElementById("__comprasnet_bot_painel___status").textContent;
     checar(/3\/3/.test(status) || /3/.test(status), `o painel mostra o resultado ("${status}")`);
+  }
+
+  console.log("\n── 6) Modo Disputa: valida a licitação e envia melhor − intervalo, com piso ──");
+  {
+    const lances = [];
+    let textoConfirmacao = "";
+    const { window, enviar } = montarPagina(paginaDisputa(), {
+      url: "https://www.gov.br/compras/fornecedor/enviar-lance",
+      preparar: (w) => {
+        w.confirm = (texto) => { textoConfirmacao = texto; return true; };
+        w.document.getElementById("enviar-1").addEventListener("click", () => {
+          const valor = w.document.getElementById("novo-1").value;
+          lances.push(valor);
+          w.document.getElementById("meu-1").textContent = `R$ ${valor}`;
+          w.document.getElementById("melhor-1").textContent = `R$ ${valor}`;
+        });
+      },
+    });
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    const propostas = [{ id: 7, numeroDispensa: "53/2026", uasg: "781402", totalItens: 1, itensPreenchidos: 1 }];
+    const registro = [{ numeroItem: 1, descricao: "TOALHA MESA", valorUnitario: "130.0000", valorMinimo: "120.0000" }];
+    window.fetch = async (url) => {
+      const destino = String(url);
+      if (destino.endsWith("/api/propostas/7/script")) {
+        return { ok: true, status: 200, json: async () => ({ proposta: propostas[0], itens: [] }) };
+      }
+      if (destino.endsWith("/api/propostas/7/itens")) {
+        return { ok: true, status: 200, json: async () => registro };
+      }
+      if (destino.endsWith("/api/propostas")) {
+        return { ok: true, status: 200, json: async () => propostas };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    const iniciado = await enviar({ action: "disputa_start", propostaId: "7" });
+    checar(iniciado.ok === true, `iniciou após validar a dispensa (${iniciado.message || iniciado.error})`);
+    checar(/53\/2026/.test(textoConfirmacao) && /781402/.test(textoConfirmacao), "pediu confirmação mostrando número e UASG corretos");
+    checar(/melhor valor menos o intervalo mínimo/i.test(textoConfirmacao), "explicou a regra antes de autorizar lances reais");
+    checar(/R\$ 127,0000/.test(textoConfirmacao) && /R\$ 120,0000/.test(textoConfirmacao), "prévia usou melhor 128 − intervalo 1 e informou o piso");
+
+    const limite = Date.now() + 8000;
+    while (Date.now() < limite && lances.length === 0) await sleep(50);
+    checar(JSON.stringify(lances) === JSON.stringify(["127,0000"]), `enviou uma vez o lance correto (${JSON.stringify(lances)})`);
+    const estado = await enviar({ action: "disputa_status" });
+    checar(estado.ativo === true, "continua monitorando após confirmar o lance");
+    const painel = window.document.getElementById("__comprasnet_bot_painel__");
+    checar(/Valor Mínimo/.test(painel?.textContent || ""), "o painel informa o limite rígido do Valor Mínimo");
+
+    const parada = await enviar({ action: "disputa_stop" });
+    checar(parada.stopped === true, "o comando Parar encerra o monitoramento");
+    await sleep(1300);
+    checar(lances.length === 1, "não repetiu o mesmo lance após a parada");
+    window.close();
+  }
+
+  console.log("\n── 7) Modo Disputa: não envia quando o lance calculado cruza o Valor Mínimo ──");
+  {
+    const lances = [];
+    const { window, enviar } = montarPagina(paginaDisputa(), {
+      url: "https://www.gov.br/compras/fornecedor/enviar-lance",
+      preparar: (w) => {
+        w.confirm = () => true;
+        w.document.getElementById("enviar-1").addEventListener("click", () => lances.push(w.document.getElementById("novo-1").value));
+      },
+    });
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    window.fetch = async (url) => {
+      const destino = String(url);
+      if (destino.endsWith("/api/propostas/7/script")) {
+        return { ok: true, status: 200, json: async () => ({ proposta: { numeroDispensa: "53/2026", uasg: "781402" } }) };
+      }
+      if (destino.endsWith("/api/propostas/7/itens")) {
+        return { ok: true, status: 200, json: async () => [{ numeroItem: 1, valorMinimo: "127.5000" }] };
+      }
+      if (destino.endsWith("/api/propostas")) {
+        return { ok: true, status: 200, json: async () => [{ id: 7, numeroDispensa: "53/2026", uasg: "781402", totalItens: 1, itensPreenchidos: 1 }] };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    const iniciado = await enviar({ action: "disputa_start", propostaId: "7" });
+    checar(iniciado.ok === true, "permitiu monitorar com piso cadastrado");
+    await sleep(600);
+    checar(lances.length === 0, "não clicou Enviar lance quando 127,0000 ficaria abaixo do mínimo 127,5000");
+    const status = await enviar({ action: "disputa_status" });
+    checar(status.ativo === true, "continua monitorando sem enviar preço proibido");
+    checar(status.itensNoPiso?.includes("1"), "encerra os lances automáticos do item antes de cruzar o piso");
+    window.document.getElementById("melhor-1").textContent = "R$ 126,0000";
+    await sleep(1500);
+    checar(lances.length === 0, "não volta a lançar nesse item depois de ser travado pelo piso");
+    await enviar({ action: "disputa_stop" });
+    window.close();
+  }
+
+  console.log("\n── 8) Modo Disputa: ao confirmar lance no piso, encerra novos lances daquele item ──");
+  {
+    const lances = [];
+    const { window, enviar } = montarPagina(paginaDisputa(), {
+      url: "https://www.gov.br/compras/fornecedor/enviar-lance",
+      preparar: (w) => {
+        w.confirm = () => true;
+        w.document.getElementById("enviar-1").addEventListener("click", () => {
+          const valor = w.document.getElementById("novo-1").value;
+          lances.push(valor);
+          w.document.getElementById("meu-1").textContent = `R$ ${valor}`;
+          w.document.getElementById("melhor-1").textContent = `R$ ${valor}`;
+        });
+      },
+    });
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    window.fetch = async (url) => {
+      const destino = String(url);
+      if (destino.endsWith("/api/propostas/7/script")) {
+        return { ok: true, status: 200, json: async () => ({ proposta: { numeroDispensa: "53/2026", uasg: "781402" } }) };
+      }
+      if (destino.endsWith("/api/propostas/7/itens")) {
+        return { ok: true, status: 200, json: async () => [{ numeroItem: 1, valorMinimo: "127.0000" }] };
+      }
+      if (destino.endsWith("/api/propostas")) {
+        return { ok: true, status: 200, json: async () => [{ id: 7, numeroDispensa: "53/2026", uasg: "781402", totalItens: 1, itensPreenchidos: 1 }] };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    const iniciado = await enviar({ action: "disputa_start", propostaId: "7" });
+    checar(iniciado.ok === true, "iniciou com piso de R$ 127,0000");
+    const limite = Date.now() + 8000;
+    while (Date.now() < limite && lances.length === 0) await sleep(50);
+    checar(JSON.stringify(lances) === JSON.stringify(["127,0000"]), "enviou exatamente o lance final no piso");
+
+    const prazoPiso = Date.now() + 3000;
+    let status = await enviar({ action: "disputa_status" });
+    while (Date.now() < prazoPiso && !status.itensNoPiso?.includes("1")) {
+      await sleep(100);
+      status = await enviar({ action: "disputa_status" });
+    }
+    checar(status.itensNoPiso?.includes("1"), "marca o item como encerrado depois da confirmação do piso");
+
+    // Mesmo que o DOM ofereça depois outra oportunidade acima do piso, não reabre este item.
+    window.document.getElementById("meu-1").textContent = "R$ 130,0000";
+    window.document.getElementById("melhor-1").textContent = "R$ 128,5000";
+    await sleep(1500);
+    checar(lances.length === 1, "não enviou outro lance após atingir o Valor Mínimo");
+    await enviar({ action: "disputa_stop" });
+    window.close();
+  }
+
+  console.log("\n── 9) Modo Disputa: intervalo percentual usa o melhor valor atual ──");
+  {
+    const lances = [];
+    let textoConfirmacao = "";
+    const { window, enviar } = montarPagina(paginaDisputa({ melhor: "0,1700", meu: "0,2000", intervalo: "1,0000%" }), {
+      url: "https://www.gov.br/compras/fornecedor/enviar-lance",
+      preparar: (w) => {
+        w.confirm = (texto) => { textoConfirmacao = texto; return true; };
+        w.document.getElementById("enviar-1").addEventListener("click", () => {
+          const valor = w.document.getElementById("novo-1").value;
+          lances.push(valor);
+          w.document.getElementById("meu-1").textContent = `R$ ${valor}`;
+          w.document.getElementById("melhor-1").textContent = `R$ ${valor}`;
+        });
+      },
+    });
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    window.fetch = async (url) => {
+      const destino = String(url);
+      if (destino.endsWith("/api/propostas/7/script")) {
+        return { ok: true, status: 200, json: async () => ({ proposta: { numeroDispensa: "53/2026", uasg: "781402" } }) };
+      }
+      if (destino.endsWith("/api/propostas/7/itens")) {
+        return { ok: true, status: 200, json: async () => [{ numeroItem: 1, valorMinimo: "0,1000" }] };
+      }
+      if (destino.endsWith("/api/propostas")) {
+        return { ok: true, status: 200, json: async () => [{ id: 7, numeroDispensa: "53/2026", uasg: "781402", totalItens: 1, itensPreenchidos: 1 }] };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    const iniciado = await enviar({ action: "disputa_start", propostaId: "7" });
+    checar(iniciado.ok === true, `iniciou com intervalo percentual (${iniciado.message || iniciado.error})`);
+    checar(/1,0000% \(R\$ 0,0017\)/.test(textoConfirmacao), "mostrou a conversão de 1% sobre R$ 0,1700");
+    checar(/R\$ 0,1683/.test(textoConfirmacao), "calculou o lance respeitando 1% de diferença");
+    const limite = Date.now() + 8000;
+    while (Date.now() < limite && lances.length === 0) await sleep(50);
+    checar(JSON.stringify(lances) === JSON.stringify(["0,1683"]), `enviou o lance percentual correto (${JSON.stringify(lances)})`);
+    await enviar({ action: "disputa_stop" });
+    window.close();
+  }
+
+  console.log("\n── 10) Modo Disputa: proposta/UASG divergente não inicia nem pede confirmação ──");
+  {
+    let pediuConfirmacao = false;
+    const { window, enviar } = montarPagina(paginaDisputa(), {
+      url: "https://www.gov.br/compras/fornecedor/enviar-lance",
+      preparar: (w) => { w.confirm = () => { pediuConfirmacao = true; return true; }; },
+    });
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    window.fetch = async (url) => {
+      const destino = String(url);
+      if (destino.endsWith("/api/propostas/7/script")) {
+        return { ok: true, status: 200, json: async () => ({ proposta: { numeroDispensa: "53/2026", uasg: "999999" } }) };
+      }
+      if (destino.endsWith("/api/propostas/7/itens")) {
+        return { ok: true, status: 200, json: async () => [{ numeroItem: 1, valorMinimo: "120.0000" }] };
+      }
+      return { ok: true, status: 200, json: async () => [] };
+    };
+    const resultado = await enviar({ action: "disputa_start", propostaId: "7" });
+    checar(resultado.ok === false && /não corresponde/.test(resultado.error || ""), "recusou a proposta com UASG divergente");
+    checar(pediuConfirmacao === false, "não mostrou confirmação se a identificação não bate");
+    checar((await enviar({ action: "disputa_status" })).ativo === false, "não iniciou monitoramento para outra UASG");
+    window.close();
   }
 
   return falhas;

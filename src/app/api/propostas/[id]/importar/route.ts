@@ -112,6 +112,7 @@ export async function POST(
           unidade text,
           valor_estimado numeric,
           valor_unitario numeric,
+          valor_minimo numeric,
           marca_fabricante text,
           modelo_versao text,
           set_descricao_detalhada boolean,
@@ -119,6 +120,7 @@ export async function POST(
           set_unidade boolean,
           set_valor_estimado boolean,
           set_valor_unitario boolean,
+          set_valor_minimo boolean,
           set_marca_fabricante boolean,
           set_modelo_versao boolean
         )
@@ -132,6 +134,7 @@ export async function POST(
           unidade = CASE WHEN d.set_unidade THEN COALESCE(d.unidade, itens.unidade) ELSE itens.unidade END,
           valor_estimado = CASE WHEN d.set_valor_estimado THEN d.valor_estimado ELSE itens.valor_estimado END,
           valor_unitario = CASE WHEN d.set_valor_unitario THEN d.valor_unitario ELSE itens.valor_unitario END,
+          valor_minimo = CASE WHEN d.set_valor_minimo THEN d.valor_minimo ELSE itens.valor_minimo END,
           marca_fabricante = CASE WHEN d.set_marca_fabricante THEN d.marca_fabricante ELSE itens.marca_fabricante END,
           modelo_versao = CASE WHEN d.set_modelo_versao THEN d.modelo_versao ELSE itens.modelo_versao END,
           -- Item cujo preenchimento mudou volta para a fila do bot.
@@ -148,11 +151,11 @@ export async function POST(
       ), criados AS (
         INSERT INTO itens (
           proposta_id, numero_item, descricao, descricao_detalhada, quantidade, unidade,
-          valor_estimado, valor_unitario, marca_fabricante, modelo_versao, enviado
+          valor_estimado, valor_unitario, valor_minimo, marca_fabricante, modelo_versao, enviado
         )
         SELECT (SELECT id FROM alvo), d.numero_item, d.descricao, d.descricao_detalhada,
                COALESCE(d.quantidade, 1), COALESCE(d.unidade, 'Unidade'), d.valor_estimado,
-               d.valor_unitario, d.marca_fabricante, d.modelo_versao, false
+               d.valor_unitario, d.valor_minimo, d.marca_fabricante, d.modelo_versao, false
         FROM dados d
         WHERE NOT EXISTS (
           SELECT 1 FROM itens i

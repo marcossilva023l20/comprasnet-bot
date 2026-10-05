@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.7";
+export const VERSAO_EXTENSAO = "1.8.1";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,112 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.1",
+    itens: [
+      "Ao atingir o Valor Mínimo cadastrado, encerra definitivamente os lances automáticos daquele item; se o próximo lance cruzaria o piso, o item também é protegido",
+      "Lê intervalo mínimo em reais ou percentual do melhor valor atual, mostra a conversão na confirmação e aplica o piso antes de enviar",
+    ],
+  },
+  {
+    versao: "1.8.0",
+    itens: [
+      "Ativa o Modo Disputa na tela “Enviar lance”: identifica a dispensa/UASG, monitora itens com fase aberta e calcula melhor valor menos o intervalo mínimo",
+      "Só envia após sua confirmação explícita, um lance por vez, e nunca abaixo do Valor Mínimo; pausa/parada e divergência ou falta de confirmação interrompem a automação",
+      "O Modo Disputa não altera o controle de velocidade nem o tempo de resposta do Modo Proposta",
+    ],
+  },
+  {
+    versao: "1.7.19",
+    itens: [
+      "Corrige a leitura do Radar PNCP quando o contador dos itens fica colado ao título no DOM (ex.: “Itens da contratação43”)",
+    ],
+  },
+  {
+    versao: "1.7.18",
+    itens: [
+      "Lê UASG sob o rótulo Nº UASG (Unidade Compradora) no modal real do Radar PNCP",
+      "Prioriza o Nº da compra/ano visível (ex.: 80/2026) para identificar o destino da importação",
+    ],
+  },
+  {
+    versao: "1.7.17",
+    itens: [
+      "Ajusta a leitura do CNET Mobile para os cartões sanfonados com Qtde solicitada, como na tela Acompanhar Contratação",
+      "Corrige a leitura do Radar PNCP quando o título Itens da contratação inclui um contador e reconhece o controle PNCP do modal",
+    ],
+  },
+  {
+    versao: "1.7.16",
+    itens: [
+      "Permite ler itens do CNET Mobile/Compras.gov.br após abrir Acompanhar compra e do Radar de Licitações PNCP após abrir Ver detalhes",
+      "Importa número, descrição, quantidade, unidade e valor estimado da tabela de itens; pode abrir Mostrar detalhes do item para capturar a descrição completa",
+    ],
+  },
+  {
+    versao: "1.7.15",
+    itens: [
+      "Adiciona o campo Valor Mínimo (R$) no sistema e na planilha, com edição por item, tabela, inclusão manual e importação/exportação",
+      "Cria a estrutura inicial do Modo Disputa e uma janela flutuante com a mesma velocidade configurada no Modo Proposta",
+      "Monitoramento dos concorrentes e envio automático de lances permanecem desativados até a validação com uma licitação ativa",
+    ],
+  },
+  {
+    versao: "1.7.14",
+    itens: [
+      "Corrige a troca de página durante o preenchimento: espera os itens da próxima página aparecerem e estabilizarem antes de continuar, evitando pular o primeiro item",
+      "Ao localizar um item em uma página conhecida, aguarda o item estar presente no DOM antes de começar a preencher",
+      "Continua os itens na ordem crescente, passando da última linha de uma página para o primeiro item da seguinte",
+    ],
+  },
+  {
+    versao: "1.7.13",
+    itens: [
+      "Corrige a escala observada em produção (67,4100 → 674.100,0000): os prefixos intermediários são convertidos para a escala decimal antes do evento input, evitando que 674100 seja lido como reais inteiros",
+      "Detecta máscaras que recebem a vírgula como separador decimal (primeiro dígito exibido como 6,0000) e só envia keypress quando keydown não aceitou a tecla",
+      "Valores com duas casas, como 61,41, mantêm o mesmo preço e são exibidos com quatro casas no portal (61,4100); o bot não salva se a conferência do preço falhar",
+    ],
+  },
+  {
+    versao: "1.7.12",
+    itens: [
+      "Evita que o mesmo dígito seja consumido duas vezes: espera a resposta assíncrona de keydown antes de emitir keypress e não manda os dois eventos quando a máscara já aceitou a tecla",
+      "Entradas com duas casas, como 61,41, mantêm o mesmo número e são normalizadas para quatro casas no portal (61,4100), sem duplicar os zeros iniciais de 0,0000",
+      "Mantém marca/modelo e só salva se o preço exibido continuar exatamente igual ao solicitado",
+    ],
+  },
+  {
+    versao: "1.7.11",
+    itens: [
+      "Corrige o preenchimento em máscaras que exibem 6,0000 no primeiro dígito: os caracteres seguintes usam apenas o prefixo numérico, sem reaproveitar os zeros da tela (evita 674.100,0000)",
+      "Não envia Backspace extra quando a máscara já reagiu ao keydown; o preço só chega a Salvar se continuar exatamente igual ao valor informado",
+      "Encontra o botão Salvar do portal pelo nome acessível (texto, aria-label ou aria-labelledby), inclusive o botão br-button",
+    ],
+  },
+  {
+    versao: "1.7.10",
+    itens: [
+      "Corrige a máscara que formata o primeiro dígito como 6,0000: o bot continua digitando os demais caracteres e confere o preço completo antes de salvar",
+      "A tecla usada para registrar o valor no portal é enviada com segurança; se ela alterar o preço, o bot não salva um valor incorreto e continua marca/modelo para diagnóstico",
+      "Mantém as quatro casas decimais e confirma o clique em Salvar; se houver confirmação, escolhe Sim, nunca Não",
+    ],
+  },
+  {
+    versao: "1.7.9",
+    itens: [
+      "O valor unitário não é mais alterado pela cutucada do formulário: o bot mantém e confere exatamente o preço informado (ex.: 67,4100) antes de salvar",
+      "Se uma máscara mudar o preço ao registrar o campo, o item não é salvo com valor incorreto; o preenchimento continua nos campos de marca e modelo para diagnóstico",
+      "A confirmação do ComprasNet é reconhecida mesmo sem role/ARIA/classe conhecida; o bot clica em Sim e nunca em Não",
+    ],
+  },
+  {
+    versao: "1.7.8",
+    itens: [
+      "Correção da escala do valor unitário: a máscara recebe só os dígitos e mantém 4 casas (1,0000 · 10,0000 · 100,0000 · 1000,0000), sem deslocar ou duplicar números",
+      "O valor é lançado uma única vez; se a máscara não confirmar o número, o item não é salvo com valor errado",
+      "Depois do valor unitário, o preenchimento continua normalmente para marca/fabricante e modelo/versão",
+    ],
+  },
   {
     versao: "1.7.7",
     itens: [
