@@ -156,20 +156,20 @@ async function checkPage() {
     return;
   }
 
-  if (!isComprasNetPage(currentTab.url || "")) {
-    setStatus("warn", "Abra o ComprasNet");
+  if (!isSourceItemsPage(currentTab.url || "")) {
+    setStatus("warn", "Abra o ComprasNet, o CNET Mobile ou o Radar PNCP");
     return;
   }
 
   try {
     const resp = await chrome.tabs.sendMessage(currentTab.id, { action: "ping" });
     if (resp?.ok) {
-      setStatus("ok", "ComprasNet detectado ✓");
+      setStatus("ok", `${nomeFonteItens(currentTab.url || "")} detectado ✓`);
     } else {
       setStatus("warn", "Página carregando...");
     }
   } catch (_) {
-    setStatus("warn", "Recarregue a página");
+    setStatus("warn", "Recarregue a página para ativar a extensão");
   }
 }
 
@@ -191,10 +191,50 @@ function isComprasNetPage(rawUrl) {
   }
 }
 
+function isRadarLicitacoesPage(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.hostname.toLowerCase() === "marcossilva023l20.github.io" && /^\/radar-licitacoes-v2(?:\/|$)/.test(url.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+function isCnetMobilePage(rawUrl) {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase() === "cnetmobile.estaleiro.serpro.gov.br";
+  } catch (_) {
+    return false;
+  }
+}
+
+function isSourceItemsPage(rawUrl) {
+  return isRadarLicitacoesPage(rawUrl) || isComprasNetPage(rawUrl);
+}
+
+function isSourceOnlyPage(rawUrl) {
+  return isRadarLicitacoesPage(rawUrl) || isCnetMobilePage(rawUrl);
+}
+
+function nomeFonteItens(rawUrl) {
+  if (isRadarLicitacoesPage(rawUrl)) return "Radar PNCP";
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (host === "cnetmobile.estaleiro.serpro.gov.br") return "CNET Mobile";
+  } catch (_) {
+    // URL da aba indisponível.
+  }
+  return "ComprasNet";
+}
+
 async function readPage({ quiet = false } = {}) {
   const button = document.getElementById("btn-read-page");
   if (!currentTab?.id) {
     setReadStatus("warning", "Não encontrei uma aba ativa para ler.");
+    return null;
+  }
+  if (isSourceOnlyPage(currentTab.url || "")) {
+    setReadStatus("warning", "Esta é uma fonte de itens. Para importar, use “📥 Ler itens da página” nesta aba.");
     return null;
   }
   if (!isComprasNetPage(currentTab.url || "")) {
@@ -279,7 +319,7 @@ function setStatus(type, msg) {
 
 // ─── Importar itens da página (extensão → sistema) ────────────────────────────
 //
-// Fluxo: lê os itens publicados na página do ComprasNet, mostra o que foi lido,
+// Fluxo: lê os itens publicados no ComprasNet/CNET Mobile ou no Radar PNCP, mostra o que foi lido,
 // confere no sistema qual proposta corresponde à página e, com confirmação
 // explícita, envia os itens (substituindo os itens atuais daquela proposta).
 
@@ -292,18 +332,19 @@ async function readItemsFromPage() {
     setImportStatus("warning", "Não encontrei uma aba ativa para ler.");
     return;
   }
-  if (!isComprasNetPage(currentTab.url || "")) {
-    setImportStatus("warning", "Abra primeiro a página de cadastro de propostas do ComprasNet.");
+  if (!isSourceItemsPage(currentTab.url || "")) {
+    setImportStatus("warning", "Abra uma página do ComprasNet/CNET Mobile ou do Radar de Licitações PNCP.");
     return;
   }
 
+  const fonte = nomeFonteItens(currentTab.url || "");
   const expandir = document.getElementById("import-expandir")?.checked !== false;
   const button = document.getElementById("btn-read-items");
   if (button) {
     button.disabled = true;
     button.textContent = "⏳ Lendo itens...";
   }
-  setImportStatus("info", expandir ? "Lendo e expandindo cada item da página..." : "Lendo os itens da página...");
+  setImportStatus("info", expandir ? `Lendo itens de ${fonte} e expandindo os detalhes disponíveis...` : `Lendo itens de ${fonte}...`);
   document.getElementById("import-preview")?.classList.add("hidden");
   document.getElementById("import-envio")?.classList.add("hidden");
   document.getElementById("import-destino")?.classList.add("hidden");
@@ -313,7 +354,7 @@ async function readItemsFromPage() {
 
   try {
     const result = await chrome.tabs.sendMessage(currentTab.id, {
-      action: "read_comprasnet_items",
+      action: "read_source_items",
       expandir,
       delay: 450,
     });
@@ -353,6 +394,7 @@ function renderImportPreview(result) {
     resumo.className = "text-xs mt-2";
     resumo.innerHTML = "";
     const linhas = [
+      result.origem ? `Fonte: ${result.origem}` : null,
       ident.uasg ? `UASG: ${ident.uasg}` : null,
       ident.numeroCompra ? `Compra/processo: ${ident.numeroCompra}` : null,
       ident.objeto ? `Objeto: ${ident.objeto}` : null,
@@ -808,6 +850,10 @@ function updateSelCount() {
 async function runBot() {
   if (running) return;
   if (!currentTab?.id) { addLog("error", "Sem aba ativa"); return; }
+  if (!isComprasNetPage(currentTab.url || "") || isSourceOnlyPage(currentTab.url || "")) {
+    addLog("error", "Esta página é apenas uma fonte de itens. Para preencher, abra a tela de cadastro de propostas do ComprasNet.");
+    return;
+  }
   if (selectedIds.size === 0) { addLog("error", "Selecione pelo menos um item"); return; }
 
   const toFill = allItems.filter((i) => selectedIds.has(i.id) && i.valorUnitario && i.marcaFabricante);

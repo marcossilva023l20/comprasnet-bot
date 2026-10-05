@@ -13,7 +13,8 @@ import {
 import { executarConsultaLinhas } from "@/lib/db-result";
 
 /**
- * Importa para o sistema os itens lidos na página do ComprasNet pela extensão.
+ * Importa para o sistema os itens lidos pelo popup da extensão no ComprasNet,
+ * CNET Mobile/Compras.gov.br ou Radar de Licitações PNCP.
  *
  * POST /api/propostas/importar-pagina
  * {

@@ -284,8 +284,9 @@
       <div class="field">
         <label style="display:flex; align-items:flex-start; gap:6px; font-weight:600;">
           <input type="checkbox" id="import-expandir" checked style="width:auto; margin-top:1px;" />
-          <span>Expandir cada item antes de ler (descrição completa; mais lento)</span>
+          <span>Expandir “Mostrar detalhes do item” antes de ler (descrição completa; mais lento)</span>
         </label>
+        <p class="text-xs" style="margin-top:6px;">Fontes: ComprasNet/CNET Mobile (após “Acompanhar compra”) e Radar de Licitações PNCP (após “Ver detalhes”).</p>
       </div>
       <button class="btn btn-outline" id="btn-read-items">📥 Ler itens da página</button>
       <div id="import-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
@@ -512,12 +513,12 @@
     </div>
 
     <div class="card">
-      <div class="card-title">📥 Importar itens da página</div>
+      <div class="card-title">📥 Importar itens de outras páginas</div>
       <div class="text-xs" style="line-height:1.8;">
-        <strong>1.</strong> Abra a página de cadastro de propostas do ComprasNet com os itens visíveis<br>
-        <strong>2.</strong> Clique em <strong>"📥 Ler itens da página"</strong> (o leitor pode expandir cada item para pegar a descrição completa)<br>
-        <strong>3.</strong> Confira os itens lidos e o destino detectado (UASG / número da compra)<br>
-        <strong>4.</strong> Marque a confirmação e clique em <strong>"⬆️ Enviar para o sistema"</strong>
+        <strong>1.</strong> No CNET Mobile, pesquise a Unidade compradora e o Número da compra e clique em <strong>“Acompanhar compra”</strong>; no Radar PNCP, abra <strong>“Ver detalhes”</strong> da licitação<br>
+        <strong>2.</strong> Deixe a lista de itens visível e clique em <strong>“📥 Ler itens da página”</strong> (a opção marcada pode abrir “Mostrar detalhes do item”)<br>
+        <strong>3.</strong> Confira descrição, quantidade, unidade, valor estimado e o destino detectado<br>
+        <strong>4.</strong> Marque a confirmação e clique em <strong>“⬆️ Enviar para o sistema”</strong>
       </div>
       <div class="alert alert-warning mt-2" style="margin-bottom:0;">
         O envio <strong>substitui</strong> os itens da proposta correspondente pelos itens lidos na página. Se a proposta não existir, ela é criada automaticamente.
@@ -545,7 +546,7 @@
         • <strong>Valor Mínimo (R$)</strong> — referência para o futuro Modo Disputa<br>
         • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
         • <strong>Modelo/Versão</strong> — ex: ADVANCED<br>
-        • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet (📥 Ler itens da página)
+        • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet, CNET Mobile ou Radar PNCP (📥 Ler itens da página)
       </div>
       <div class="alert alert-info mt-2" style="margin-bottom:0;">
         A coluna <strong>Item</strong> é a chave: ao importar, itens com o mesmo número são

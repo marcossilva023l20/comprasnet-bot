@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.15";
+export const VERSAO_EXTENSAO = "1.7.16";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.16",
+    itens: [
+      "Permite ler itens do CNET Mobile/Compras.gov.br após abrir Acompanhar compra e do Radar de Licitações PNCP após abrir Ver detalhes",
+      "Importa número, descrição, quantidade, unidade e valor estimado da tabela de itens; pode abrir Mostrar detalhes do item para capturar a descrição completa",
+    ],
+  },
   {
     versao: "1.7.15",
     itens: [

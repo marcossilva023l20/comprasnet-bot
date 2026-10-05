@@ -73,7 +73,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.action === "read_comprasnet_items") {
+  if (msg.action === "read_source_items" || msg.action === "read_comprasnet_items") {
     readPageItems({
       expandir: msg.expandir !== false,
       delay: Number(msg.delay) || 400,
@@ -2647,9 +2647,9 @@ async function irParaItem(itemNumber) {
 // ─── Leitura dos itens da página (extensão → sistema) ────────────────────────
 //
 // Diferente de scanPage() (que procura CAMPOS para preencher), esta leitura
-// extrai os DADOS dos itens já publicados pelo ComprasNet: número, descrição,
-// quantidade, unidade e valor estimado. Opcionalmente expande cada item
-// ("mostrar detalhes") para pegar a descrição completa.
+// extrai os DADOS de fontes públicas (ComprasNet/CNET Mobile e Radar PNCP):
+// número, descrição, quantidade, unidade e valor estimado. Opcionalmente expande
+// cada item ("mostrar detalhes") para pegar a descrição completa.
 
 const PAGE_LABELS = [
   /quantidade\s+solicitada/i,
@@ -2734,7 +2734,356 @@ async function expandirTodos(delay) {
   return true;
 }
 
-async function readPageItems({ expandir = true, delay = 400 } = {}) {
+function detectarFonteItens() {
+  const host = String(location.hostname || "").toLowerCase();
+  const pathname = String(location.pathname || "");
+  if (host === "marcossilva023l20.github.io" && /^\/radar-licitacoes-v2(?:\/|$)/.test(pathname)) {
+    return { id: "radar-pncp", nome: "Radar de Licitações PNCP" };
+  }
+  if (host === "cnetmobile.estaleiro.serpro.gov.br") {
+    return { id: "cnetmobile", nome: "Compras.gov.br / CNET Mobile" };
+  }
+  return { id: "comprasnet", nome: "ComprasNet" };
+}
+
+async function readPageItems(options = {}) {
+  const fonte = detectarFonteItens();
+  const { expandir = true, delay = 400 } = options;
+
+  if (fonte.id === "radar-pncp") {
+    const tabela = encontrarTabelaItensRadar();
+    if (!tabela) {
+      return {
+        ok: false,
+        error: 'No Radar, abra “Ver detalhes” da licitação e aguarde a seção “Itens da contratação” aparecer antes de ler.',
+        identificacao: readRadarIdentificacao(),
+        origem: fonte.nome,
+      };
+    }
+    return lerItensDaTabelaFonte(tabela, fonte, { expandir, delay });
+  }
+
+  if (fonte.id === "cnetmobile") {
+    const tabela = encontrarTabelaItensCnet();
+    if (tabela) return lerItensDaTabelaFonte(tabela, fonte, { expandir, delay });
+
+    // Algumas telas do CNET Mobile mostram os itens como cartões em vez de tabela.
+    // Mantém o leitor do ComprasNet como fallback para esses layouts.
+    const resultado = await readLegacyComprasNetItems({ expandir, delay });
+    if (resultado.ok) return { ...resultado, origem: fonte.nome };
+    return {
+      ...resultado,
+      error: 'No CNET Mobile, pesquise a compra e clique em “Acompanhar compra”; depois aguarde a lista de itens aparecer e tente ler novamente.',
+      identificacao: resultado.identificacao || readPageIdentificacao(),
+      origem: fonte.nome,
+    };
+  }
+
+  const resultado = await readLegacyComprasNetItems({ expandir, delay });
+  return { ...resultado, origem: fonte.nome };
+}
+
+function encontrarTituloItensRadar() {
+  return [...document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading']")]
+    .find((el) => normalizeText(el.textContent) === "itens da contratacao") || null;
+}
+
+function encontrarRaizDetalheRadar() {
+  const titulo = encontrarTituloItensRadar();
+  if (!titulo) return null;
+  let atual = titulo;
+  for (let nivel = 0; atual && nivel < 12; nivel += 1, atual = atual.parentElement) {
+    if (atual.matches?.('[role="dialog"], [aria-modal="true"]')) return atual;
+    if (atual.classList?.contains("fixed") && atual.classList?.contains("inset-0")) return atual;
+  }
+  return titulo.closest("section")?.parentElement?.parentElement || titulo.parentElement;
+}
+
+function encontrarTabelaItensRadar() {
+  const titulo = encontrarTituloItensRadar();
+  if (!titulo) return null;
+
+  let escopo = titulo.closest("section") || titulo.parentElement;
+  for (let nivel = 0; escopo && nivel < 4; nivel += 1, escopo = escopo.parentElement) {
+    const tabela = [...escopo.querySelectorAll("table")].find(isVisible);
+    if (tabela && analisarCabecalhoTabelaItens(tabela)?.colunas.numero >= 0) return tabela;
+  }
+  return null;
+}
+
+function encontrarTabelaItensCnet() {
+  for (const doc of collectDocuments()) {
+    for (const tabela of doc.querySelectorAll("table")) {
+      if (!isVisible(tabela)) continue;
+      const analisada = analisarCabecalhoTabelaItens(tabela);
+      if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) continue;
+      if (linhasDeDadosDaTabela(tabela, analisada).length > 0) return tabela;
+    }
+  }
+  return null;
+}
+
+function normalizarCabecalhoFonte(texto) {
+  return normalizeText(texto)
+    .replace(/[º°ª]/g, "o")
+    .replace(/[^a-z0-9#]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function analisarCabecalhoTabelaItens(tabela) {
+  const linhas = [...tabela.querySelectorAll("tr")].filter((linha) => linha.closest("table") === tabela);
+  const linhaCabecalho =
+    [...tabela.querySelectorAll("thead tr")].find((linha) => linha.closest("table") === tabela) ||
+    linhas.find((linha) => linha.querySelector("th")) ||
+    linhas[0];
+  if (!linhaCabecalho) return null;
+
+  const cabecalhos = [...linhaCabecalho.cells].map((celula) => normalizarCabecalhoFonte(textoVisivelSemControles(celula) || celula.textContent));
+  const localizar = (regra) => cabecalhos.findIndex((texto) => typeof regra === "function" ? regra(texto) : regra.test(texto));
+  const numero = localizar(/^(?:#|item(?:\s+(?:n|no|numero))?|n|no|numero)(?:\s+(?:do\s+)?item)?$/);
+  const descricao = localizar(/descri|especific|objeto/);
+  const quantidade = localizar(/quant|qtd/);
+  const unidade = localizar(/unid|fornec|medida/);
+  const valorUnitario = localizar((texto) =>
+    /(valor|vl|preco).*(unit|unidade)|(unit|unidade).*(valor|vl|preco)/.test(texto) && !/total/.test(texto),
+  );
+  const valorEstimado = localizar((texto) => /(valor|vl|preco)/.test(texto) && /estimad/.test(texto) && !/total/.test(texto));
+  const valor = valorUnitario >= 0 ? valorUnitario : valorEstimado;
+
+  return {
+    linhaCabecalho,
+    colunas: { numero, descricao, quantidade, unidade, valor },
+  };
+}
+
+function linhasDeDadosDaTabela(tabela, analisada) {
+  const { linhaCabecalho, colunas } = analisada;
+  return [...tabela.querySelectorAll("tr")].filter((linha) => {
+    if (linha === linhaCabecalho || linha.closest("table") !== tabela || !isVisible(linha)) return false;
+    const celulas = [...linha.cells];
+    if (celulas.length <= Math.max(colunas.numero, colunas.descricao, colunas.quantidade)) return false;
+    const numeroTexto = textoVisivelSemControles(celulas[colunas.numero]);
+    const descricaoTexto = textoVisivelSemControles(celulas[colunas.descricao]);
+    return Boolean(/\d/.test(numeroTexto) && descricaoTexto && !/^(?:—|-|n\/a)$/i.test(descricaoTexto.trim()));
+  });
+}
+
+function textoVisivelSemControles(raiz) {
+  if (!raiz) return "";
+  const partes = [];
+  try {
+    const walker = raiz.ownerDocument.createTreeWalker(raiz, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const pai = node.parentElement;
+      if (!pai || !isVisible(pai) || pai.tagName === "SCRIPT" || pai.tagName === "STYLE") continue;
+      if (pai.closest('button, input, select, textarea, [role="button"], [role="link"], a[href], svg, i')) continue;
+      partes.push(node.nodeValue || "");
+    }
+  } catch (_) {
+    return String(raiz.textContent || "").replace(/\s+/g, " ").trim();
+  }
+  return partes.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function textoDaCelulaFonte(celula) {
+  if (!celula) return "";
+  const visivel = textoVisivelSemControles(celula);
+  const titulo = String(celula.getAttribute("title") || "").trim();
+  const texto = titulo.length > visivel.length ? titulo : visivel;
+  return /^(?:[-–—]|n\/?a|nao informado)$/i.test(normalizeText(texto)) ? "" : texto;
+}
+
+function numeroDaCelulaFonte(texto, fallback) {
+  const inicio = String(texto || "").match(/^\s*(?:item\s*)?(\d{1,6})\b/i);
+  const qualquer = inicio || String(texto || "").match(/\b(\d{1,6})\b/);
+  return qualquer ? String(Number(qualquer[1])) : String(fallback);
+}
+
+function botoesMostrarDetalhesDaLinha(linha) {
+  return [...linha.querySelectorAll('button, [role="button"], [aria-expanded="false"]')]
+    .filter((botao) => isVisible(botao) && !botao.disabled)
+    .filter((botao) => {
+      const texto = normalizeText(`${botao.textContent || ""} ${botao.getAttribute("aria-label") || ""} ${botao.getAttribute("title") || ""}`);
+      return !/ocultar|recolher|fechar/.test(texto) && /(mostrar|ver|expandir|abrir).{0,30}detalh|detalh.{0,30}item/.test(texto);
+    });
+}
+
+async function expandirDetalhesDaLinha(linha, delay) {
+  for (const botao of botoesMostrarDetalhesDaLinha(linha)) {
+    if (botao.getAttribute("aria-expanded") === "true") continue;
+    try {
+      botao.click();
+      await sleep(Math.max(0, Number(delay) || 0));
+      return true;
+    } catch (_) {
+      // Se o controle não for clicável, a leitura ainda usa os dados resumidos.
+    }
+  }
+  return false;
+}
+
+function textoDetalhesDaLinha(linha, botoes, linhasDeDados, numeroItem, descricao) {
+  const partes = [textoVisivelSemControles(linha)];
+  for (const botao of botoes) {
+    const ids = `${botao.getAttribute("aria-controls") || ""} ${botao.getAttribute("aria-describedby") || ""}`.split(/\s+/).filter(Boolean);
+    for (const id of ids) {
+      const alvo = linha.ownerDocument.getElementById(id);
+      if (alvo && isVisible(alvo)) partes.push(textoVisivelSemControles(alvo));
+    }
+  }
+
+  let proxima = linha.nextElementSibling;
+  for (let nivel = 0; proxima && nivel < 4 && proxima.tagName === "TR"; nivel += 1, proxima = proxima.nextElementSibling) {
+    if (linhasDeDados.includes(proxima)) break;
+    if (isVisible(proxima)) partes.push(textoVisivelSemControles(proxima));
+  }
+
+  let modalDetalhe = null;
+  const descricaoChave = normalizeText(descricao).slice(0, 50);
+  const regexNumeroItem = new RegExp(`\\bitem\\s*(?:n\\s*o\\s*)?${Number(numeroItem)}\\b`);
+  for (const modal of linha.ownerDocument.querySelectorAll(SELETOR_DE_MODAL)) {
+    if (!isVisible(modal)) continue;
+    const texto = textoVisivelSemControles(modal);
+    const normalizado = normalizeText(texto);
+    if (!/descri|especifica/i.test(normalizado)) continue;
+    const pertenceAoItem =
+      regexNumeroItem.test(normalizado) ||
+      (descricaoChave.length >= 8 && normalizado.includes(descricaoChave));
+    if (!pertenceAoItem) continue;
+    partes.push(texto);
+    modalDetalhe = modal;
+    break;
+  }
+
+  return {
+    texto: partes.filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
+    modal: modalDetalhe,
+  };
+}
+
+function fecharModalDetalheFonte(modal) {
+  if (!modal || !isVisible(modal)) return false;
+  const botaoFechar = [...modal.querySelectorAll('button, [role="button"], a')].find((botao) => {
+    if (!isVisible(botao) || botao.disabled) return false;
+    const rotulos = [botao.textContent, botao.getAttribute("aria-label"), botao.getAttribute("title")]
+      .filter(Boolean)
+      .map((rotulo) => normalizeText(rotulo));
+    return rotulos.some((rotulo) => /^(?:fechar|close)(?:\s+(?:detalhes|janela|modal))?$/.test(rotulo) || /^(?:×|x)$/.test(rotulo.trim()));
+  });
+  if (!botaoFechar) return false;
+  try {
+    botaoFechar.click();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function extrairDescricaoDetalhadaFonte(texto) {
+  const bruto = String(texto || "").replace(/\s+/g, " ").trim();
+  const match = bruto.match(/(?:descri[cç][aã]o\s+(?:detalhada|complementar)|especifica[cç][aã]o(?:\s+do\s+item)?)\s*:?\s*(.+?)(?=\s+(?:quantidade(?:\s+(?:solicitada|total))?|unidade(?:\s+(?:de\s+)?(?:fornecimento|medida))?|valor(?:\s+(?:estimado|unit[aá]rio|total))?|marca(?:\s*\/\s*|\s+)fabricante|modelo(?:\s*\/\s*|\s+)vers[aã]o)\s*[:：]|$)/i);
+  if (!match) return "";
+  return limparDescricao(match[1]).slice(0, 4000);
+}
+
+async function lerItensDaTabelaFonte(tabela, fonte, { expandir = true, delay = 400 } = {}) {
+  const analisada = analisarCabecalhoTabelaItens(tabela);
+  if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) {
+    return { ok: false, error: "A tabela de itens desta página não tem colunas reconhecidas." };
+  }
+
+  const linhas = linhasDeDadosDaTabela(tabela, analisada);
+  if (linhas.length === 0) return { ok: false, error: "A seção de itens apareceu, mas ainda não há linhas visíveis para ler." };
+
+  const identificacao = fonte.id === "radar-pncp" ? readRadarIdentificacao() : readPageIdentificacao();
+  const avisos = [];
+  const itens = [];
+  let expandidos = 0;
+  abortRequested = false;
+  rodandoAgora = true;
+  mostrarPainel();
+  definirStatusDoPainel(`Lendo ${linhas.length} item(ns) de ${fonte.nome}...`);
+  atualizarPainel();
+
+  if (expandir) showProgressBar(0, linhas.length);
+  try {
+    for (const [indice, linha] of linhas.entries()) {
+      if (abortRequested) {
+        avisos.push("Leitura interrompida antes do fim da lista.");
+        break;
+      }
+      await aguardarSePausado();
+      if (abortRequested) break;
+
+      const botoes = botoesMostrarDetalhesDaLinha(linha);
+      if (expandir && (await expandirDetalhesDaLinha(linha, delay))) expandidos += 1;
+
+      const celulas = [...linha.cells];
+      const get = (coluna) => coluna >= 0 ? textoDaCelulaFonte(celulas[coluna]) : "";
+      const numeroItem = numeroDaCelulaFonte(get(analisada.colunas.numero), indice + 1);
+      const descricao = limparDescricao(get(analisada.colunas.descricao).replace(new RegExp(`^\\s*(?:item\\s*)?${numeroItem}\\s*[).:\\-–—|]*\\s*`, "i"), ""));
+      const detalhe = textoDetalhesDaLinha(linha, botoes, linhas, numeroItem, descricao);
+      const descricaoDetalhada = extrairDescricaoDetalhadaFonte(detalhe.texto);
+      if (detalhe.modal) fecharModalDetalheFonte(detalhe.modal);
+      const item = {
+        numeroItem,
+        descricao,
+        descricaoDetalhada,
+        quantidade: get(analisada.colunas.quantidade),
+        unidade: get(analisada.colunas.unidade),
+        valorEstimado: get(analisada.colunas.valor),
+      };
+      if (!descricao) avisos.push(`Item ${numeroItem}: confira a descrição antes de enviar.`);
+      itens.push(item);
+      if (expandir) showProgressBar(indice + 1, linhas.length);
+    }
+  } finally {
+    if (expandir) removeProgressBar();
+    rodandoAgora = false;
+    definirStatusDoPainel(`Leitura concluída: ${itens.length} item(ns) de ${fonte.nome}.`);
+    atualizarPainel();
+  }
+
+  return {
+    ok: itens.length > 0,
+    error: itens.length ? undefined : "Não consegui ler os itens visíveis desta tabela.",
+    url: location.href,
+    origem: fonte.nome,
+    identificacao,
+    itens,
+    total: itens.length,
+    expandidos,
+    paginas: 1,
+    avisos,
+  };
+}
+
+function readRadarIdentificacao() {
+  const raiz = encontrarRaizDetalheRadar() || document;
+  const texto = String(raiz.innerText || raiz.textContent || "").replace(/\s+/g, " ").trim();
+  const numeroCompra = (
+    firstMatch(texto, /n[ºo°.]?\s*(?:da\s*)?compra\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
+    firstMatch(texto, /n[ºo°.]?\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i)
+  ).replace(/\s+/g, "");
+  const tituloObjeto = raiz.querySelector("header h1, header h2, header h3")?.textContent?.trim() || "";
+  const objetoRotulado = firstMatch(texto, /objeto\s*:?\s*(.{10,300}?)(?=\s+(?:cnpj|unidade|uasg|processo|sistema de origem)\b|$)/i);
+  const uasg = firstMatch(texto, /uasg\s*:?\s*(\d{5,6})/i);
+  const dataLimite = firstMatch(
+    texto,
+    /(?:encerramento\s+das\s+propostas|encerra\s+propostas|data\s+limite)[^0-9]{0,60}(\d{2}\/\d{2}\/\d{4}(?:\s*\d{1,2}:\d{2})?)/i,
+  );
+  return {
+    uasg,
+    numeroCompra,
+    objeto: tituloObjeto || objetoRotulado,
+    dataLimite,
+    url: location.href,
+  };
+}
+
+async function readLegacyComprasNetItems({ expandir = true, delay = 400 } = {}) {
   const identificacao = readPageIdentificacao();
   rodandoAgora = true;
   mostrarPainel();
@@ -2759,6 +3108,9 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
 
     const resultado = await lerItensDaPaginaAtual({ expandir, delay, identificacao });
     if (!resultado.ok && pagina === 1) {
+      rodandoAgora = false;
+      definirStatusDoPainel(resultado.error || "Não encontrei itens nesta página.");
+      atualizarPainel();
       return {
         ok: false,
         error: resultado.error,
@@ -2891,6 +3243,7 @@ function readPageIdentificacao() {
   } catch (_) {
     texto = "";
   }
+  texto = `${texto} ${textoDeCamposIdentificacao()}`.replace(/\s+/g, " ").trim();
 
   const uasg =
     firstMatch(texto, /uasg\s*:?\s*(\d{5,6})\b/i) ||
@@ -2919,6 +3272,22 @@ function readPageIdentificacao() {
     dataLimite,
     url: location.href,
   };
+}
+
+function textoDeCamposIdentificacao() {
+  const partes = [];
+  for (const doc of collectDocuments()) {
+    for (const control of doc.querySelectorAll("input, select, textarea")) {
+      if (!isVisible(control)) continue;
+      const sinais = normalizeText(getFieldSignals(control).all.join(" "));
+      const valor = String(control.value ?? control.selectedOptions?.[0]?.textContent ?? "").trim();
+      if (!valor) continue;
+      if (/uasg|unidade compradora|unidade gestora/.test(sinais)) partes.push(`UASG: ${valor}`);
+      if (/(?:numero|n|no)\s*(?:da\s*)?compra|compra\s*(?:numero|n|no)/.test(sinais)) partes.push(`Número da compra: ${valor}`);
+      if (/numero\s*(?:do\s*)?processo|processo\s*(?:numero|n|no)/.test(sinais)) partes.push(`Processo: ${valor}`);
+    }
+  }
+  return partes.join(" ");
 }
 
 function numeroCompraDaUrl() {
