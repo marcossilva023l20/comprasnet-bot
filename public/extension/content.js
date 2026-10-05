@@ -4698,11 +4698,11 @@ function encontrarInputNovoLance(escopo) {
   return associadas.size === 1 ? [...associadas][0] : null;
 }
 
-function lerCartaoDisputa({ cartao, escopoLance, botao }) {
+function lerCartaoDisputa({ cartao, escopoLance, botao, criterioMaiorDesconto = false }) {
   const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
   const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
   const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["intervalo minimo entre lances", "enviar lance"]);
-  const rotulosPreco = !/maior\s*desconto/.test(texto) && !/%|desconto|percentual/.test(novoLance);
+  const rotulosPreco = !criterioMaiorDesconto && !/maior\s*desconto/.test(texto) && !/%|desconto|percentual/.test(novoLance);
   const melhor = rotulosPreco ? valorAposRotuloDisputa(formulario, "melhor valor (unitario)", ["meu valor (unitario)", "novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]) : null;
   const meu = rotulosPreco ? valorAposRotuloDisputa(formulario, "meu valor (unitario)", ["novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]) : null;
   const criterioPreco = rotulosPreco && melhor !== null && meu !== null;
@@ -4723,6 +4723,9 @@ function lerCartaoDisputa({ cartao, escopoLance, botao }) {
 }
 
 function encontrarCartoesDisputa(diagnostico = null) {
+  // O critério é da compra inteira e pode estar fora da linha. R$ no cartão
+  // não permite ignorar uma indicação conflitante de maior desconto na página.
+  const criterioMaiorDesconto = /\bmaior\s*desconto\b/.test(normalizarTextoDisputa(textoVisivelDisputa(document.body)));
   const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
   const habilitados = controles.filter(controleDisputaHabilitado);
   if (diagnostico) Object.assign(diagnostico, { controlesVisiveis: controles.length, controlesHabilitados: habilitados.length, semRotulos: 0, semNumero: 0, ambiguos: 0, itensDuplicados: [] });
@@ -4730,7 +4733,7 @@ function encontrarCartoesDisputa(diagnostico = null) {
   // O Enviar pode habilitar só depois do preenchimento. Aqui apenas associa; não clica.
   for (const botao of controles) {
     const contexto = cartaoDaAcaoDeLance(botao, controles, diagnostico);
-    if (contexto) cartoes.push(lerCartaoDisputa(contexto));
+    if (contexto) cartoes.push(lerCartaoDisputa({ ...contexto, criterioMaiorDesconto }));
   }
   const contagem = new Map();
   for (const cartao of cartoes) contagem.set(cartao.numeroItem, (contagem.get(cartao.numeroItem) || 0) + 1);
@@ -4940,8 +4943,9 @@ function verificarConfirmacaoLancePendente(cartoes) {
 }
 
 async function verificarDisputaAutomatica() {
-  if (!disputaAutomatica.ativo || disputaAutomatica.pausado || disputaAutomatica.processando) return;
-  disputaAutomatica.processando = true;
+  const monitoramento = disputaAutomatica;
+  if (!monitoramento.ativo || monitoramento.pausado || monitoramento.processando) return;
+  monitoramento.processando = true;
   try {
     const identificacao = extrairIdentificacaoDisputaPagina();
     if (!identificacao.telaEnviarLance || identificacao.numeroDispensa !== disputaAutomatica.proposta?.numeroDispensa || identificacao.uasg !== disputaAutomatica.proposta?.uasg) {
@@ -4994,19 +4998,32 @@ async function verificarDisputaAutomatica() {
       const intervaloCalculado = formatarIntervaloDisputa(sugestao.intervalo, sugestao.decremento);
       mostrarStatusDisputa(`Preparando item ${cartao.numeroItem}: ${formatarValorDisputa(sugestao.unidades)} (melhor − intervalo ${intervaloCalculado}; piso ${formatarValorDisputa(sugestao.piso)}).`, "info");
       const preenchido = await setInputValue(cartao.input, formatarInputDisputa(sugestao.unidades), true);
-      if (!disputaAutomatica.ativo || disputaAutomatica.pausado) {
+      // Uma autorização antiga não pode sobreviver a Parar → Iniciar com novos pisos.
+      if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) {
         if (parseValorUnidadesDisputa(cartao.input.value) === sugestao.unidades) {
           const view = cartao.input.ownerDocument.defaultView || window;
           aplicarValor(cartao.input, "", view);
           disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
           disparar(cartao.input, "change", view, {});
         }
-        if (disputaAutomatica.ativo) mostrarStatusDisputa("Automação pausada antes do envio; nenhum lance foi enviado.", "warning");
+        if (disputaAutomatica === monitoramento && monitoramento.ativo) mostrarStatusDisputa("Automação pausada antes do envio; nenhum lance foi enviado.", "warning");
         return;
       }
       if (!preenchido || parseValorUnidadesDisputa(cartao.input.value) !== sugestao.unidades) {
         disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
         pararDisputaAutomatica(`O portal não manteve o lance calculado do item ${cartao.numeroItem}; não cliquei em “Enviar lance”.`);
+        return;
+      }
+
+      const identificacaoAntesEnvio = extrairIdentificacaoDisputaPagina();
+      if (!identificacaoAntesEnvio.telaEnviarLance || identificacaoAntesEnvio.numeroDispensa !== identificacao.numeroDispensa || identificacaoAntesEnvio.uasg !== identificacao.uasg) {
+        if (parseValorUnidadesDisputa(cartao.input.value) === sugestao.unidades) {
+          const view = cartao.input.ownerDocument.defaultView || window;
+          aplicarValor(cartao.input, "", view);
+          disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
+          disparar(cartao.input, "change", view, {});
+        }
+        pararDisputaAutomatica("A compra ou UASG mudou durante a preparação; lances automáticos interrompidos. Esta preparação não foi enviada.");
         return;
       }
 
@@ -5065,7 +5082,8 @@ async function verificarDisputaAutomatica() {
     const avisoPiso = totalNoPiso ? ` ${totalNoPiso} item(ns) encerrado(s) no Valor Mínimo; sem novos lances nesses itens.` : "";
     mostrarStatusDisputa(`Monitorando ${cartoes.length} item(ns) visível(is). Nenhum novo lance abaixo do Valor Mínimo será enviado.${avisoPiso}`, totalNoPiso ? "warning" : "info");
   } finally {
-    disputaAutomatica.processando = false;
+    // Não desbloqueia a preparação de uma sessão nova quando a antiga termina.
+    monitoramento.processando = false;
   }
 }
 

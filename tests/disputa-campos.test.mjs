@@ -290,3 +290,90 @@ test("a releitura antes do clique bloqueia a troca do número do item durante a 
   assert.equal(env.window.document.getElementById("novo-1").value, "");
   await env.enviar({ action: "disputa_stop" });
 });
+
+test("maior desconto fora do cartão também impede interpretar valores em R$ como lance em preço", async (t) => {
+  const env = ambiente({}, { confirmar: true });
+  t.after(() => env.window.close());
+  const criterio = env.window.document.createElement("p");
+  criterio.textContent = "Critério de julgamento: Maior desconto";
+  env.window.document.querySelector("h1").after(criterio);
+  const diagnostico = await env.enviar({ action: "disputa_diagnosticar" });
+  assert.equal(diagnostico.diagnostico.itens[0].criterioPreco, false);
+  assert.equal(diagnostico.diagnostico.itens[0].campoEncontrado, false);
+  assert.deepEqual(env.chamadas, []);
+  const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+  assert.equal(resultado.ok, false);
+  assert.equal(env.confirmacoes.length, 0);
+  assert.deepEqual(env.lances, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+});
+
+test("a releitura bloqueia um critério conflitante que apareça fora do cartão durante a digitação", { timeout: 10000 }, async (t) => {
+  const env = ambiente({}, { confirmar: true });
+  t.after(() => env.window.close());
+  let resolverBloqueio;
+  const bloqueio = new Promise((resolve) => { resolverBloqueio = resolve; });
+  const enviarOriginal = env.window.chrome.runtime.sendMessage;
+  env.window.chrome.runtime.sendMessage = (msg, ...args) => {
+    if (msg.action !== "disputa_progress") return enviarOriginal(msg, ...args);
+    if (/não passaram na releitura/.test(msg.status)) resolverBloqueio(msg.status);
+    return Promise.resolve({ ok: true });
+  };
+  env.window.document.getElementById("novo-1").addEventListener("input", () => {
+    const criterio = env.window.document.createElement("p");
+    criterio.textContent = "Critério de julgamento: Maior desconto";
+    env.window.document.querySelector("h1").after(criterio);
+  }, { once: true });
+  assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+  assert.match(await bloqueio, /lance não enviado/);
+  assert.deepEqual(env.lances, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+  await env.enviar({ action: "disputa_stop" });
+});
+
+for (const [nome, trocar] of [
+  ["compra", (doc) => { doc.querySelector("h1 + p").textContent = "Dispensa Eletrônica Nº 54/2026 (Lei 14.133/2021)"; }],
+  ["UASG", (doc) => { doc.querySelector("h1 + p + p").textContent = "UASG 781403"; }],
+]) {
+  test(`não envia se a ${nome} mudar durante a digitação, mesmo mantendo a linha e os controles`, { timeout: 10000 }, async (t) => {
+    const env = ambiente({}, { confirmar: true });
+    t.after(() => env.window.close());
+    let resolverParada;
+    const parada = new Promise((resolve) => { resolverParada = resolve; });
+    const enviarOriginal = env.window.chrome.runtime.sendMessage;
+    env.window.chrome.runtime.sendMessage = (msg, ...args) => {
+      if (msg.action !== "disputa_progress") return enviarOriginal(msg, ...args);
+      if (/compra ou UASG mudou durante/.test(msg.status)) resolverParada(msg.status);
+      return Promise.resolve({ ok: true });
+    };
+    env.window.document.getElementById("novo-1").addEventListener("input", () => trocar(env.window.document), { once: true });
+    assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+    assert.match(await parada, /não foi enviada/);
+    assert.deepEqual(env.lances, []);
+    assert.equal((await env.enviar({ action: "disputa_status" })).ativo, false);
+    assert.equal(env.window.document.getElementById("novo-1").value, "");
+  });
+}
+
+test("Parar e reiniciar com piso maior não deixa uma preparação antiga enviar abaixo do novo limite", { timeout: 10000 }, async (t) => {
+  const pisos = { 1: "91.9000" };
+  const env = ambiente({}, { confirmar: true, pisos });
+  t.after(() => env.window.close());
+  let resolverReinicio;
+  const reinicio = new Promise((resolve) => { resolverReinicio = resolve; });
+  env.window.document.getElementById("novo-1").addEventListener("input", async () => {
+    await env.enviar({ action: "disputa_stop" });
+    pisos[1] = "126.5000";
+    resolverReinicio(await env.enviar({ action: "disputa_start", propostaId: "7" }));
+  }, { once: true });
+  assert.equal((await env.enviar({ action: "disputa_start", propostaId: "7" })).ok, true);
+  const resultado = await reinicio;
+  assert.equal(resultado.ok, true, resultado.error);
+  // Espera a preparação já em andamento terminar e o novo monitoramento observar o piso.
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+  assert.equal(env.confirmacoes.length, 2);
+  assert.deepEqual(env.lances, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+  assert.ok((await env.enviar({ action: "disputa_status" })).itensNoPiso.includes("1"));
+  await env.enviar({ action: "disputa_stop" });
+});

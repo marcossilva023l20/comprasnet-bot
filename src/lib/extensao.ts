@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.3";
+export const VERSAO_EXTENSAO = "1.8.4";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.4",
+    itens: [
+      "Inclui a correção dos campos de lance em colunas da 1.8.3 e bloqueia maior desconto indicado fora do cartão, mesmo que existam valores em R$; também revalida o critério antes de clicar",
+      "Relê compra/UASG após digitar e descarta preparações antigas ao parar/reiniciar, para não reaproveitar autorização ou pisos de outro monitoramento",
+    ],
+  },
   {
     versao: "1.8.3",
     itens: [
