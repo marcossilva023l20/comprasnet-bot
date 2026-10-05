@@ -149,7 +149,7 @@ test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
 });
 
 
-for (const instalada of ["1.7.19", "1.8.1"]) {
+for (const instalada of ["1.7.19", "1.8.1", "1.8.2"]) {
   test(`a instalação ${instalada} recebe a atualização com a mesma versão do pacote`, () => {
     const estado = montarEstadoAtualizacao(instalada);
     assert.ok(estado.precisaAtualizar);

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.2";
+export const VERSAO_EXTENSAO = "1.8.3";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,14 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.3",
+    itens: [
+      "Associa a coluna de Novo lance à linha completa do item, mesmo sem data-item e com rótulos em spans separados; não mistura campos/preços de itens diferentes",
+      "Exige preços em R$, campo associado e fase aberta; reconhece Enviar inicialmente bloqueado e só clica se o portal habilitar e a releitura confirmar o mesmo item e controles",
+      "Adiciona diagnóstico dos campos somente leitura, copiável para suporte, sem consultar a API, preencher ou enviar lances",
+    ],
+  },
   {
     versao: "1.8.2",
     itens: [

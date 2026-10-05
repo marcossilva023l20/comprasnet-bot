@@ -83,6 +83,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "disputa_diagnosticar") {
+    if (disputaAutomatica?.ativo || rodandoAgora || rodandoPeloPainel) {
+      sendResponse({ ok: false, error: "Pare a automação (Modo Proposta ou Modo Disputa) antes de ler o diagnóstico sem envio." });
+      return true;
+    }
+    try {
+      sendResponse(diagnosticarCamposDisputa());
+    } catch (err) {
+      sendResponse({ ok: false, error: `Falha ao ler os campos da disputa: ${err?.message || "erro"}.` });
+    }
+    return true;
+  }
+
   if (msg.action === "disputa_start") {
     iniciarDisputaAutomatica(msg.propostaId)
       .then(sendResponse)
@@ -4465,24 +4478,24 @@ function trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
 
 function valorAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
   const trecho = trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes);
-  const match = trecho.match(/-?\d[\d.,]*/);
-  return match ? parseValorUnidadesDisputa(match[0]) : null;
+  // Preço precisa estar explicitamente em R$; percentuais de desconto não são preços.
+  if (/%|desconto|percentual/.test(trecho)) return null;
+  const monetario = trecho.trim().replace(/(\d)\s*([.,])\s*(?=\d)/g, "$1$2");
+  const match = monetario.match(/^:?\s*r\$\s*(-?\d[\d.,]*)\s*$/i);
+  return match ? parseValorUnidadesDisputa(match[1]) : null;
 }
 
 function lerIntervaloMinimoDisputa(texto) {
-  const trecho = trechoAposRotuloDisputa(texto, "intervalo minimo entre lances", ["enviar lance"]);
+  const trecho = trechoAposRotuloDisputa(texto, "intervalo minimo entre lances", ["enviar lance"]).trim().replace(/^:\s*/, "").replace(/(\d)\s*([.,])\s*(?=\d)/g, "$1$2");
   if (!trecho) return null;
-
-  // Quando o portal informa o intervalo em percentual, preserva a unidade:
-  // 1% é um desconto de 1% sobre o melhor valor atual, não R$ 1,00.
-  const percentual = trecho.match(/(-?\d[\d.,]*)\s*(?:%|por\s+cento|percentual\b)/i);
-  if (percentual) {
+  const percentual = trecho.match(/^(-?\d[\d.,]*)\s*(?:%|por\s+cento|percentual)\s*$/i);
+  if (percentual && !/r\$/i.test(trecho)) {
     const unidades = parseValorUnidadesDisputa(percentual[1]);
     return unidades === null ? null : { tipo: "percentual", unidades };
   }
-
-  const valor = trecho.match(/-?\d[\d.,]*/);
-  const unidades = valor ? parseValorUnidadesDisputa(valor[0]) : null;
+  const monetario = trecho.match(/^r\$\s*(-?\d[\d.,]*)\s*$/i);
+  if (!monetario || /%|por\s+cento|percentual\b/i.test(trecho)) return null;
+  const unidades = parseValorUnidadesDisputa(monetario[1]);
   return unidades === null ? null : { tipo: "valor", unidades };
 }
 
@@ -4516,109 +4529,262 @@ function intervalosIguaisDisputa(a, b) {
   return Boolean(a && b && a.tipo === b.tipo && a.unidades === b.unidades);
 }
 
-function numeroItemDoCartaoDisputa(cartao) {
-  for (const atributo of ["data-numero-item", "data-item-number", "data-item"]) {
-    const valor = cartao.getAttribute(atributo);
-    if (/^\d{1,6}$/.test(String(valor || ""))) return normalizeItemNumber(valor);
+const ROTULOS_PRECO_DISPUTA = [
+  "melhor valor (unitario)",
+  "meu valor (unitario)",
+  "novo lance (unitario)",
+  "intervalo minimo entre lances",
+];
+
+/** Lê somente texto renderizado; separa spans contíguos sem usar HTML ou valores ocultos. */
+function textoVisivelDisputa(el) {
+  if (!el) return "";
+  const partes = [];
+  const visibilidade = new WeakMap();
+  const walker = el.ownerDocument.createTreeWalker(el, 4); // SHOW_TEXT
+  let no;
+  while ((no = walker.nextNode())) {
+    const parent = no.parentElement;
+    if (!parent || parent.closest(`script, style, template, noscript, svg, input, textarea, [role="textbox"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [hidden], [inert], [aria-hidden="true"], #${PAINEL_ID}`)) continue;
+    if (!visibilidade.has(parent)) visibilidade.set(parent, isVisible(parent));
+    if (!visibilidade.get(parent)) continue;
+    const texto = String(no.textContent || "").replace(/\s+/g, " ").trim();
+    if (texto) partes.push(texto);
   }
-  const primeiroFilho = [...cartao.children].slice(0, 4).map(textoDaDisputa).find((texto) => /^\d{1,6}$/.test(texto));
-  if (primeiroFilho) return normalizeItemNumber(primeiroFilho);
-  const primeiraLinha = textoDaDisputa(cartao).split(/\r?\n/).map((linha) => linha.trim()).find(Boolean) || "";
-  const match = primeiraLinha.match(/^\s*(?:item\s*)?(\d{1,6})(?=\s|$|[).:\-–—])/i);
-  return match ? normalizeItemNumber(match[1]) : "";
+  return partes.join(" ").replace(/\u00a0/g, " ").trim();
 }
 
-function encontrarControlesEnviarLance() {
+function normalizarTextoDisputa(texto) {
+  return normalizeText(texto)
+    .replace(/\bmelhor\s*valor\s*\(\s*unitario\s*\)/g, "melhor valor (unitario) ")
+    .replace(/\bmeu\s*valor\s*\(\s*unitario\s*\)/g, "meu valor (unitario) ")
+    .replace(/\bnovo\s*lance\s*\(\s*unitario\s*\)/g, "novo lance (unitario) ")
+    .replace(/\bintervalo\s*minimo\s*entre\s*lances/g, "intervalo minimo entre lances ")
+    .replace(/\bfase\s*de\s*lances\s*aberta/g, "fase de lances aberta")
+    .replace(/\benviar\s*lance\b/g, "enviar lance")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function identificarNumeroItemDisputa(cartao, escopoLance) {
+  const lerNumero = (el) => {
+    const texto = normalizarTextoDisputa(textoVisivelDisputa(el));
+    const match = texto.match(/^(?:item\s*(?:n[º°o]?\s*)?[:#-]?\s*)?(\d{1,6})(?=\s|$|[).:\-–—])/);
+    return match && Number(match[1]) > 0 ? normalizeItemNumber(match[1]) : "";
+  };
+  const visiveis = new Set();
+  const inicial = lerNumero(cartao);
+  if (inicial) visiveis.add(inicial);
+  else {
+    // Também funciona se a ordem DOM das colunas for diferente da ordem visual.
+    for (const filho of cartao.children) {
+      if (filho === escopoLance || filho.contains(escopoLance) || !isVisible(filho)) continue;
+      const texto = normalizarTextoDisputa(textoVisivelDisputa(filho));
+      if (ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.includes(rotulo))) continue;
+      const numero = lerNumero(filho);
+      if (numero) visiveis.add(numero);
+    }
+  }
+  const atributos = new Set();
+  for (const atributo of ["data-numero-item", "data-item-number", "data-item"]) {
+    const valor = cartao.getAttribute(atributo);
+    if (/^\d{1,6}$/.test(String(valor || ""))) {
+      if (Number(valor) === 0) return { numeroItem: "", atributos: [], ambiguo: true };
+      atributos.add(normalizeItemNumber(valor));
+    }
+  }
+  const numeroItem = visiveis.size === 1 ? [...visiveis][0] : "";
+  const ambiguo = visiveis.size > 1 || atributos.size > 1 || Boolean(numeroItem && atributos.size === 1 && !atributos.has(numeroItem));
+  // Um data-item na coluna de preços não substitui o número visível do cabeçalho.
+  return { numeroItem: ambiguo ? "" : numeroItem, atributos: [...atributos], ambiguo };
+}
+
+function rotulosControleDisputa(el) {
+  const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/)
+    .filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent).filter(Boolean);
+  return [textoVisivelDisputa(el), el.getAttribute("aria-label"), el.getAttribute("title"), el.value, ...referenciados]
+    .filter(Boolean).map(normalizarTextoDisputa);
+}
+
+function controleDisputaHabilitado(el) {
+  return isVisible(el) && !el.disabled && !el.hasAttribute("disabled") &&
+    el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("disabled") &&
+    !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
+    (el.ownerDocument.defaultView || window).getComputedStyle(el).pointerEvents !== "none";
+}
+
+function encontrarControlesEnviarLance({ incluirDesabilitados = false } = {}) {
   const seletores = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
   return [...document.querySelectorAll(seletores)].filter((el) => {
-    if (!isVisible(el) || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
-    const rotulos = [el.innerText, el.textContent, el.getAttribute("aria-label"), el.getAttribute("title"), el.value]
-      .filter(Boolean)
-      .map((texto) => normalizeText(texto));
-    return rotulos.some((rotulo) => /^enviar\s+lance(?:\s|$)/.test(rotulo));
+    if (!isVisible(el) || el.closest(`#${PAINEL_ID}, [inert], [aria-hidden="true"], [hidden]`)) return false;
+    if (!incluirDesabilitados && !controleDisputaHabilitado(el)) return false;
+    return rotulosControleDisputa(el).some((rotulo) => /^enviar\s+lance(?:\s|$)/.test(rotulo));
   });
 }
 
-function cartaoDaAcaoDeLance(botao) {
-  const rotulos = [
-    "melhor valor (unitario)",
-    "meu valor (unitario)",
-    "novo lance (unitario)",
-    "intervalo minimo entre lances",
-  ];
+/** O formulário está numa coluna; o número e a fase pertencem à linha completa do item. */
+function cartaoDaAcaoDeLance(botao, controles, diagnostico = null) {
+  let escopoLance = null;
+  const numerosDeclarados = new Set();
   let atual = botao.parentElement;
-  for (let nivel = 0; atual && atual !== document.body && nivel < 14; nivel += 1, atual = atual.parentElement) {
+  for (let nivel = 0; atual && atual !== document.body && nivel < 18; nivel += 1, atual = atual.parentElement) {
     if (!isVisible(atual)) continue;
-    const texto = normalizeText(textoDaDisputa(atual));
-    if (rotulos.every((rotulo) => texto.includes(rotulo))) return atual;
+    const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
+    if (!ROTULOS_PRECO_DISPUTA.every((rotulo) => texto.includes(rotulo))) continue;
+    // Nunca sobe até a lista inteira e combina os valores/campos de itens diferentes.
+    const acoes = controles.filter((controle) => atual.contains(controle));
+    if (acoes.length !== 1 || acoes[0] !== botao || ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.split(rotulo).length !== 2)) {
+      if (diagnostico) diagnostico.ambiguos += 1;
+      return null;
+    }
+    if (!escopoLance) escopoLance = atual;
+    const identidade = identificarNumeroItemDisputa(atual, escopoLance);
+    for (const numero of identidade.atributos) numerosDeclarados.add(numero);
+    if (identidade.ambiguo || numerosDeclarados.size > 1 || (identidade.numeroItem && numerosDeclarados.size && !numerosDeclarados.has(identidade.numeroItem))) {
+      if (diagnostico) diagnostico.ambiguos += 1;
+      return null;
+    }
+    if (identidade.numeroItem) return { cartao: atual, escopoLance, botao };
+  }
+  if (diagnostico) {
+    if (escopoLance) diagnostico.semNumero += 1;
+    else diagnostico.semRotulos += 1;
   }
   return null;
 }
 
-function encontrarInputNovoLance(cartao) {
-  const entradas = [...cartao.querySelectorAll('input:not([type="hidden"]), textarea, [role="textbox"]')]
-    .filter((el) => isVisible(el) && isFillable(el));
-  const entradaNomeada = entradas.filter((el) =>
-    [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title")]
-      .filter(Boolean)
-      .some((texto) => /novo\s+lance/i.test(normalizeText(texto))),
-  );
-  if (entradaNomeada.length === 1) return entradaNomeada[0];
-  if (entradaNomeada.length > 1) return null;
+function encontrarInputNovoLance(escopo) {
+  const seletores = 'input:not([type="hidden"]), textarea, [role="textbox"]';
+  const campos = [...escopo.querySelectorAll(seletores)].filter(isVisible);
+  const compativel = (el) => {
+    const sinais = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title")].filter(Boolean).join(" ");
+    return isFillable(el) && !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
+      !/%|desconto|percent|quantidade|marca|modelo|senha|password|email|cpf|cnpj/i.test(normalizeText(sinais)) &&
+      !/%/.test(String(el.value ?? el.textContent ?? ""));
+  };
+  const nomeadas = campos.filter((el) => {
+    // O conteúdo digitado nunca é o nome do campo (nem é usado como preço do portal).
+    const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent);
+    return [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), ...referenciados].filter(Boolean).some((texto) => /novo\s*lance/i.test(normalizeText(texto)));
+  });
+  if (nomeadas.length === 1) return compativel(nomeadas[0]) ? nomeadas[0] : null;
+  if (nomeadas.length > 1) return null;
 
-  for (const label of cartao.querySelectorAll("label")) {
-    if (!/novo\s+lance/i.test(normalizeText(textoDaDisputa(label)))) continue;
+  const rotulos = [...escopo.querySelectorAll("*")].filter((label) =>
+    isVisible(label) && /^novo lance \(unitario\)\s*:?$/.test(normalizarTextoDisputa(textoVisivelDisputa(label))),
+  );
+  const associadas = new Set();
+  for (const label of rotulos) {
     const id = label.getAttribute("for");
     if (id) {
-      const entrada = cartao.ownerDocument.getElementById(id);
-      if (entrada && entradas.includes(entrada)) return entrada;
+      const entrada = label.ownerDocument.getElementById(id);
+      if (!campos.includes(entrada) || !compativel(entrada)) return null;
+      associadas.add(entrada);
+      continue;
     }
     let atual = label;
-    for (let nivel = 0; atual && nivel < 5; nivel += 1, atual = atual.parentElement) {
-      const encontradas = [...atual.querySelectorAll('input:not([type="hidden"]), textarea, [role="textbox"]')]
-        .filter((el) => entradas.includes(el));
-      if (encontradas.length === 1) return encontradas[0];
-      if (atual === cartao) break;
+    for (let nivel = 0; atual && nivel < 5 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
+      const encontradas = [...atual.querySelectorAll(seletores)].filter((el) => campos.includes(el));
+      if (encontradas.length > 1) return null;
+      if (encontradas.length === 1) {
+        if (!compativel(encontradas[0])) return null;
+        associadas.add(encontradas[0]);
+        break;
+      }
+      if (atual === escopo) break;
     }
   }
-  return entradas.length === 1 ? entradas[0] : null;
+  // Exige associação com o rótulo ou nome do campo; não escolhe um input genérico.
+  return associadas.size === 1 ? [...associadas][0] : null;
 }
 
-function lerCartaoDisputa(cartao) {
-  const texto = normalizeText(textoDaDisputa(cartao));
-  const valores = {
-    melhor: valorAposRotuloDisputa(texto, "melhor valor (unitario)", ["meu valor (unitario)", "novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]),
-    meu: valorAposRotuloDisputa(texto, "meu valor (unitario)", ["novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]),
-    intervalo: lerIntervaloMinimoDisputa(texto),
-  };
-  const botao = [...cartao.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]')]
-    .find((el) => {
-      if (!isVisible(el) || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
-      const rotulos = [el.innerText, el.textContent, el.getAttribute("aria-label"), el.getAttribute("title"), el.value]
-        .filter(Boolean)
-        .map((textoBotao) => normalizeText(textoBotao));
-      return rotulos.some((rotulo) => /^enviar\s+lance(?:\s|$)/.test(rotulo));
-    });
+function lerCartaoDisputa({ cartao, escopoLance, botao }) {
+  const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
+  const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
+  const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["intervalo minimo entre lances", "enviar lance"]);
+  const rotulosPreco = !/maior\s*desconto/.test(texto) && !/%|desconto|percentual/.test(novoLance);
+  const melhor = rotulosPreco ? valorAposRotuloDisputa(formulario, "melhor valor (unitario)", ["meu valor (unitario)", "novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]) : null;
+  const meu = rotulosPreco ? valorAposRotuloDisputa(formulario, "meu valor (unitario)", ["novo lance (unitario)", "intervalo minimo entre lances", "enviar lance"]) : null;
+  const criterioPreco = rotulosPreco && melhor !== null && meu !== null;
   return {
     cartao,
-    numeroItem: numeroItemDoCartaoDisputa(cartao),
+    escopoLance,
+    numeroItem: identificarNumeroItemDisputa(cartao, escopoLance).numeroItem,
     faseAberta: /fase de lances aberta/.test(texto),
-    melhor: valores.melhor,
-    meu: valores.meu,
-    intervalo: valores.intervalo,
-    input: encontrarInputNovoLance(cartao),
+    criterioPreco,
+    melhor,
+    meu,
+    intervalo: criterioPreco ? lerIntervaloMinimoDisputa(formulario) : null,
+    input: criterioPreco ? encontrarInputNovoLance(escopoLance) : null,
     botao,
+    enviarHabilitado: controleDisputaHabilitado(botao),
     texto,
   };
 }
 
-function encontrarCartoesDisputa() {
-  const cartoes = new Set();
-  for (const botao of encontrarControlesEnviarLance()) {
-    const cartao = cartaoDaAcaoDeLance(botao);
-    if (cartao) cartoes.add(cartao);
+function encontrarCartoesDisputa(diagnostico = null) {
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  const habilitados = controles.filter(controleDisputaHabilitado);
+  if (diagnostico) Object.assign(diagnostico, { controlesVisiveis: controles.length, controlesHabilitados: habilitados.length, semRotulos: 0, semNumero: 0, ambiguos: 0, itensDuplicados: [] });
+  const cartoes = [];
+  // O Enviar pode habilitar só depois do preenchimento. Aqui apenas associa; não clica.
+  for (const botao of controles) {
+    const contexto = cartaoDaAcaoDeLance(botao, controles, diagnostico);
+    if (contexto) cartoes.push(lerCartaoDisputa(contexto));
   }
-  return [...cartoes].map(lerCartaoDisputa).filter((cartao) => cartao.numeroItem);
+  const contagem = new Map();
+  for (const cartao of cartoes) contagem.set(cartao.numeroItem, (contagem.get(cartao.numeroItem) || 0) + 1);
+  const duplicados = [...contagem].filter(([, quantidade]) => quantidade > 1).map(([numero]) => numero);
+  if (diagnostico) diagnostico.itensDuplicados = duplicados;
+  return cartoes.filter((cartao) => cartao.numeroItem && !duplicados.includes(cartao.numeroItem));
+}
+
+function resumoLeituraCamposDisputa(diagnostico, cartoes) {
+  const abertos = cartoes.filter((c) => c.faseAberta).length;
+  const precos = cartoes.filter((c) => c.melhor !== null && c.meu !== null && c.intervalo?.unidades > 0).length;
+  const campos = cartoes.filter((c) => c.input && c.botao).length;
+  return `Leitura: ${diagnostico.controlesHabilitados} controles “Enviar lance”, ${cartoes.length} itens identificados, ${abertos} em fase aberta, ${precos} com preços/intervalo legíveis e ${campos} com campo de lance. Sem número: ${diagnostico.semNumero}; sem rótulos: ${diagnostico.semRotulos}; ambíguos: ${diagnostico.ambiguos + diagnostico.itensDuplicados.length}.`;
+}
+
+/** Diagnóstico serializável e sem escrita: não consulta API, não preenche nem clica. */
+function diagnosticarCamposDisputa() {
+  const diagnostico = { somenteLeitura: true };
+  const cartoes = encontrarCartoesDisputa(diagnostico);
+  diagnostico.itens = cartoes.slice(0, 30).map((cartao) => ({
+    numeroItem: cartao.numeroItem,
+    faseAberta: cartao.faseAberta,
+    criterioPreco: cartao.criterioPreco,
+    melhor: formatarValorDisputa(cartao.melhor),
+    meu: formatarValorDisputa(cartao.meu),
+    intervalo: cartao.intervalo ? formatarIntervaloDisputa(cartao.intervalo, calcularDecrementoDisputa(cartao.melhor, cartao.intervalo)) : "não identificado",
+    campoEncontrado: Boolean(cartao.input),
+    enviarHabilitado: cartao.enviarHabilitado,
+    tipoCampo: cartao.input?.type || cartao.input?.getAttribute("role") || null,
+  }));
+  // Registra tags/classes de textos de ação desconhecidos, nunca HTML completo ou campos ocultos.
+  const seletores = 'button, a, span, div, small, label, p, strong, [role="button"], input[type="button"], input[type="submit"]';
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  diagnostico.textosDeAcao = [...document.querySelectorAll(seletores)].filter((el) =>
+    isVisible(el) && !el.closest(`#${PAINEL_ID}`) && el.children.length <= 2 &&
+    rotulosControleDisputa(el).some((texto) => /^enviar lance$/.test(texto)),
+  ).slice(0, 6).map((el) => {
+    const ancestrais = [];
+    let atual = el.parentElement;
+    for (let nivel = 0; atual && atual !== document.body && nivel < 8; nivel += 1, atual = atual.parentElement) {
+      const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
+      const atributos = Object.fromEntries(["data-numero-item", "data-item-number", "data-item"].map((nome) => [nome, atual.getAttribute(nome)]).filter(([, valor]) => /^\d{1,6}$/.test(String(valor || ""))));
+      ancestrais.push({
+        tag: atual.tagName,
+        classes: String(atual.className || "").slice(0, 120),
+        numeroVisivel: identificarNumeroItemDisputa(atual, atual).numeroItem || null,
+        atributosNumericos: atributos,
+        rotulos: ROTULOS_PRECO_DISPUTA.filter((rotulo) => texto.includes(rotulo)),
+        camposVisiveis: [...atual.querySelectorAll('input:not([type="hidden"]), textarea, [role="textbox"]')].filter(isVisible).length,
+      });
+    }
+    return { tag: el.tagName, role: el.getAttribute("role"), classes: String(el.className || "").slice(0, 160), reconhecido: controles.includes(el), ancestrais };
+  });
+  return { ok: true, diagnostico, message: `${resumoLeituraCamposDisputa(diagnostico, cartoes)} Diagnóstico somente leitura; nenhum lance foi enviado.` };
 }
 
 function sugestaoDeLanceDisputa(cartao, itemLocal) {
@@ -4844,8 +5010,16 @@ async function verificarDisputaAutomatica() {
         return;
       }
 
-      const atual = lerCartaoDisputa(cartao.cartao);
+      // Relê e reassocia no DOM atual: o portal pode ter trocado a linha/controles ao digitar.
+      const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem && c.botao === cartao.botao);
       if (
+        !atual ||
+        !cartao.input.isConnected ||
+        !cartao.botao.isConnected ||
+        atual.cartao !== cartao.cartao ||
+        atual.escopoLance !== cartao.escopoLance ||
+        atual.input !== cartao.input ||
+        !atual.enviarHabilitado ||
         !atual.faseAberta ||
         atual.melhor !== cartao.melhor ||
         atual.meu !== cartao.meu ||
@@ -4858,7 +5032,9 @@ async function verificarDisputaAutomatica() {
           disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
           disparar(cartao.input, "change", view, {});
         }
-        mostrarStatusDisputa(`Os valores do item ${cartao.numeroItem} mudaram durante a preparação; lance não enviado.`, "warning");
+        // Não repete uma preparação bloqueada com os mesmos preços nem trava os demais itens.
+        disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
+        mostrarStatusDisputa(`Os campos, o estado de envio ou os valores do item ${cartao.numeroItem} não passaram na releitura; lance não enviado.`, "warning");
         return;
       }
       if (cartao.botao.disabled || cartao.botao.getAttribute("aria-disabled") === "true" || !isVisible(cartao.botao)) {
@@ -4941,10 +5117,11 @@ async function iniciarDisputaAutomatica(propostaId) {
   const comPiso = [...itensPorNumero.values()].filter((item) => parseValorUnidadesDisputa(item.valorMinimo) !== null).length;
   if (comPiso === 0) return { ok: false, error: "Nenhum item da proposta tem “Valor Mínimo” válido. Cadastre os pisos antes de iniciar a automação." };
 
-  const cartoes = encontrarCartoesDisputa();
-  const cartoesValidos = cartoes.filter((cartao) => cartao.faseAberta && cartao.melhor !== null && cartao.meu !== null && cartao.intervalo !== null);
+  const diagnostico = {};
+  const cartoes = encontrarCartoesDisputa(diagnostico);
+  const cartoesValidos = cartoes.filter((cartao) => cartao.faseAberta && cartao.criterioPreco && cartao.input && cartao.botao && cartao.melhor !== null && cartao.meu !== null && cartao.intervalo?.unidades > 0);
   if (cartoesValidos.length === 0) {
-    return { ok: false, error: "Não encontrei cartões de item com fase de lances aberta e valores legíveis. Expanda/aguarde a lista de itens e tente novamente." };
+    return { ok: false, error: `Não consegui associar com segurança os campos de lance aos itens. ${resumoLeituraCamposDisputa(diagnostico, cartoes)} Use “Diagnosticar campos (sem enviar)” para conferir a leitura. Nenhum lance foi enviado.` };
   }
 
   const resumo = resumoDisputaParaConfirmacao(cartoesValidos, itensPorNumero);

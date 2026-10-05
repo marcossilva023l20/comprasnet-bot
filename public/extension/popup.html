@@ -423,6 +423,12 @@
         </select>
       </div>
       <div class="text-xs" id="disputa-speed">O Modo Disputa usa as atualizações da página; a velocidade do Modo Proposta não é alterada.</div>
+      <button class="btn btn-outline btn-sm mt-2" id="disputa-diagnostico-btn" type="button">🔎 Diagnosticar campos (sem enviar)</button>
+      <div class="hidden mt-2" id="disputa-diagnostico-area">
+        <p class="text-xs mb-2">Somente leitura da tela: não consulta os pisos nem inicia a automação. O relatório não inclui HTML completo, campos ocultos ou dados da conta.</p>
+        <textarea id="disputa-diagnostico-texto" readonly rows="6" aria-label="Diagnóstico dos campos de lance" style="width:100%;font-family:monospace;font-size:10px;resize:vertical;"></textarea>
+        <button class="btn btn-outline btn-sm" id="disputa-copy-diagnostico-btn" type="button">📋 Copiar diagnóstico</button>
+      </div>
     </div>
 
     <div class="card" id="disputa-items-card" style="display:none;">

@@ -97,6 +97,8 @@ function bindEvents() {
   on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
   on("disputa-start-btn", "click", iniciarDisputaAutomaticaPopup);
   on("disputa-stop-btn", "click", pararDisputaAutomaticaPopup);
+  on("disputa-diagnostico-btn", "click", diagnosticarCamposDisputaPopup);
+  on("disputa-copy-diagnostico-btn", "click", copiarDiagnosticoDisputaPopup);
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -728,6 +730,49 @@ function setDisputaStatus(tipo, mensagem) {
   const classe = ["info", "warning", "success"].includes(tipo) ? tipo : "info";
   el.className = `alert alert-${classe}`;
   el.textContent = String(mensagem || "");
+}
+
+async function diagnosticarCamposDisputaPopup() {
+  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
+    setDisputaStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de diagnosticar.");
+    return;
+  }
+  const botao = document.getElementById("disputa-diagnostico-btn");
+  const area = document.getElementById("disputa-diagnostico-area");
+  const texto = document.getElementById("disputa-diagnostico-texto");
+  if (botao) botao.disabled = true;
+  area?.classList.add("hidden");
+  if (texto) texto.value = "";
+  setDisputaStatus("info", "Lendo os campos da tela, sem preencher nem enviar lances…");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_diagnosticar" });
+    if (!resultado?.ok || !resultado?.diagnostico) {
+      setDisputaStatus("warning", resultado?.error || "Não consegui ler o diagnóstico da página.");
+      return;
+    }
+    if (texto) texto.value = JSON.stringify({ versaoExtensao: VERSAO_INSTALADA, abaAlvo: currentTab.id, ...resultado.diagnostico }, null, 2);
+    area?.classList.remove("hidden");
+    setDisputaStatus("info", resultado.message || "Diagnóstico somente leitura concluído. Use Copiar diagnóstico para compartilhar a leitura.");
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui diagnosticar. Recarregue a página (F5) depois de atualizar a extensão (${erro?.message || "erro"}).`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
+}
+
+async function copiarDiagnosticoDisputaPopup() {
+  const area = document.getElementById("disputa-diagnostico-texto");
+  if (!area?.value) return;
+  try {
+    await navigator.clipboard.writeText(area.value);
+    setDisputaStatus("success", "Diagnóstico copiado. Pode colá-lo no suporte; copiar não inicia nem envia lances.");
+  } catch (_) {
+    area.focus();
+    area.select();
+    let copiado = false;
+    try { copiado = typeof document.execCommand === "function" && document.execCommand("copy"); } catch (_) { /* usa Ctrl+C manualmente */ }
+    setDisputaStatus(copiado ? "success" : "warning", copiado ? "Diagnóstico copiado." : "Selecione o texto do diagnóstico e use Ctrl+C para copiar manualmente.");
+  }
 }
 
 async function iniciarDisputaAutomaticaPopup() {
