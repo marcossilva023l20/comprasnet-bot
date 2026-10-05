@@ -22,7 +22,7 @@ export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
     versao: "1.8.1",
     itens: [
       "Ao atingir o Valor Mínimo cadastrado, encerra definitivamente os lances automáticos daquele item; se o próximo lance cruzaria o piso, o item também é protegido",
-      "Lê intervalo mínimo em reais ou percentual do melhor valor atual, mostra a conversão na confirmação e aplica o piso antes de enviar",
+      "Para lances unitários em reais, lê intervalo mínimo em R$ ou % do melhor preço, mostra a conversão na confirmação e aplica o piso antes de enviar",
     ],
   },
   {

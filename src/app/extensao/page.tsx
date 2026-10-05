@@ -136,7 +136,7 @@ export default function ExtensaoPage() {
             <li>✅ O bot só preenche campos que conseguiu associar com segurança a um item</li>
             <li>✅ Use <strong>delay &quot;Lento&quot;</strong> se o site estiver demorando para responder</li>
             <li>✅ O bot só preenche itens que <strong>tenham Valor Unitário e Marca</strong> cadastrados no sistema</li>
-            <li>⚔️ <strong>Modo Disputa</strong> aceita intervalo em reais ou percentual, lê o Valor Mínimo cadastrado e encerra os lances de cada item ao atingir esse piso</li>
+            <li>⚔️ <strong>Modo Disputa</strong> para lances unitários em reais: aceita intervalo em R$ ou %, lê o Valor Mínimo cadastrado e encerra os lances de cada item no piso. A validação numa disputa real ainda está pendente.</li>
             <li>⚠️ Se aparecer CAPTCHA, resolva manualmente e continue</li>
             <li>⚠️ Se a extensão avisar que não encontrou &quot;Salvar&quot;, confira manualmente se o item foi gravado</li>
             <li>🔄 <strong>Manter atualizada</strong>: aba ⚙️ → &quot;🔄 Verificar&quot; → &quot;⚡ Atualizar&quot; (a pasta da extensão é pedida só na primeira vez)</li>

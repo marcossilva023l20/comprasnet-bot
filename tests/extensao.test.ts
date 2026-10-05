@@ -147,3 +147,21 @@ test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
     assert.ok(real.equals(noPacote), `conteúdo de ${arquivo.caminho} difere do publicado`);
   }
 });
+
+
+test("a instalação 1.7.19 recebe a atualização com a mesma versão do pacote", () => {
+  const estado = montarEstadoAtualizacao("1.7.19");
+  assert.ok(estado.precisaAtualizar);
+  assert.ok(!estado.adiantada);
+  assert.equal(estado.versao, manifest.version);
+  assert.equal(estado.zip.nome, `comprasnet-bot-extensao-${manifest.version}.zip`);
+  assert.ok(estado.novidades.some((novidade) => novidade.versao === manifest.version));
+});
+
+test("o popup carrega seu script somente uma vez", () => {
+  const html = readFileSync(path.join(raiz, "public", "extension", "popup.html"), "utf8");
+  const scripts = [...html.matchAll(/<script\b[^>]*\bsrc=["']popup\.js["'][^>]*>/gi)];
+  assert.equal(scripts.length, 1, "o script duplicado impede a inicialização correta do popup");
+  assert.equal((html.match(/<\/body\s*>/gi) || []).length, 1);
+  assert.equal((html.match(/<\/html\s*>/gi) || []).length, 1);
+});
