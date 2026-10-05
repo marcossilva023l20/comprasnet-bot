@@ -3080,7 +3080,10 @@ function readRadarIdentificacao() {
   ).replace(/\s+/g, "");
   const tituloObjeto = raiz.querySelector("header h1, header h2, header h3")?.textContent?.trim() || "";
   const objetoRotulado = firstMatch(texto, /objeto\s*:?\s*(.{10,300}?)(?=\s+(?:cnpj|unidade|uasg|processo|sistema de origem)\b|$)/i);
-  const uasg = firstMatch(texto, /uasg\s*:?\s*(\d{5,6})/i);
+  const uasg =
+    firstMatch(texto, /n[ºo°.]?\s*uasg(?:\s*\([^)]*\))?\s*:?\s*(\d{5,6})/i) ||
+    firstMatch(texto, /uasg\s*:?\s*(\d{5,6})/i) ||
+    firstMatch(texto, /uasg\b[^0-9]{0,80}(\d{5,6})/i);
   const dataLimite = firstMatch(
     texto,
     /(?:encerramento\s+das\s+propostas|encerra\s+propostas|data\s+limite)[^0-9]{0,60}(\d{2}\/\d{2}\/\d{4}(?:\s*\d{1,2}:\d{2})?)/i,

@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.17";
+export const VERSAO_EXTENSAO = "1.7.18";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.18",
+    itens: [
+      "Lê UASG sob o rótulo Nº UASG (Unidade Compradora) no modal real do Radar PNCP",
+      "Prioriza o Nº da compra/ano visível (ex.: 80/2026) para identificar o destino da importação",
+    ],
+  },
   {
     versao: "1.7.17",
     itens: [

@@ -194,7 +194,50 @@ export async function rodarFontes() {
     window.close();
   }
 
-  console.log("\n── 5) Radar PNCP: orienta abrir “Ver detalhes” se os itens ainda não apareceram ──");
+  console.log("\n── 5) Radar PNCP: lê compra e UASG nos rótulos reais do modal ──");
+  {
+    const html = `<!doctype html><html><body>
+      <article class="resultado"><p>UASG 111111</p><p>Nº / ano</p><p>99/2099</p></article>
+      <div class="fixed inset-0 z-50">
+        <div class="relative">
+          <header>
+            <h2>Aquisição de material de refrigeração</h2>
+            <p>00394429000100-1-002494/2026</p>
+          </header>
+          <section class="identificacao">
+            <div><p>Nº DA COMPRA / ANO</p><p>80 / 2026</p></div>
+            <div><p>PROCESSO</p><p>67293.007268/2026-42</p></div>
+            <div><p>Nº UASG (UNIDADE COMPRADORA)</p><p>120641</p></div>
+          </section>
+          <section>
+            <h4>ITENS DA CONTRATAÇÃO <span>41</span></h4>
+            <table>
+              <thead><tr><th>#</th><th>DESCRIÇÃO</th><th>QTD.</th><th>UNID.</th><th>VL. UNITÁRIO</th><th>VL. TOTAL</th></tr></thead>
+              <tbody>
+                <tr><td>1</td><td>Tubo Cobre, Tipo: Flexível Sem Costura, Aplicação: Refrigeração, Diâmetro Nominal: 1/4 POL.</td><td>300</td><td>Metro</td><td>R$ 22,79</td><td>R$ 6.837,00</td></tr>
+                <tr><td>2</td><td>Tubo Cobre, Tipo: Redondo, Aplicação: Refrigeração, Diâmetro Externo: 3/8 POL.</td><td>300</td><td>Metro</td><td>R$ 39,00</td><td>R$ 11.700,00</td></tr>
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </div>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url: "https://marcossilva023l20.github.io/radar-licitacoes-v2/",
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: false, delay: 0 });
+    checar(resultado.ok, `leitura do modal concluiu (${resultado.error || "sem erro"})`);
+    checar(resultado.itens?.length === 2, `leu os itens visíveis (${resultado.itens?.length})`);
+    checar(resultado.identificacao?.numeroCompra === "80/2026", `nº da compra/ano lido, não o código PNCP (${resultado.identificacao?.numeroCompra})`);
+    checar(resultado.identificacao?.uasg === "120641", `UASG lida apesar do rótulo entre parênteses (${resultado.identificacao?.uasg})`);
+    checar(resultado.identificacao?.objeto === "Aquisição de material de refrigeração", `objeto lido do cabeçalho (${resultado.identificacao?.objeto})`);
+    checar(resultado.itens?.[0]?.descricao?.startsWith("Tubo Cobre"), `descrição da tabela capturada (${resultado.itens?.[0]?.descricao})`);
+    checar(resultado.itens?.[0]?.valorEstimado === "R$ 22,79", `valor unitário capturado (${resultado.itens?.[0]?.valorEstimado})`);
+    window.close();
+  }
+
+  console.log("\n── 6) Radar PNCP: orienta abrir “Ver detalhes” se os itens ainda não apareceram ──");
   {
     const { window, enviar } = montarPagina("<!doctype html><html><body><button>Ver detalhes</button></body></html>", {
       url: "https://marcossilva023l20.github.io/radar-licitacoes-v2/",
