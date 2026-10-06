@@ -41,7 +41,7 @@ export default function VersoesExtensao() {
           <label htmlFor="download-versao" className="block text-sm font-bold text-slate-700">Versão desejada</label>
           <select id="download-versao" className="w-full rounded-lg border border-slate-300 bg-white p-3 text-slate-800" value={selecionada} onChange={(e) => setSelecionada(e.target.value)} disabled={!catalogo}>
             {!catalogo && <option value="">Carregando versões…</option>}
-            {catalogo?.versoes.map((v) => <option key={v.versao} value={v.versao}>{v.versao}{v.versao === catalogo.recomendada ? " — recomendada (base 1.7.19)" : ""}{v.experimental ? " — EXPERIMENTAL" : ""}</option>)}
+            {catalogo?.versoes.map((v) => <option key={v.versao} value={v.versao}>{v.versao}{v.versao === catalogo.recomendada ? " — recomendada/estável" : ""}{v.experimental ? " — EXPERIMENTAL" : ""}</option>)}
           </select>
           <p className="text-sm text-slate-600" aria-live="polite">{versao?.descricao}</p>
           {versao?.experimental && <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Versão experimental: pode enviar lances reais. A operação no portal não foi validada. Não instale sem compreender os riscos.</p>}

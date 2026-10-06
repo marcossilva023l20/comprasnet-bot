@@ -250,9 +250,9 @@
       <div class="text-xs" style="line-height:1.8;">
         O app é atualizado automaticamente; a extensão avisa quando existe versão nova
         (no ícone 🤖 e na aba ⚙️). Para atualizar:<br>
-        <strong>1.</strong> Aba ⚙️ → <strong>🔄 Verificar</strong> (mostra a versão publicada e o que mudou)<br>
-        <strong>2.</strong> <strong>⚡ Atualizar</strong> → escolha a pasta da extensão na primeira vez<br>
-        <strong>3.</strong> Pronto: nas próximas vezes é só clicar em ⚡ Atualizar.
+        <strong>1.</strong> Aba ⚙️ → <strong>🔄 Verificar</strong> (mostra a versão estável recomendada)<br>
+        <strong>2.</strong> <strong>⚡ Atualizar</strong> → escolha a versão desejada; a 1.8.7 de Disputa é experimental<br>
+        <strong>3.</strong> A instalação pede confirmação; para lances reais, confira compra, UASG, pisos e a prévia.
       </div>
       <div class="alert alert-info mt-2" style="margin-bottom:0;">
         O Chrome não permite que uma extensão carregada "sem compactação" se atualize sozinha.
@@ -409,12 +409,12 @@
 
   </div><!-- /panel-bot -->
 
-  <!-- ══════════════════ TAB: MODO DISPUTA (estrutura inicial, sem envio de lances) ══════════════════ -->
+  <!-- ══════════════════ TAB: MODO DISPUTA ══════════════════ -->
   <div id="panel-disputa" class="hidden">
     <div class="card">
-      <div class="card-title">⚔️ Modo Disputa</div>
+      <div class="card-title">⚔️ Modo Disputa · Compras.gov.br</div>
       <div class="alert alert-warning" id="disputa-availability" role="status" aria-live="polite">
-        Estrutura inicial: esta versão não monitora concorrentes nem envia lances. Nenhum lance automático será feito até a integração ser finalizada com os dados de uma disputa ativa.
+        ⚠️ Pode enviar lances reais. Só age se identificar polegar para baixo vermelho (perdendo); polegar para cima verde (vencendo) ou estado incerto não recebe lance. Calcula melhor valor − intervalo, confere o Valor Mínimo atualizado antes de cada clique e pausa o item no piso até você alterar o mínimo. Validação ao vivo no portal ainda pendente.
       </div>
       <div class="field">
         <label for="disputa-proposta-select">Proposta / licitação</label>
@@ -422,25 +422,33 @@
           <option value="">-- Selecione a proposta --</option>
         </select>
       </div>
-      <div class="text-xs" id="disputa-speed">Velocidade compartilhada com o Modo Proposta: —</div>
+      <div class="text-xs" id="disputa-speed">O Modo Disputa usa as atualizações da página; a velocidade do Modo Proposta não é alterada.</div>
+      <button class="btn btn-outline btn-sm mt-2" id="disputa-refresh-btn" type="button">🔄 Atualizar Valor Mínimo</button>
+      <button class="btn btn-outline btn-sm mt-2" id="disputa-diagnostico-btn" type="button">🔎 Diagnosticar campos (sem enviar)</button>
+      <div class="hidden mt-2" id="disputa-diagnostico-area">
+        <p class="text-xs mb-2">Somente leitura da tela: não consulta os pisos nem inicia a automação. O relatório não inclui HTML completo, campos ocultos ou dados da conta.</p>
+        <textarea id="disputa-diagnostico-texto" readonly rows="6" aria-label="Diagnóstico dos campos de lance" style="width:100%;font-family:monospace;font-size:10px;resize:vertical;"></textarea>
+        <button class="btn btn-outline btn-sm" id="disputa-copy-diagnostico-btn" type="button">📋 Copiar diagnóstico</button>
+      </div>
     </div>
 
     <div class="card" id="disputa-items-card" style="display:none;">
       <div class="card-title">📦 Itens e valores cadastrados</div>
-      <div class="text-xs mb-2">O Valor Mínimo vem da planilha/sistema e será a referência da futura lógica. Revise os valores antes da disputa.</div>
+      <div class="text-xs mb-2">O Valor Mínimo vem da proposta do Modo Proposta. Sem piso configurado não há lance. Para liberar um item parado no piso, altere seu Valor Mínimo no sistema. Só polegar para baixo vermelho autoriza preparar um lance.</div>
       <div class="items-list" id="disputa-items-list"></div>
     </div>
 
     <div class="card">
       <div class="card-title">🪟 Acompanhamento flutuante</div>
-      <p class="text-xs mb-2">A janela usa a mesma velocidade configurada no Modo Proposta. Os controles visuais estão prontos; monitoramento e lances continuam desativados nesta etapa.</p>
+      <p class="text-xs mb-2">A confirmação autoriza lances reais. Cada item só recebe lance com polegar para baixo vermelho; polegar verde, cor incoerente ou ícone não reconhecido não envia. A extensão confere o piso atual na proposta antes de cada clique. Depois de mudar um Valor Mínimo no sistema, os itens pausados são reavaliados.</p>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-outline btn-sm" id="disputa-pin-btn" type="button" style="flex:1;">📌 Painel na página</button>
         <button class="btn btn-outline btn-sm" id="disputa-float-btn" type="button" style="flex:1;">🗗 Janela flutuante</button>
       </div>
-      <button class="btn btn-success mt-2" id="disputa-start-btn" type="button" disabled title="Será habilitado quando a integração com a disputa estiver finalizada.">
-        ⏳ Monitoramento aguardando integração
-      </button>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn btn-success" id="disputa-start-btn" type="button">▶ Iniciar envio automático</button>
+        <button class="btn btn-danger" id="disputa-stop-btn" type="button" disabled>⏹ Parar</button>
+      </div>
     </div>
   </div>
 
@@ -543,7 +551,7 @@
         • <strong>Quantidade</strong> — qtd solicitada<br>
         • <strong>Unidade</strong> — ex: Unidade, Rolo<br>
         • <strong>Valor Unitário (R$)</strong> — seu preço para a proposta<br>
-        • <strong>Valor Mínimo (R$)</strong> — referência para o futuro Modo Disputa<br>
+        • <strong>Valor Mínimo (R$)</strong> — piso rígido; sem piso cadastrado o Modo Disputa não envia o item<br>
         • <strong>Marca/Fabricante</strong> — ex: LORENZETTI<br>
         • <strong>Modelo/Versão</strong> — ex: ADVANCED<br>
         • <strong>Descrição Detalhada / Valor Estimado</strong> — vêm do ComprasNet, CNET Mobile ou Radar PNCP (📥 Ler itens da página)

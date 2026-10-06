@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-// A versão solicitada pelo usuário: arquivos originais do commit acd497f.
+// Arquivos originais da versão histórica 1.7.19 (commit do rollback solicitado).
 const originais = {
   "atualizar.html": "37a0ffe4962caf32e5fd83ae041441d9101901d0c543d57797d81e976dff007c",
   "atualizar.js": "f4f2df79c0a484e89870c3e406ca896f44325d65cdecf8c6174192d03231a6df",
@@ -17,13 +18,18 @@ const originais = {
   "popup.js": "8c97c85b2dbbf4dc7aa39636beba9085206f5edc8d84780b23f3263eb7cd9e5f"
 };
 
-test("a base de propostas continua a 1.7.19; só o atualizador e manifesto evoluem", () => {
-  const pasta = new URL("../public/extension/", import.meta.url);
-  assert.deepEqual(readdirSync(pasta).sort(), Object.keys(originais).sort());
-  for (const [nome, hash] of Object.entries(originais)) {
-    if (["atualizar.html", "atualizar.js", "manifest.json"].includes(nome)) continue;
-    assert.equal(createHash("sha256").update(readFileSync(new URL(nome, pasta))).digest("hex"), hash, nome);
+test("o pacote padrão 1.7.20 e os URLs legados permanecem estáveis", () => {
+  const pacote = JSON.parse(readFileSync(new URL("../public/extension-files.json", import.meta.url), "utf8"));
+  const manifesto = JSON.parse(pacote.arquivos.find((a) => a.caminho === "manifest.json").texto);
+  const ref = "cf1c579807b70144e4234e15ea80fef999f0b75d";
+  assert.equal(pacote.versao, "1.7.20");
+  assert.equal(manifesto.version, "1.7.20");
+  for (const nome of ["background.js", "content.js", "popup.html", "popup.js", "icon128.png", "icon16.png", "icon48.png"]) {
+    const arquivo = pacote.arquivos.find((a) => a.caminho === nome);
+    const bytes = arquivo.texto !== undefined ? Buffer.from(arquivo.texto) : Buffer.from(arquivo.base64, "base64");
+    assert.deepEqual(bytes, execFileSync("git", ["show", `${ref}:public/extension/${nome}`]), nome);
   }
+  assert.deepEqual(readFileSync(new URL("../public/extension.zip", import.meta.url)), readFileSync(new URL("../public/extension-releases/1.7.20/extension.zip", import.meta.url)));
 });
 
 test("o pacote histórico 1.7.19 permanece idêntico aos dez arquivos restaurados", () => {

@@ -63,10 +63,6 @@ async function gerar(fontes, informacao, atual = false) {
   mkdirSync(destino, { recursive: true });
   await writeFile(path.join(destino, "extension-files.json"), dados);
   await writeFile(path.join(destino, "extension.zip"), compactado);
-  if (atual) {
-    await writeFile(path.join(root, "public", "extension-files.json"), dados);
-    await writeFile(path.join(root, "public", "extension.zip"), compactado);
-  }
   return {
     ...informacao,
     atual,
@@ -79,10 +75,13 @@ async function gerar(fontes, informacao, atual = false) {
 }
 
 const manifest = JSON.parse(fontesAtuais.get("manifest.json").toString("utf8"));
+const politica = JSON.parse(await readFile(path.join(root, "config", "extension-policy.json"), "utf8"));
+if (!/^\d{1,4}(?:\.\d{1,4}){1,3}$/.test(politica.recomendada) || typeof politica.experimentalAtual !== "boolean" || typeof politica.descricaoAtual !== "string") throw new Error("Política de publicação de versões inválida.");
 const versoes = [await gerar(fontesAtuais, {
   versao: manifest.version,
-  descricao: "Base 1.7.19 com seletor de versões. O Modo Disputa continua sem envio automático.",
-  experimental: false,
+  ref: "",
+  descricao: politica.descricaoAtual,
+  experimental: politica.experimentalAtual,
 }, true)];
 const vistos = new Set([manifest.version]);
 for (const entrada of historicos) {
@@ -90,5 +89,10 @@ for (const entrada of historicos) {
   vistos.add(entrada.versao);
   versoes.push(await gerar(await fontesHistoricas(entrada.ref), entrada));
 }
-await writeFile(path.join(root, "public", "extension-versions.json"), JSON.stringify({ recomendada: manifest.version, versoes }));
-console.log(`[build:extension] Versão atual ${manifest.version}: ${files.length} arquivos; catálogo com ${versoes.length} versões completas e hashes SHA-256.`);
+const recomendada = versoes.find((v) => v.versao === politica.recomendada);
+if (!recomendada || recomendada.experimental) throw new Error(`Versão recomendada ${politica.recomendada} ausente ou marcada como experimental.`);
+const pastaRecomendada = path.join(root, "public", "extension-releases", politica.recomendada);
+await writeFile(path.join(root, "public", "extension-files.json"), await readFile(path.join(pastaRecomendada, "extension-files.json")));
+await writeFile(path.join(root, "public", "extension.zip"), await readFile(path.join(pastaRecomendada, "extension.zip")));
+await writeFile(path.join(root, "public", "extension-versions.json"), JSON.stringify({ recomendada: politica.recomendada, versoes }));
+console.log(`[build:extension] Recomendadas ${politica.recomendada}; pacote de fontes ${manifest.version} (${politica.experimentalAtual ? "experimental" : "estável"}); catálogo com ${versoes.length} versões completas e hashes SHA-256.`);

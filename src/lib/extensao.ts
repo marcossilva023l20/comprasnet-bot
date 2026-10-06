@@ -1,12 +1,13 @@
 /**
  * Versão publicada da extensão e histórico de novidades.
  *
- * A versão "de verdade" fica em `public/extension/manifest.json` (é ela que vai
- * no ZIP); a constante abaixo é o que o app informa à extensão. Um teste
- * (`tests/extensao.test.ts`) garante que as duas nunca divirjam.
+ * Esta constante é a versão estável recomendada e servida nos URLs legados do
+ * app. O manifesto-fonte pode ser uma versão experimental explicitamente
+ * listada em `config/extension-policy.json`; pacotes versionados ficam no
+ * catálogo e o teste confere ambos os destinos.
  *
- * Ao publicar uma nova versão da extensão: suba `VERSAO_EXTENSAO`, o
- * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
+ * Ao mudar a recomendada estável: suba `VERSAO_EXTENSAO`, `policy.recomendada`
+ * e o histórico. Versões experimentais são classificadas em `policy.experimentalAtual`.
  */
 
 export const VERSAO_EXTENSAO = "1.7.20";

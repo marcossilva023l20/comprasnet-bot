@@ -6,6 +6,12 @@
     "experimental": false
   },
   {
+    "versao": "1.7.20",
+    "ref": "cf1c579807b70144e4234e15ea80fef999f0b75d",
+    "descricao": "Base estável com seletor de versões e correção da leitura do contador do Radar. Modo Disputa sem envio automático.",
+    "experimental": false
+  },
+  {
     "versao": "1.7.7",
     "ref": "b55ce193e9a2cfe643c66d26726f269fb47c34bf",
     "descricao": "Histórica: preenchimento de propostas com quatro casas decimais. Não inclui as correções posteriores do Radar.",

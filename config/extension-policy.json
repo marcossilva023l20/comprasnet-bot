@@ -1,0 +1,5 @@
+{
+  "recomendada": "1.7.20",
+  "descricaoAtual": "Experimental 1.8.7: Disputa só envia quando confirma polegar para baixo vermelho; polegar verde/incerto não envia. Relê o Valor Mínimo antes de clicar e suspende o item no piso até alterar o limite. Envio em disputa real ainda não validado.",
+  "experimentalAtual": true
+}

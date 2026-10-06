@@ -1,3 +1,4 @@
+import AdmZip from "adm-zip";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -13,9 +14,10 @@ import {
 } from "../src/lib/extensao";
 
 const raiz = path.join(__dirname, "..");
-const manifest = JSON.parse(
-  readFileSync(path.join(raiz, "public", "extension", "manifest.json"), "utf8"),
-) as { version: string; name: string };
+const pacoteRecomendado = JSON.parse(
+  readFileSync(path.join(raiz, "public", "extension-files.json"), "utf8"),
+) as { versao: string; nome: string; arquivos: { caminho: string; texto?: string }[] };
+const manifest = JSON.parse(pacoteRecomendado.arquivos.find((a) => a.caminho === "manifest.json")?.texto || "{}") as { version: string; name: string };
 
 test("a versão do app bate com a do manifest da extensão", () => {
   assert.equal(VERSAO_EXTENSAO, manifest.version);
@@ -132,19 +134,20 @@ test("o pacote de arquivos é gerado a partir do manifest e cobre todos os arqui
 });
 
 test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
-  // `pretest` roda scripts/build-extension.mjs, então este arquivo existe sempre
-  // que a suíte roda — e aqui garantimos que ele não ficou desatualizado.
+  // O pacote padrão é a recomendada estável; o content script da fonte pode
+  // ser uma versão experimental distinta, escolhível somente no catálogo.
   const pacote = JSON.parse(
     readFileSync(path.join(raiz, "public", "extension-files.json"), "utf8"),
-  ) as { arquivos: { caminho: string; texto?: string; base64?: string }[] };
-
-  const publicados = readdirSync(path.join(raiz, "public", "extension")).sort();
-  assert.deepEqual(pacote.arquivos.map((a) => a.caminho).sort(), publicados);
-
+  ) as { versao: string; arquivos: { caminho: string; texto?: string; base64?: string }[] };
+  assert.equal(pacote.versao, VERSAO_EXTENSAO);
+  const pastaPacote = path.join(raiz, "public", "extension-releases", pacote.versao);
+  const fontes = readdirSync(path.join(raiz, "public", "extension")).sort();
+  assert.deepEqual(pacote.arquivos.map((a) => a.caminho).sort(), fontes);
+  const zip = new AdmZip(readFileSync(path.join(pastaPacote, "extension.zip")));
   for (const arquivo of pacote.arquivos) {
-    const real = readFileSync(path.join(raiz, "public", "extension", arquivo.caminho));
     const noPacote = arquivo.texto !== undefined ? Buffer.from(arquivo.texto, "utf8") : Buffer.from(arquivo.base64 as string, "base64");
-    assert.ok(real.equals(noPacote), `conteúdo de ${arquivo.caminho} difere do publicado`);
+    const noZip = zip.readFile(`comprasnet-bot/${arquivo.caminho}`);
+    assert.ok(noZip?.equals(noPacote), `conteúdo de ${arquivo.caminho} difere do pacote ZIP recomendado`);
   }
 });
 

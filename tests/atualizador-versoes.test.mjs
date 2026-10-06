@@ -166,3 +166,12 @@ test("manifesto divergente da versão selecionada é rejeitado mesmo com um hash
   assert.match(env.window.document.getElementById("status").textContent, /Manifesto/);
   assert.deepEqual(env.gravados, []);
 });
+
+test("se a extensão já estiver na versão experimental, o atualizador a mantém selecionada e não inicia downgrade", async (t) => {
+  const env = montar({ instalada: "1.8.7" }); t.after(() => env.window.close()); await inicializar(env);
+  assert.equal(env.window.document.getElementById("versao-selecionada").value, "1.8.7");
+  assert.equal(env.window.document.getElementById("btn-atualizar").disabled, true);
+  assert.match(env.window.document.getElementById("versao-alerta").textContent, /EXPERIMENTAL/);
+  assert.deepEqual(env.gravados, []);
+  assert.deepEqual(env.reloads, []);
+});

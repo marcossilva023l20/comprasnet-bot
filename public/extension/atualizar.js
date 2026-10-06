@@ -118,10 +118,13 @@ async function carregarCatalogo() {
     el.seletor.replaceChildren();
     for (const v of catalogo.versoes) {
       const option = document.createElement("option"); option.value = v.versao;
-      option.textContent = `${v.versao}${v.versao === catalogo.recomendada ? " — recomendada (base 1.7.19)" : ""}${v.experimental ? " — EXPERIMENTAL" : ""}`;
+      option.textContent = `${v.versao}${v.versao === catalogo.recomendada ? " — recomendada/estável" : ""}${v.experimental ? " — EXPERIMENTAL" : ""}`;
       el.seletor.append(option);
     }
-    el.seletor.value = catalogo.recomendada;
+    // Ao voltar ao atualizador, mantenha a versão instalada selecionada para
+    // não apresentar um downgrade como ação padrão. Instalações antigas/ausentes
+    // recebem a versão estável recomendada.
+    el.seletor.value = catalogo.versoes.some((v) => v.versao === instalada) ? instalada : catalogo.recomendada;
     await selecionarVersao();
   } catch (e) {
     catalogo = null; carregando = false;

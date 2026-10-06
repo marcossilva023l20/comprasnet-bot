@@ -8,6 +8,7 @@ let allItems = [];
 let selectedIds = new Set();
 let running = false;
 let currentTab = null;
+let disputaSituacoes = new Map();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
@@ -19,6 +20,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
   if (new URLSearchParams(location.search).get("modo") === "disputa") showTab("disputa");
   await getCurrentTab();
+  await sincronizarEstadoDisputaPopup();
   checkPage();
   loadPropostas();
   iniciarAtualizacoes();
@@ -33,6 +35,15 @@ document.addEventListener("DOMContentLoaded", async () => {
  * Funciona mesmo com a janela do popup fechada — o painel na página continua.
  */
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.action === "disputa_progress") {
+    atualizarBloqueioDisputaPopup(Boolean(msg.ativo), msg.propostaId);
+    if (Array.isArray(msg.situacoes)) {
+      disputaSituacoes = new Map(msg.situacoes.map((s) => [String(s.numeroItem), s]));
+      renderDisputaItems();
+    }
+    setDisputaStatus(msg.tipo || "info", msg.status || "Monitoramento atualizado.");
+    return;
+  }
   if (msg?.action !== "progresso") return;
   if (msg.status === "preenchendo") {
     setProgress((msg.indice || 1) - 1, msg.total || 1);
@@ -43,6 +54,34 @@ chrome.runtime.onMessage.addListener((msg) => {
     addLog("info", `🏁 Fim: ${msg.filled}/${msg.total} preenchidos · ${msg.confirmados} confirmados.`);
   }
 });
+
+function atualizarBloqueioDisputaPopup(ativo, propostaId = "") {
+  const select = document.getElementById("disputa-proposta-select");
+  const principal = document.getElementById("proposta-select");
+  const iniciar = document.getElementById("disputa-start-btn");
+  const parar = document.getElementById("disputa-stop-btn");
+  if (ativo && propostaId) {
+    if (select) select.value = String(propostaId);
+    if (principal) principal.value = String(propostaId);
+  }
+  if (select) select.disabled = Boolean(ativo);
+  if (principal) principal.disabled = Boolean(ativo);
+  if (iniciar) {
+    iniciar.disabled = Boolean(ativo);
+    if (ativo) iniciar.textContent = "⚔️ Monitorando…";
+    else iniciar.textContent = "▶ Iniciar envio automático";
+  }
+  if (parar) parar.disabled = !ativo;
+}
+
+async function sincronizarEstadoDisputaPopup() {
+  try {
+    if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) { atualizarBloqueioDisputaPopup(false); return; }
+    const estado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_status" });
+    atualizarBloqueioDisputaPopup(Boolean(estado?.ativo), estado?.propostaId || "");
+    if (estado?.ativo) iniciarAtualizacaoMinimosDisputaPopup();
+  } catch (_) { atualizarBloqueioDisputaPopup(false); }
+}
 
 function bindEvents() {
   document.querySelectorAll('[data-action="tab"]').forEach((el) => {
@@ -91,6 +130,11 @@ function bindEvents() {
   on("float-btn", "click", () => abrirJanelaFlutuante("bot"));
   on("disputa-pin-btn", "click", fixarPainelDisputaNaPagina);
   on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
+  on("disputa-start-btn", "click", iniciarDisputaAutomaticaPopup);
+  on("disputa-refresh-btn", "click", () => atualizarMinimosDisputaPopup(true));
+  on("disputa-stop-btn", "click", pararDisputaAutomaticaPopup);
+  on("disputa-diagnostico-btn", "click", diagnosticarCamposDisputaPopup);
+  on("disputa-copy-diagnostico-btn", "click", copiarDiagnosticoDisputaPopup);
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -664,7 +708,7 @@ function syncDisputaPropostas() {
 
 function atualizarVelocidadeDisputa() {
   const label = document.getElementById("disputa-speed");
-  if (label) label.textContent = `Usa a mesma velocidade do Modo Proposta: ${formatarSegundos(delayDaTela())} entre itens.`;
+  if (label) label.textContent = "Modo Disputa acompanha as atualizações da página; não altera a velocidade do Modo Proposta.";
 }
 
 function renderDisputaItems() {
@@ -706,14 +750,197 @@ function renderDisputaItems() {
 
     const values = document.createElement("div");
     values.style.cssText = "font-size:9px;color:#475569;text-align:right;white-space:nowrap;";
-    const atual = item.valorUnitario ? `Atual ${formatValor(item.valorUnitario)}` : "Sem preço";
-    const minimo = item.valorMinimo ? `Mín. ${formatValor(item.valorMinimo)}` : "Mín. não informado";
-    values.textContent = `${atual} · ${minimo}`;
-    values.title = `Valor unitário: ${item.valorUnitario ? formatValor(item.valorUnitario) : "não informado"}; Valor Mínimo: ${item.valorMinimo ? formatValor(item.valorMinimo) : "não informado"}`;
+    const temAtual = item.valorUnitario !== null && item.valorUnitario !== undefined && item.valorUnitario !== "";
+    const temMinimo = item.valorMinimo !== null && item.valorMinimo !== undefined && item.valorMinimo !== "";
+    const atual = temAtual ? `Atual ${formatValor(item.valorUnitario)}` : "Sem preço";
+    const minimo = temMinimo ? `Mín. ${formatValor(item.valorMinimo)}` : "Mín. não informado";
+    const situacao = disputaSituacoes.get(String(item.numeroItem));
+    const indicador = situacao?.estado === "perdendo" ? " · 👎 perdendo (vermelho)"
+      : situacao?.estado === "vencendo" ? " · 👍 vencendo (verde)"
+        : situacao ? " · estado incerto — sem lance" : " · estado aguarda leitura da página";
+    values.textContent = `${atual} · ${minimo}${indicador}`;
+    if (situacao?.estado === "perdendo") values.style.color = "#dc2626";
+    else if (situacao?.estado === "vencendo") values.style.color = "#168821";
+    values.title = `Valor unitário: ${temAtual ? formatValor(item.valorUnitario) : "não informado"}; Valor Mínimo: ${temMinimo ? formatValor(item.valorMinimo) : "não informado"}; estado: ${situacao?.estado || "não lido"}`;
 
     row.append(num, desc, values);
     list.appendChild(row);
   });
+}
+
+function setDisputaStatus(tipo, mensagem) {
+  const el = document.getElementById("disputa-availability");
+  if (!el) return;
+  const classe = ["info", "warning", "success"].includes(tipo) ? tipo : "info";
+  el.className = `alert alert-${classe}`;
+  el.textContent = String(mensagem || "");
+}
+
+let disputaPollTimer = null;
+let disputaPollEmCurso = false;
+
+function pararAtualizacaoMinimosDisputaPopup() {
+  if (disputaPollTimer) clearInterval(disputaPollTimer);
+  disputaPollTimer = null;
+}
+
+function iniciarAtualizacaoMinimosDisputaPopup() {
+  pararAtualizacaoMinimosDisputaPopup();
+  atualizarMinimosDisputaPopup();
+  disputaPollTimer = setInterval(() => atualizarMinimosDisputaPopup(false), 10000);
+}
+
+async function atualizarMinimosDisputaPopup(manual = false) {
+  if (disputaPollEmCurso || !currentTab?.id || !isComprasNetPage(currentTab.url || "")) return;
+  disputaPollEmCurso = true;
+  const botao = document.getElementById("disputa-refresh-btn");
+  if (botao) botao.disabled = true;
+  try {
+    const estado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_status" });
+    if (!manual && !estado?.ativo) {
+      atualizarBloqueioDisputaPopup(false);
+      pararAtualizacaoMinimosDisputaPopup();
+      return;
+    }
+    const propostaId = document.getElementById("disputa-proposta-select")?.value;
+    if (!propostaId) return;
+    if (!apiUrl) throw new Error("Configure a URL do sistema na aba Config.");
+    if (estado?.ativo && estado.propostaId && estado.propostaId !== propostaId) {
+      setDisputaStatus("warning", "O monitoramento usa outra proposta. Pare-o antes de trocar ou atualizar os valores exibidos.");
+      return;
+    }
+    const url = `${apiUrl}/api/propostas/${encodeURIComponent(propostaId)}/itens?disputa_minimos=${Date.now()}`;
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const itens = await response.json();
+    if (document.getElementById("disputa-proposta-select")?.value !== propostaId) return;
+    allItems = Array.isArray(itens) ? itens : [];
+    const hora = new Date().toLocaleTimeString("pt-BR");
+    disputaSituacoes = new Map((estado.situacoes || []).map((s) => [String(s.numeroItem), s]));
+    renderDisputaItems();
+    const aviso = estado.ativo ? estado.pausado ? "Monitoramento pausado" : "Monitoramento ativo" : "Consulta manual";
+    const perdendo = [...disputaSituacoes.values()].filter((s) => s.estado === "perdendo").length;
+    const vencendo = [...disputaSituacoes.values()].filter((s) => s.estado === "vencendo").length;
+    const incertos = disputaSituacoes.size - perdendo - vencendo;
+    const stop = Array.isArray(estado.itensNoPiso) && estado.itensNoPiso.length ? ` Itens pausados no piso: ${estado.itensNoPiso.join(", ")}; altere o Valor Mínimo no sistema para reavaliá-los.` : "";
+    const prefixo = estado.ativo ? ` · Situação visível: ${perdendo} perdendo/vermelho, ${vencendo} vencendo/verde, ${Math.max(0, incertos)} incerto(s).` : "";
+    setDisputaStatus(estado.pausado ? "warning" : "info", `${aviso} · Valores Mínimos atualizados às ${hora}${prefixo}. Só polegar para baixo vermelho pode gerar lance; o content script confere compra e piso antes do clique.${stop}`);
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui atualizar os Valores Mínimos (${erro?.message || "erro"}). Nenhum lance é enviado sem validação atual no content script.`);
+  } finally {
+    disputaPollEmCurso = false;
+    if (botao) botao.disabled = false;
+  }
+}
+
+async function diagnosticarCamposDisputaPopup() {
+  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
+    setDisputaStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de diagnosticar.");
+    return;
+  }
+  const botao = document.getElementById("disputa-diagnostico-btn");
+  const area = document.getElementById("disputa-diagnostico-area");
+  const texto = document.getElementById("disputa-diagnostico-texto");
+  if (botao) botao.disabled = true;
+  area?.classList.add("hidden");
+  if (texto) texto.value = "";
+  setDisputaStatus("info", "Lendo os campos da tela, sem preencher nem enviar lances…");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_diagnosticar" });
+    if (!resultado?.ok || !resultado?.diagnostico) {
+      setDisputaStatus("warning", resultado?.error || "Não consegui ler o diagnóstico da página.");
+      return;
+    }
+    if (texto) texto.value = JSON.stringify({ versaoExtensao: VERSAO_INSTALADA, abaAlvo: currentTab.id, ...resultado.diagnostico }, null, 2);
+    area?.classList.remove("hidden");
+    setDisputaStatus("info", resultado.message || "Diagnóstico somente leitura concluído. Use Copiar diagnóstico para compartilhar a leitura.");
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui diagnosticar. Recarregue a página (F5) depois de atualizar a extensão (${erro?.message || "erro"}).`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
+}
+
+async function copiarDiagnosticoDisputaPopup() {
+  const area = document.getElementById("disputa-diagnostico-texto");
+  if (!area?.value) return;
+  try {
+    await navigator.clipboard.writeText(area.value);
+    setDisputaStatus("success", "Diagnóstico copiado. Pode colá-lo no suporte; copiar não inicia nem envia lances.");
+  } catch (_) {
+    area.focus();
+    area.select();
+    let copiado = false;
+    try { copiado = typeof document.execCommand === "function" && document.execCommand("copy"); } catch (_) { /* usa Ctrl+C manualmente */ }
+    setDisputaStatus(copiado ? "success" : "warning", copiado ? "Diagnóstico copiado." : "Selecione o texto do diagnóstico e use Ctrl+C para copiar manualmente.");
+  }
+}
+
+async function iniciarDisputaAutomaticaPopup() {
+  const propostaId = document.getElementById("disputa-proposta-select")?.value;
+  if (!propostaId) {
+    setDisputaStatus("warning", "Selecione a proposta correspondente à dispensa e à UASG desta página.");
+    return;
+  }
+  if (!currentTab?.id) {
+    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
+    return;
+  }
+  if (!isComprasNetPage(currentTab.url || "")) {
+    setDisputaStatus("warning", "Abra no navegador a tela “Enviar lance” do Compras.gov.br/ComprasNet antes de iniciar.");
+    return;
+  }
+
+  const botao = document.getElementById("disputa-start-btn");
+  let iniciou = false;
+  if (botao) {
+    botao.disabled = true;
+    botao.textContent = "⏳ Validando disputa…";
+  }
+  setDisputaStatus("info", "Validando número da dispensa, UASG, itens e Valores Mínimos. O portal pedirá confirmação antes de iniciar.");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_start", propostaId });
+    if (!resultado?.ok) {
+      setDisputaStatus(resultado?.canceled ? "info" : "warning", resultado?.error || "Não consegui iniciar o Modo Disputa.");
+      if (resultado?.error) addLog("warn", `Modo Disputa: ${resultado.error}`);
+      await sincronizarEstadoDisputaPopup();
+      return;
+    }
+    iniciou = true;
+    atualizarBloqueioDisputaPopup(true, resultado.propostaId || propostaId);
+    setDisputaStatus("success", resultado.message || "Monitoramento iniciado: só polegar vermelho para baixo envia; o piso será conferido antes de cada clique.");
+    addLog("success", `⚔️ ${resultado.message || "Modo Disputa iniciado."}`);
+    iniciarAtualizacaoMinimosDisputaPopup();
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui conversar com a página. Recarregue a tela “Enviar lance” e tente novamente (${erro?.message || "erro"}).`);
+  } finally {
+    if (botao && !iniciou) {
+      botao.disabled = false;
+      botao.textContent = "▶ Iniciar envio automático";
+    }
+  }
+}
+
+async function pararDisputaAutomaticaPopup() {
+  if (!currentTab?.id) {
+    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
+    return;
+  }
+  const botao = document.getElementById("disputa-stop-btn");
+  if (botao) botao.disabled = true;
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_stop" });
+    setDisputaStatus(resultado?.stopped ? "warning" : "info", resultado?.message || "Comando de parada enviado.");
+    if (resultado?.stopped) {
+      atualizarBloqueioDisputaPopup(false);
+      pararAtualizacaoMinimosDisputaPopup();
+      addLog("warn", "⏹ Monitoramento de disputa parado pelo usuário.");
+    }
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui parar pela extensão (${erro?.message || "erro"}). Use ⏹ Parar no painel da página.`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
 }
 
 async function fixarPainelDisputaNaPagina() {
@@ -723,7 +950,7 @@ async function fixarPainelDisputaNaPagina() {
   }
   try {
     await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "disputa" });
-    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Monitoramento e lances ainda estão desativados.");
+    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Inicie somente após conferir proposta, UASG e Valor Mínimo.");
   } catch (_) {
     addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
   }

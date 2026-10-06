@@ -2,13 +2,13 @@
 
 - O atualizador (`Config → Atualizar`) permite selecionar uma versão exata. A seleção apenas consulta o pacote: não grava arquivos nem inicia o bot.
 - A instalação exige confirmação, valida SHA-256, versão/nome do manifesto, arquivos e caminhos. Faz backup antes da escrita, grava o manifesto por último e restaura a cópia anterior se algo falhar.
-- A versão recomendada é a publicação atual. As versões 1.8.x arquivadas são experimentais, com avisos explícitos sobre lances reais não validados. Nunca são selecionadas automaticamente por terem número maior.
+- A versão recomendada de produção é configurada em `config/extension-policy.json`; durante a validação da Disputa continua em 1.7.20. A 1.8.7 em teste fica listada como experimental e nunca é selecionada automaticamente por ter número maior. Versões de Disputa exibem aviso sobre lances reais ainda não validados.
 - A página `/extensao` permite baixar o ZIP de qualquer versão disponível. Esse catálogo permanece acessível quando se instala uma versão antiga que não tem o seletor no próprio atualizador.
 - Pare toda automação antes de trocar. Depois confirme a versão, recarregue a extensão se necessário e dê F5 nas páginas do portal.
 
 ## Publicação e preservação de versões
 
-Os pacotes não são versionados no Git. `scripts/build-extension.mjs` gera `public/extension.zip`, `public/extension-files.json`, `public/extension-versions.json` e `public/extension-releases/` no prebuild/pretest.
+Os pacotes não são versionados no Git. `scripts/build-extension.mjs` gera os aliases estáveis `public/extension.zip` e `public/extension-files.json` a partir da recomendada, além de `public/extension-versions.json` e os pacotes completos em `public/extension-releases/`, no prebuild/pretest. O manifesto-fonte pode ser experimental; não altere a recomendada até a validação em ambiente real.
 
 `config/extension-releases.json` define as revisões históricas imutáveis. Ao publicar outra versão, adicione a publicação atual a esse arquivo com SHA completo, descrição e classificação correta. Não substitua o SHA de uma versão arquivada por código diferente.
 
