@@ -1,15 +1,45 @@
 /**
  * Versão publicada da extensão e histórico de novidades.
  *
- * A versão "de verdade" fica em `public/extension/manifest.json` (é ela que vai
- * no ZIP); a constante abaixo é o que o app informa à extensão. Um teste
- * (`tests/extensao.test.ts`) garante que as duas nunca divirjam.
+ * A versão recomendada vem de `config/extension-policy.json` e os arquivos
+ * servidos em `/extension.zip` e `/extension-files.json` são gerados pelo
+ * script `scripts/build-extension.mjs` a partir de `public/extension/`.
  *
- * Ao publicar uma nova versão da extensão: suba `VERSAO_EXTENSAO`, o
- * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
+ * Para publicar uma nova versão:
+ *   1. Atualize `public/extension/manifest.json` (version + description)
+ *   2. Atualize `config/extension-policy.json` e, se for estável, `recomendada`
+ *   3. Rode `npm run build` (ou `npm run dev`, que roda o prebuild)
+ *   4. Se for a recomendada estável, adicione-a no topo de NOVIDADES_EXTENSAO
  */
 
-export const VERSAO_EXTENSAO = "1.7.7";
+import politicaConfig from "../../config/extension-policy.json";
+
+import fs from "node:fs";
+import path from "node:path";
+
+function versaoAtualDoManifest(): string {
+  try {
+    const manifestPath = path.join(process.cwd(), "public", "extension", "manifest.json");
+    const raw = fs.readFileSync(manifestPath, "utf8");
+    const v = JSON.parse(raw).version;
+    return typeof v === "string" && v ? v : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+// A versão publicada por padrão pelo endpoint é a recomendada estável.
+// Em ambiente local (dev), se o build-extension gerou os arquivos da versão
+// atual do manifest em public/extension-files.json, servimos essa versão para
+// permitir testar imediatamente as alterações feitas no código da extensão.
+const _manifestVersion = versaoAtualDoManifest();
+const _isLocalDev = process.env.NODE_ENV !== "production" || !process.env.VERCEL;
+export const VERSAO_EXTENSAO: string =
+  _isLocalDev && _manifestVersion !== "0.0.0" ? _manifestVersion : politicaConfig.recomendada;
+const _pacoteVersionadoLocal =
+  _isLocalDev && VERSAO_EXTENSAO !== politicaConfig.recomendada
+    ? `/extension-releases/${VERSAO_EXTENSAO}`
+    : "";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +48,115 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.8",
+    itens: [
+      "Corrigida no código a chamada do clique em Enviar lance (com rolagem opcional); o envio real ainda não foi validado ao vivo no portal",
+      "Adicionado botão “📖 Ler página” no Modo Disputa (no popup e no painel flutuante): leia a tela “Enviar lance” para mapear campos de entrada e botões antes de iniciar",
+      "Detecção de campo “Novo lance (unitário)” muito mais flexível (Angular/PrimeNG, p-inputnumber, inputmode=decimal, classes de moeda, labels próximos)",
+      "Detecta botões Enviar dentro de wrappers p-button do PrimeNG",
+      "Se não conseguir identificar os campos, a mensagem agora pede explicitamente para clicar em “📖 Ler página”",
+      "Versão BETA: o envio real ainda não foi validado ao vivo. Polegar verde para cima ou estado incerto nunca recebe lance; o Valor Mínimo é reconferido antes de cada clique.",
+    ],
+  },
+  {
+    versao: "1.7.20",
+    itens: [
+      "Permite escolher a versão exata no atualizador, inclusive voltar para uma anterior; a escolha só é instalada após confirmação",
+      "Disponibiliza pacotes históricos completos e identifica versões BETA; mantém a base 1.7.19, sem ativar lances automáticos",
+    ],
+  },
+  {
+    versao: "1.7.19",
+    itens: [
+      "Corrige a leitura do Radar PNCP quando o contador dos itens fica colado ao título no DOM (ex.: “Itens da contratação43”)",
+    ],
+  },
+  {
+    versao: "1.7.18",
+    itens: [
+      "Lê UASG sob o rótulo Nº UASG (Unidade Compradora) no modal real do Radar PNCP",
+      "Prioriza o Nº da compra/ano visível (ex.: 80/2026) para identificar o destino da importação",
+    ],
+  },
+  {
+    versao: "1.7.17",
+    itens: [
+      "Ajusta a leitura do CNET Mobile para os cartões sanfonados com Qtde solicitada, como na tela Acompanhar Contratação",
+      "Corrige a leitura do Radar PNCP quando o título Itens da contratação inclui um contador e reconhece o controle PNCP do modal",
+    ],
+  },
+  {
+    versao: "1.7.16",
+    itens: [
+      "Permite ler itens do CNET Mobile/Compras.gov.br após abrir Acompanhar compra e do Radar de Licitações PNCP após abrir Ver detalhes",
+      "Importa número, descrição, quantidade, unidade e valor estimado da tabela de itens; pode abrir Mostrar detalhes do item para capturar a descrição completa",
+    ],
+  },
+  {
+    versao: "1.7.15",
+    itens: [
+      "Adiciona o campo Valor Mínimo (R$) no sistema e na planilha, com edição por item, tabela, inclusão manual e importação/exportação",
+      "Cria a estrutura inicial do Modo Disputa e uma janela flutuante com a mesma velocidade configurada no Modo Proposta",
+      "Monitoramento dos concorrentes e envio automático de lances permanecem desativados até a validação com uma licitação ativa",
+    ],
+  },
+  {
+    versao: "1.7.14",
+    itens: [
+      "Corrige a troca de página durante o preenchimento: espera os itens da próxima página aparecerem e estabilizarem antes de continuar, evitando pular o primeiro item",
+      "Ao localizar um item em uma página conhecida, aguarda o item estar presente no DOM antes de começar a preencher",
+      "Continua os itens na ordem crescente, passando da última linha de uma página para o primeiro item da seguinte",
+    ],
+  },
+  {
+    versao: "1.7.13",
+    itens: [
+      "Corrige a escala observada em produção (67,4100 → 674.100,0000): os prefixos intermediários são convertidos para a escala decimal antes do evento input, evitando que 674100 seja lido como reais inteiros",
+      "Detecta máscaras que recebem a vírgula como separador decimal (primeiro dígito exibido como 6,0000) e só envia keypress quando keydown não aceitou a tecla",
+      "Valores com duas casas, como 61,41, mantêm o mesmo preço e são exibidos com quatro casas no portal (61,4100); o bot não salva se a conferência do preço falhar",
+    ],
+  },
+  {
+    versao: "1.7.12",
+    itens: [
+      "Evita que o mesmo dígito seja consumido duas vezes: espera a resposta assíncrona de keydown antes de emitir keypress e não manda os dois eventos quando a máscara já aceitou a tecla",
+      "Entradas com duas casas, como 61,41, mantêm o mesmo número e são normalizadas para quatro casas no portal (61,4100), sem duplicar os zeros iniciais de 0,0000",
+      "Mantém marca/modelo e só salva se o preço exibido continuar exatamente igual ao solicitado",
+    ],
+  },
+  {
+    versao: "1.7.11",
+    itens: [
+      "Corrige o preenchimento em máscaras que exibem 6,0000 no primeiro dígito: os caracteres seguintes usam apenas o prefixo numérico, sem reaproveitar os zeros da tela (evita 674.100,0000)",
+      "Não envia Backspace extra quando a máscara já reagiu ao keydown; o preço só chega a Salvar se continuar exatamente igual ao valor informado",
+      "Encontra o botão Salvar do portal pelo nome acessível (texto, aria-label ou aria-labelledby), inclusive o botão br-button",
+    ],
+  },
+  {
+    versao: "1.7.10",
+    itens: [
+      "Corrige a máscara que formata o primeiro dígito como 6,0000: o bot continua digitando os demais caracteres e confere o preço completo antes de salvar",
+      "A tecla usada para registrar o valor no portal é enviada com segurança; se ela alterar o preço, o bot não salva um valor incorreto e continua marca/modelo para diagnóstico",
+      "Mantém as quatro casas decimais e confirma o clique em Salvar; se houver confirmação, escolhe Sim, nunca Não",
+    ],
+  },
+  {
+    versao: "1.7.9",
+    itens: [
+      "O valor unitário não é mais alterado pela cutucada do formulário: o bot mantém e confere exatamente o preço informado (ex.: 67,4100) antes de salvar",
+      "Se uma máscara mudar o preço ao registrar o campo, o item não é salvo com valor incorreto; o preenchimento continua nos campos de marca e modelo para diagnóstico",
+      "A confirmação do ComprasNet é reconhecida mesmo sem role/ARIA/classe conhecida; o bot clica em Sim e nunca em Não",
+    ],
+  },
+  {
+    versao: "1.7.8",
+    itens: [
+      "Correção da escala do valor unitário: a máscara recebe só os dígitos e mantém 4 casas (1,0000 · 10,0000 · 100,0000 · 1000,0000), sem deslocar ou duplicar números",
+      "O valor é lançado uma única vez; se a máscara não confirmar o número, o item não é salvo com valor errado",
+      "Depois do valor unitário, o preenchimento continua normalmente para marca/fabricante e modelo/versão",
+    ],
+  },
   {
     versao: "1.7.7",
     itens: [
@@ -206,9 +345,14 @@ export function versaoValida(valor: unknown): boolean {
  */
 export function novidadesDesde(instalada: string | null | undefined): NovidadeExtensao[] {
   const base = versaoValida(instalada) ? (instalada as string) : null;
-  if (!base) return [...NOVIDADES_EXTENSAO];
+  // Em produção, não anuncie novidades de uma versão BETA que ainda
+  // não é a recomendada. Em desenvolvimento, VERSAO_EXTENSAO acompanha o manifest.
+  const publicadas = NOVIDADES_EXTENSAO.filter(
+    (entrada) => compararVersoes(entrada.versao, VERSAO_EXTENSAO) <= 0,
+  );
+  if (!base) return [...publicadas];
 
-  return NOVIDADES_EXTENSAO.filter((entrada) => compararVersoes(entrada.versao, base) > 0).sort(
+  return publicadas.filter((entrada) => compararVersoes(entrada.versao, base) > 0).sort(
     (a, b) => compararVersoes(b.versao, a.versao),
   );
 }
@@ -230,15 +374,19 @@ export type EstadoAtualizacao = {
 
 export function montarEstadoAtualizacao(instalada: string | null): EstadoAtualizacao {
   const valida = versaoValida(instalada) ? (instalada as string) : null;
-  const comparacao = valida ? compararVersoes(VERSAO_EXTENSAO, valida) : 1;
+  const publicando = VERSAO_EXTENSAO;
+  const comparacao = valida ? compararVersoes(publicando, valida) : 1;
 
   return {
-    versao: VERSAO_EXTENSAO,
+    versao: publicando,
     instalada: valida,
     precisaAtualizar: comparacao > 0,
     adiantada: comparacao < 0,
     novidades: novidadesDesde(valida),
-    zip: { url: "/extension.zip", nome: `comprasnet-bot-extensao-${VERSAO_EXTENSAO}.zip` },
-    arquivosUrl: "/extension-files.json",
+    zip: {
+      url: `${_pacoteVersionadoLocal}/extension.zip`,
+      nome: `comprasnet-bot-extensao-${publicando}.zip`,
+    },
+    arquivosUrl: `${_pacoteVersionadoLocal}/extension-files.json`,
   };
 }

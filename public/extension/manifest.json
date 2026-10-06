@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.7.7",
-  "description": "Lê os itens da página do ComprasNet (todas as páginas), preenche e SALVA cada item, com painel flutuante (Pausar/Parar) e atualização em um clique.",
+  "version": "1.8.8",
+  "description": "Lê itens do ComprasNet, CNET Mobile e Radar PNCP; preenche e SALVA cada item no ComprasNet; Modo Disputa com opção Ler página para mapear campos de lance antes de enviar, com painel flutuante.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -16,6 +16,7 @@
     "https://compras.gov.br/*",
     "https://*.compras.gov.br/*",
     "https://www.gov.br/compras*",
+    "https://marcossilva023l20.github.io/radar-licitacoes-v2/*",
     "http://localhost:3000/*",
     "https://*.vercel.app/*",
     "https://*.neon.tech/*"
@@ -36,7 +37,8 @@
         "https://cnetmobile.estaleiro.serpro.gov.br/*",
         "https://compras.gov.br/*",
         "https://*.compras.gov.br/*",
-        "https://www.gov.br/compras*"
+        "https://www.gov.br/compras*",
+        "https://marcossilva023l20.github.io/radar-licitacoes-v2/*"
       ],
       "js": [
         "content.js"

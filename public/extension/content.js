@@ -50,7 +50,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.action === "painel_mostrar") {
-    mostrarPainel();
+    mostrarPainel(msg.modo);
     sendResponse({ ok: true });
     return true;
   }
@@ -73,7 +73,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.action === "read_comprasnet_items") {
+  if (msg.action === "read_source_items" || msg.action === "read_comprasnet_items") {
     readPageItems({
       expandir: msg.expandir !== false,
       delay: Number(msg.delay) || 400,
@@ -83,7 +83,68 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "disputa_diagnosticar") {
+    if (disputaAutomatica?.ativo || rodandoAgora || rodandoPeloPainel) {
+      sendResponse({ ok: false, error: "Pare a automação (Modo Proposta ou Modo Disputa) antes de ler o diagnóstico sem envio." });
+      return true;
+    }
+    try {
+      sendResponse(diagnosticarCamposDisputa());
+    } catch (err) {
+      sendResponse({ ok: false, error: `Falha ao ler os campos da disputa: ${err?.message || "erro"}.` });
+    }
+    return true;
+  }
+
+  if (msg.action === "disputa_ler_pagina") {
+    if (rodandoAgora || rodandoPeloPainel) {
+      sendResponse({ ok: false, error: "Pare o preenchimento de proposta antes de ler a página de disputa." });
+      return true;
+    }
+    try {
+      const resultado = lerPaginaDisputa();
+      sendResponse(resultado);
+      // Se já tem monitoramento ativo, agenda uma verificação imediata
+      if (resultado.ok && disputaAutomatica?.ativo) agendarVerificacaoDisputa(0);
+    } catch (err) {
+      sendResponse({ ok: false, error: `Falha ao ler a página da disputa: ${err?.message || "erro"}.` });
+    }
+    return true;
+  }
+
+  if (msg.action === "disputa_start") {
+    iniciarDisputaAutomatica(msg.propostaId)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, error: err?.message || "Falha ao iniciar o Modo Disputa." }));
+    return true;
+  }
+
+  if (msg.action === "disputa_stop") {
+    const stopped = pararDisputaAutomatica("Monitoramento parado pelo usuário.");
+    sendResponse({ ok: true, stopped, message: stopped ? "Monitoramento de lances parado." : "Não havia monitoramento ativo." });
+    return true;
+  }
+
+  if (msg.action === "disputa_status") {
+    sendResponse({
+      ok: true,
+      ativo: Boolean(disputaAutomatica?.ativo),
+      pausado: Boolean(disputaAutomatica?.pausado),
+      status: disputaAutomatica?.status || "inativo",
+      itensNoPiso: [...(disputaAutomatica?.itensNoPiso || [])],
+      limitesAtualizadosEm: disputaAutomatica?.limitesAtualizadosEm || null,
+      propostaId: disputaAutomatica?.propostaId || "",
+      situacoes: [...(disputaAutomatica?.situacoesPorNumero || new Map())].map(([numeroItem, situacao]) => ({ numeroItem, ...situacao })),
+    });
+    return true;
+  }
+
   if (msg.action === "fill_items") {
+    if (disputaAutomatica?.ativo) {
+      sendResponse({ ok: false, error: "Pare o Modo Disputa antes de iniciar um preenchimento de proposta." });
+      return true;
+    }
+    mostrarPainel("proposta");
     fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || DELAY_PADRAO_MS)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
@@ -871,8 +932,18 @@ async function esperarDigitos(input, esperados, tempoMs = ESPERA_REACAO_MASCARA)
 
 /** As casas decimais que a máscara do campo usa (o portal usa 4). */
 function casasDaMascara(input) {
+  for (const atributo of ["data-casas", "data-decimals", "data-decimal-places"]) {
+    const declarado = Number(input?.getAttribute?.(atributo));
+    if (Number.isInteger(declarado) && declarado > 0 && declarado <= 6) return declarado;
+  }
+
   const doValor = casasDoTexto(input?.value) ?? casasDoTexto(input?.placeholder);
   if (Number.isFinite(doValor) && doValor > 0) return Math.min(6, doValor);
+
+  // Alguns componentes de moeda não informam as casas no placeholder, mas
+  // declaram que são moeda (normalmente duas casas).
+  const moeda = input?.getAttribute?.("data-moeda");
+  if (moeda && !/^(?:0|false|nao)$/i.test(moeda)) return 2;
   return CASAS_PADRAO;
 }
 
@@ -937,63 +1008,181 @@ async function limparCampoComTeclas(input, view) {
 }
 
 /**
- * Digita o texto do valor, uma vez cada caractere, sem nunca escrever por cima.
+ * Digita o valor uma única vez e deixa a máscara do portal formatar os dígitos.
  *
- * - A máscara do portal costuma inserir o dígito ao ver a tecla; damos esse tempo
- *   a ela ANTES de escrever qualquer coisa por fora (era escrever antes dela que
- *   transformava 1.232,80 em 12.328,00).
- * - Se a máscara aplicar dígito a mais, a passada é abandonada e quem corrige é
- *   uma nova passada, do zero — nunca um remendo em cima do valor.
- * - A conferência é pelo NÚMERO quando o site formata (tem vírgula/ponto) e
- *   pelos DÍGITOS quando a máscara guarda os dígitos crus até o blur.
+ * Quando a máscara reage à tecla/input, não enviamos vírgula, ponto ou
+ * separador de milhar: nesses campos cada tecla numérica representa um dígito
+ * do valor e pontuação inserida por fora desloca a escala (por exemplo,
+ * 1,0000 podia virar 10,0000). Em campos sem máscara continuamos enviando o
+ * texto brasileiro completo.
  */
 async function digitarTextoDoValor(input, texto, alvo, view) {
-  const alvoDigitos = digitosDoTexto(texto);
+  let textoDigitado = texto;
+  let tipoMascara = null; // "keydown", "keypress" ou "input", detectado na primeira tecla
+  const campoFormatadoInicial = casasDoTexto(input.value) !== null;
+  let modoMascara = null; // "texto" (6,0000) ou "digitos" (0,0006)
+  let digitosDigitados = ""; // prefixo numérico sem a formatação visual do campo
+  let reagiuKeydown = false;
+  let reagiuTecla = false;
   let escritas = 0;
-  let mascaraReagiu = false;
 
-  for (let i = 0; i < texto.length; i += 1) {
+  for (let i = 0; i < textoDigitado.length; i += 1) {
     if (abortRequested) {
-      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas };
+      return { ok: false, motivo: "preenchimento interrompido.", textoFinal: String(input.value ?? ""), escritas, tipoMascara, reagiuTecla };
     }
     await aguardarSePausado();
 
-    const ch = texto[i];
-    const esperados = digitosDoTexto(texto.slice(0, i + 1));
-    const antesDaTecla = String(input.value ?? "");
-    const tecla = { key: ch, code: /[0-9]/.test(ch) ? `Digit${ch}` : "", char: ch, keyCode: ch.charCodeAt(0), which: ch.charCodeAt(0) };
+    const ch = textoDigitado[i];
+    const valorAntes = String(input.value ?? "");
+    const campoJaFormatado = casasDoTexto(valorAntes) !== null;
+    const mascaraOuValorFormatado = tipoMascara !== null || campoFormatadoInicial;
 
-    disparar(input, "keydown", view, tecla);
-    disparar(input, "keypress", view, tecla);
-
-    // 1ª tecla: janela maior, para aprender como a máscara reage. Depois disso,
-    // 100ms bastam (e sai na hora quando ela reage à tecla).
-    const janela = mascaraReagiu ? ESPERA_TECLA_MASCARA : i === 0 ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA;
-    let mudou = await esperarCampoMudar(input, antesDaTecla, janela);
-    if (!mudou && i === 0) mudou = await esperarCampoMudar(input, antesDaTecla, ESPERA_TECLA_MASCARA);
-    if (mudou) mascaraReagiu = true;
-
-    if (!mudou) {
-      // Máscara que só reage ao evento de input: insere UMA vez, por fora.
-      let inseriu = false;
-      if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
-        try {
-          inseriu = input.ownerDocument.execCommand("insertText", false, ch);
-        } catch (_) {
-          inseriu = false;
-        }
-      }
-      if (!inseriu) escreverDireto(input, antesDaTecla + ch, view);
-      escritas += 1;
+    // Uma máscara de moeda só consome dígitos. Não lhe passe a pontuação do
+    // texto formatado: o próprio campo deve colocar a vírgula e os milhares.
+    if (mascaraOuValorFormatado && !/\d/.test(ch) && !(ch === "," && modoMascara === "texto")) {
+      await pausaDigitacao();
+      continue;
     }
 
-    disparar(input, "keyup", view, tecla);
+    const tecla = {
+      key: ch,
+      code: /[0-9]/.test(ch) ? `Digit${ch}` : "",
+      char: ch,
+      keyCode: ch.charCodeAt(0),
+      which: ch.charCodeAt(0),
+    };
+    let mudou = false;
+    let origemDaReacao = null;
+    let eventoConsumido = false;
+    let origemConsumida = null;
+    let enviouTecla = false;
+    const janela = tipoMascara === "keydown" || tipoMascara === "keypress" || i === 0
+      ? ESPERA_REACAO_MASCARA
+      : ESPERA_TECLA_MASCARA;
 
-    // A máscara pode aplicar a tecla um pouco depois: espera ela refletir.
-    await esperarDigitos(input, esperados, mascaraReagiu ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA);
+    // Primeiro oferece só keydown. Algumas máscaras consomem a tecla nos dois
+    // eventos; dispará-los juntos duplica cada dígito. Só envia keypress depois
+    // de esperar a máscara e confirmar que keydown não mudou nem consumiu nada.
+    if (tipoMascara === "keypress") {
+      const eventoKeypress = disparar(input, "keypress", view, tecla);
+      enviouTecla = true;
+      mudou = await esperarCampoMudar(input, valorAntes, janela);
+      if (mudou) origemDaReacao = "keypress";
+      else if (eventoKeypress?.defaultPrevented) {
+        eventoConsumido = true;
+        origemConsumida = "keypress";
+      }
+    } else if (tipoMascara !== "input") {
+      const eventoKeydown = disparar(input, "keydown", view, tecla);
+      enviouTecla = true;
+      mudou = await esperarCampoMudar(input, valorAntes, janela);
+      if (mudou) {
+        origemDaReacao = "keydown";
+      } else if (eventoKeydown?.defaultPrevented) {
+        eventoConsumido = true;
+        origemConsumida = "keydown";
+      } else {
+        const antesKeypress = String(input.value ?? "");
+        const eventoKeypress = disparar(input, "keypress", view, tecla);
+        mudou = await esperarCampoMudar(input, antesKeypress, janela);
+        if (mudou) origemDaReacao = "keypress";
+        else if (eventoKeypress?.defaultPrevented) {
+          eventoConsumido = true;
+          origemConsumida = "keypress";
+        }
+      }
+    }
 
-    const atuais = digitosDoTexto(input.value);
-    if (semZerosADireita(atuais).length > semZerosADireita(esperados).length) {
+    const inferirModoMascara = () => {
+      if (modoMascara || !/\d/.test(ch)) return;
+      const casas = casasDoTexto(textoDigitado) ?? casasDaMascara(input);
+      const valorAtual = valorNumerico(input.value);
+      const valorComoTexto = valorNumerico(textoDigitado.slice(0, i + 1));
+      const prefixoEmDigitos = Number(digitosDigitados || "0") / 10 ** casas;
+      if (valorComoTexto !== null && mesmoNumero(valorAtual, valorComoTexto)) modoMascara = "texto";
+      else if (mesmoNumero(valorAtual, prefixoEmDigitos)) modoMascara = "digitos";
+    };
+
+    if (mudou && /\d/.test(ch)) {
+      reagiuTecla = true;
+      reagiuKeydown = origemDaReacao === "keydown";
+      digitosDigitados += ch;
+      if (!tipoMascara) tipoMascara = origemDaReacao;
+      inferirModoMascara();
+    } else if (!mudou) {
+      const ehDigito = /\d/.test(ch);
+      const separadorJaExibido = ch === "," && modoMascara === "texto" && casasDoTexto(input.value) !== null;
+      if (eventoConsumido && ehDigito) {
+        // A máscara aceitou a tecla sem refletir o valor imediatamente. Não
+        // envie outra escrita que possa somar o mesmo dígito pela segunda vez.
+        reagiuTecla = true;
+        reagiuKeydown = origemConsumida === "keydown";
+        digitosDigitados += ch;
+        if (!tipoMascara) tipoMascara = origemConsumida;
+        inferirModoMascara();
+      } else if (!eventoConsumido && !separadorJaExibido) {
+        // Um zero no valor vazio/zero formatado já está representado pela
+        // máscara. Não o acrescente por fora: isso criaria uma casa a mais.
+        const zeroJaRepresentado = ch === "0" && campoJaFormatado && mesmoNumero(valorNumerico(valorAntes), 0);
+        if (!zeroJaRepresentado) {
+          if (ehDigito && mascaraOuValorFormatado) {
+            // Não concatene ao texto visual nem envie o prefixo como inteiro
+            // ("674100" pode ser lido como R$ 674.100,0000). Converta o prefixo
+            // para a escala decimal do campo: "67" em 4 casas vira "0,0067".
+            digitosDigitados += ch;
+            const casasParciais = casasDoTexto(textoDigitado) ?? casasDaMascara(input);
+            const valorParcial = Number(digitosDigitados || "0") / 10 ** casasParciais;
+            escreverDireto(input, comCasas(valorParcial, casasParciais), view);
+            escritas += 1;
+            if (!tipoMascara) tipoMascara = "input";
+            inferirModoMascara();
+          } else {
+            let inseriu = false;
+            if (!input.isContentEditable && typeof input.ownerDocument?.execCommand === "function") {
+              try {
+                inseriu = input.ownerDocument.execCommand("insertText", false, ch);
+              } catch (_) {
+                inseriu = false;
+              }
+            }
+
+            const valorSemMascara = valorAntes + ch;
+            if (ehDigito) digitosDigitados += ch;
+            if (!inseriu || String(input.value ?? "") === valorAntes) {
+              escreverDireto(input, valorSemMascara, view);
+            }
+            escritas += 1;
+            if (ehDigito && String(input.value ?? "") !== valorSemMascara && !tipoMascara) {
+              tipoMascara = "input";
+            }
+            inferirModoMascara();
+          }
+        }
+      }
+    }
+
+    if (enviouTecla) disparar(input, "keyup", view, tecla);
+
+    // Uma máscara de duas casas pode ser descoberta pelo primeiro resultado
+    // (0,01). Ajustamos a sequência antes de continuar, sem limpar/recomeçar.
+    if (i === 0 && tipoMascara) {
+      const casasVisiveis = casasDoTexto(input.value);
+      const casasPedidas = casasDoTexto(textoDigitado);
+      if (casasVisiveis && casasPedidas && casasVisiveis !== casasPedidas) {
+        const textoAjustado = comCasas(alvo, casasVisiveis);
+        if (textoAjustado[0] === textoDigitado[0] && mesmoNumero(valorNumerico(textoAjustado), alvo)) {
+          textoDigitado = textoAjustado;
+        }
+      }
+    }
+
+    const esperados = digitosDoTexto(textoDigitado.slice(0, i + 1));
+    await esperarDigitos(input, esperados, tipoMascara ? ESPERA_REACAO_MASCARA : ESPERA_TECLA_MASCARA);
+
+    const textoAtual = String(input.value ?? "");
+    const atuais = digitosDoTexto(textoAtual);
+    const valorParcialJaFormatado = casasDoTexto(textoAtual) !== null;
+    if (!valorParcialJaFormatado && semZerosADireita(atuais).length > semZerosADireita(esperados).length) {
       return {
         ok: false,
         motivo: `a máscara aplicou dígito a mais ("${String(input.value).slice(0, 24)}")`,
@@ -1008,71 +1197,53 @@ async function digitarTextoDoValor(input, texto, alvo, view) {
   const textoFinal = String(input.value ?? "");
   const temSeparador = /\d[.,]\d/.test(textoFinal);
   const numero = valorNumerico(textoFinal);
+  const alvoDigitos = digitosDoTexto(textoDigitado);
   const ok = temSeparador
-    ? mesmoNumero(numero, alvo) // o site formatou: vale o número
-    : digitosIguais(digitosDoTexto(textoFinal), alvoDigitos) || mesmoNumero(numero, alvo); // dígitos crus (formata no blur)
+    ? mesmoNumero(numero, alvo)
+    : digitosIguais(digitosDoTexto(textoFinal), alvoDigitos) || mesmoNumero(numero, alvo);
 
   return {
     ok,
     motivo: ok ? "" : `o campo ficou com "${textoFinal.slice(0, 24) || "(vazio)"}"`,
     textoFinal,
     escritas,
+    tipoMascara,
+    reagiuKeydown,
+    reagiuTecla,
   };
 }
 
 /**
- * Escreve o valor no campo: UMA passada de limpeza + digitação, conferida.
- *
- * Se a máscara atrapalhar, faz no máximo mais UMA passada — sempre do zero
- * (limpa tudo com Backspace e digita de novo), nunca corrigindo por cima. É
- * isso que garante o valor lançado uma vez só, e não "lançado e relançado".
+ * Escreve e confere o valor em uma única passada. Se a máscara não aceitar a
+ * escala correta, interrompe o item em vez de apagar e lançar o valor de novo.
  */
 async function escreverValorNoCampo(input, alvo, casas, view) {
-  const digitosBase = Math.round(alvo * 10 ** casas);
-  let texto = comCasas(alvo, casas); // ex.: 1.232,80 → "1232,8000" (4 casas)
-  let ultimo = null;
-
-  for (let tentativa = 1; tentativa <= MAX_LANCAMENTOS_POR_CAMPO; tentativa += 1) {
-    const limpou = await limparCampoComTeclas(input, view);
-    if (!limpou) {
-      return {
-        ok: false,
-        motivo: "não consegui limpar o campo (nem com Backspace)",
-        tentativas: tentativa,
-        escritas: 0,
-        textoFinal: String(input.value ?? ""),
-        casasOk: false,
-      };
-    }
-
-    ultimo = await digitarTextoDoValor(input, texto, alvo, view);
-    ultimo.tentativas = tentativa;
-    contarLancamento(input);
-    if (ultimo.ok) break;
-
-    // Máscara leu os dígitos em outra escala (ex.: 2 casas em vez de 4)? Calcula
-    // os dígitos que ela espera e faz a última passada com eles.
-    const ficou = valorNumerico(ultimo.textoFinal);
-    if (tentativa === 1 && ficou !== null && alvo > 0) {
-      const potencia = Math.log10(ficou / alvo);
-      if (Math.abs(potencia) > 0.05 && Math.abs(potencia - Math.round(potencia)) < 0.05) {
-        // Dígitos crus: numa máscara de menos casas, digitar "0,4400" perderia
-        // zeros no caminho — dígito a dígito cada tecla vale um dígito.
-        texto = String(Math.round(digitosBase / 10 ** Math.round(potencia)));
-      }
-    }
+  const texto = comCasas(alvo, casas); // sem separador de milhar: "1000,0000"
+  const limpou = await limparCampoComTeclas(input, view);
+  if (!limpou) {
+    return {
+      ok: false,
+      motivo: "não consegui limpar o campo (nem com Backspace)",
+      tentativas: 1,
+      escritas: 0,
+      textoFinal: String(input.value ?? ""),
+      casasOk: false,
+    };
   }
+
+  const resultado = await digitarTextoDoValor(input, texto, alvo, view);
+  contarLancamento(input);
 
   const textoFinal = String(input.value ?? "");
   const temSeparador = /\d[.,]\d/.test(textoFinal);
   const casasFinais = casasDoTexto(textoFinal);
-
   return {
-    ...ultimo,
+    ...resultado,
+    tentativas: 1,
     textoFinal,
     casasFinais,
-    // O portal usa 4 casas. Se o campo tem separador e não fechou em 4 casas,
-    // o relatório avisa (pode ser máscara diferente da esperada).
+    // O portal usa 4 casas. Se o campo exibir outra escala, o relatório avisa;
+    // o bot não tenta reescrever o preço por cima.
     casasOk: !temSeparador || casasFinais === CASAS_PADRAO,
   };
 }
@@ -1098,13 +1269,19 @@ function disparar(el, tipo, view, dados = {}) {
     : ehTecla && typeof view.KeyboardEvent === "function"
       ? view.KeyboardEvent
       : view.Event;
+  const opcoes = { bubbles: true, cancelable: ehInput || ehTecla, composed: true, ...dados };
   try {
-    el.dispatchEvent(new Evento(tipo, { bubbles: true, cancelable: ehInput, composed: true, ...dados }));
+    const evento = new Evento(tipo, opcoes);
+    el.dispatchEvent(evento);
+    return evento;
   } catch (_) {
     try {
-      el.dispatchEvent(new view.Event(tipo, { bubbles: true }));
+      const evento = new view.Event(tipo, opcoes);
+      el.dispatchEvent(evento);
+      return evento;
     } catch (_) {
       // sem eventos: o valor direto continua valendo
+      return null;
     }
   }
 }
@@ -1224,41 +1401,67 @@ async function digitarDeVerdade(input, value, view) {
 }
 
 /**
- * "Cutuca" o campo com um Backspace de verdade e redigita o último caractere.
+ * Envia um Backspace para o portal contabilizar o valor, sem alterar o campo
+ * quando o site não o processa como uma tecla nativa.
  *
- * O portal (Angular) não contabiliza o valor só com os eventos sintéticos: o
- * número aparece na tela mas o total continua 0,0000 e o site acusa "campo
- * obrigatório". O usuário descobriu que apertar Backspace uma vez resolve — é
- * a tecla real que faz o formulário reler o campo. Fazemos exatamente isso,
- * UMA vez, e conferimos: se a cutucada estragar os dígitos, quem chama reescreve
- * o valor do zero (nunca remendando em cima).
+ * Alguns campos reagem ao keydown e apagam o conteúdo selecionado. Colocamos o
+ * cursor no fim antes da tecla e só redigitamos o último dígito se o valor
+ * realmente mudou. Antes, quando a máscara não alterava o campo, o bot apagava
+ * e reescrevia texto por conta própria; essa segunda escrita podia fazer a
+ * máscara reinterpretar 67,4100 como 6,0000. Agora o valor é conferido e nunca
+ * é restaurado por atribuição direta se a cutucada o corromper.
  */
 async function cutucarCampo(input, view) {
   const antes = String(input.value ?? "");
   if (!antes) return false;
   const digitosAntes = digitosDoTexto(antes);
-  const semUltimo = antes.slice(0, -1);
-  const ultimo = antes.slice(-1);
+  const numeroAntes = valorNumerico(antes);
+  const ultimoDigito = antes.match(/(\d)\D*$/)?.[1] || "";
   const teclaBackspace = { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 };
 
-  disparar(input, "keydown", view, teclaBackspace);
-  let apagou = await esperarCampoMudar(input, antes, 250);
-  if (!apagou) {
-    aplicarValor(input, semUltimo, view);
-    disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
-    apagou = String(input.value ?? "") !== antes;
+  try {
+    const fim = antes.length;
+    input.setSelectionRange?.(fim, fim);
+  } catch (_) {
+    // Campos numéricos / componentes customizados podem não expor seleção.
   }
+
+  disparar(input, "keydown", view, teclaBackspace);
+  let mudou = await esperarCampoMudar(input, antes, 250);
   disparar(input, "keyup", view, teclaBackspace);
+  if (!mudou) mudou = await esperarCampoMudar(input, antes, 80);
+
+  // O site pode contabilizar no keydown sem mudar o valor (o caso comum). Não
+  // simule uma remoção/reinserção: isso seria um segundo lançamento da quantia.
+  if (!mudou) {
+    const atual = String(input.value ?? "");
+    return mesmoNumero(valorNumerico(atual), numeroAntes) &&
+      (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
+  }
+
   await esperarCampoParar(input, 150);
+  let atual = String(input.value ?? "");
+  const valorMantido = mesmoNumero(valorNumerico(atual), numeroAntes) &&
+    (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
+  if (valorMantido) return true;
 
-  // Redigita o caractere apagado (com as teclas reais do caractere).
-  await inserirTexto(input, ultimo, view);
-  disparar(input, "change", view, { data: String(input.value ?? "") });
-  await pausa(60);
+  // A tecla apagou algo de verdade. Reinsere somente o dígito apagado — nunca
+  // o valor inteiro — e verifica o resultado antes de permitir o Salvar.
+  if (ultimoDigito) {
+    try {
+      const fim = atual.length;
+      input.setSelectionRange?.(fim, fim);
+    } catch (_) {
+      // a digitação do dígito ainda pode funcionar sem seleção explícita
+    }
+    await inserirTexto(input, ultimoDigito, view);
+    disparar(input, "change", view, { data: String(input.value ?? "") });
+    await pausa(60);
+  }
 
-  const depois = String(input.value ?? "");
-  if (digitosAntes) return digitosDoTexto(depois) === digitosAntes;
-  return depois === antes || mesmoNumero(valorNumerico(depois), valorNumerico(antes));
+  atual = String(input.value ?? "");
+  return mesmoNumero(valorNumerico(atual), numeroAntes) &&
+    (!digitosAntes || digitosDoTexto(atual) === digitosAntes);
 }
 
 /**
@@ -1380,36 +1583,44 @@ async function preencherCampo(input, value, view) {
  * o portal exige para contabilizar; sem isso o total fica 0,0000).
  * Campo de texto em formulário de framework: reenvia o texto já formatado.
  */
-async function garantirRegistroDoCampo(input, view, numerico, alvo, casas) {
+async function garantirRegistroDoCampo(input, view, numerico, alvo, casas, cutucar = true) {
   if (numerico) {
     const digitosAlvo = alvo !== null && alvo !== undefined ? String(Math.round(alvo * 10 ** (casas ?? CASAS_PADRAO))) : "";
-    const textoAntes = String(input.value ?? "");
 
-    // O portal só contabiliza o valor quando chega uma tecla de verdade no
-    // campo (o Backspace é a que o usuário descobriu): UMA cutucada, sempre.
-    // Sem isso o total fica R$ 0,0000 e o site acusa "campo obrigatório".
-    await cutucarCampo(input, view);
+    // A cutucada envia apenas um Backspace; não reescreve o preço inteiro.
+    // Alguns componentes alteram o campo com essa tecla: cutucarCampo só permite
+    // prosseguir se o valor original for preservado exatamente.
+    if (cutucar && !(await cutucarCampo(input, view))) return false;
 
-    const digitosOk = !digitosAlvo || digitosIguais(digitosDoTexto(input.value), digitosAlvo);
-    const numeroOk = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
-    if (!digitosOk && !numeroOk) {
-      // A cutucada estragou o valor: devolve o texto que JÁ estava no campo
-      // (uma atribuição, sem redigitar nada) — nada de "lançar de novo".
-      // O aviso de input vai com UM caractere: máscara que descarta textos
-      // inteiros (data com mais de 1 caractere) reescreveria o campo vazio.
-      escreverDireto(input, textoAntes, view);
-      disparar(input, "change", view, { data: textoAntes });
-      await pausa(60);
-    }
+    const valorAtual = String(input.value ?? "");
+    const digitosOk = !digitosAlvo || digitosIguais(digitosDoTexto(valorAtual), digitosAlvo);
+    const numeroOk = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(valorAtual), alvo);
+    if (!digitosOk && !numeroOk) return false;
+    if (alvo !== null && alvo !== undefined && !numeroOk) return false;
 
-    // O framework ainda não registrou? Reenvia o texto que JÁ está no campo
-    // (sem redigitar: um único input/change com o valor final).
+    // O framework ainda não registrou? Reenvia o texto que JÁ está no campo,
+    // mas só aceita o reforço se o número continuar idêntico ao valor pedido.
     const estado = estadoDeValidacao(input);
     if (pistasDeFramework(input) && (estado.pristine || estado.invalido)) {
+      if (!cutucar) {
+        // Máscara que já consumiu keydown: não reenvie o valor formatado por
+        // input, pois o componente pode interpretá-lo como novos dígitos.
+        // Change/blur atualizam o framework sem reescrever o preço.
+        disparar(input, "change", view, { data: String(input.value ?? "") });
+        disparar(input, "blur", view, {});
+        disparar(input, "focusout", view, {});
+        try { input.blur(); } catch (_) { /* opcional */ }
+        await pausa(80);
+        const depois = estadoDeValidacao(input);
+        const numeroPreservado = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
+        return numeroPreservado && !depois.pristine && !depois.invalido;
+      }
+
       await reforcarValor(input, view);
       await pausa(80);
       const depois = estadoDeValidacao(input);
-      return !depois.pristine && !depois.invalido;
+      const numeroPreservado = alvo === null || alvo === undefined || mesmoNumero(valorNumerico(input.value), alvo);
+      return numeroPreservado && !depois.pristine && !depois.invalido;
     }
     return true;
   }
@@ -1459,7 +1670,6 @@ function lancamentosDoItem(fields) {
 }
 
 const CASAS_PADRAO = 4; // formato do portal: 44,0000
-const MAX_LANCAMENTOS_POR_CAMPO = 2; // 1 passada + no máximo 1 correção, sempre do zero
 
 async function setInputValue(input, rawValue, esperaNumero) {
   if (!input || !input.isConnected || !isFillable(input)) return false;
@@ -1499,22 +1709,46 @@ async function setInputValue(input, rawValue, esperaNumero) {
     const digitosAlvo = String(Math.round(alvo * 10 ** casas));
 
     // Já está com o valor certo (o site já tinha o item preenchido)? NÃO
-    // reescreve — só garante que o site registrou (a cutucada de sempre).
+    // reescreve. Só permite seguir se a cutucada/revalidação preservar o preço.
     if (estaComOValorCerto(input, value, alvo, digitosAlvo)) {
-      await garantirRegistroDoCampo(input, view, true, alvo, casas);
+      const estadoAntes = estadoDeValidacao(input);
+      const precisaCutucar = estadoAntes.pristine || estadoAntes.invalido;
+      const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
+      const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
       const estado = estadoDeValidacao(input);
       if (estado.invalido) registrarDiagnosticoDeCampo(input, { valor: value, invalido: true });
+      if (!registrado || !valorPreservado) {
+        registrarDiagnosticoDeCampo(input, {
+          valor: String(input.value ?? ""),
+          esperado: comCasas(alvo, casas),
+          naoRegistrado: true,
+        });
+        return false;
+      }
       return true;
     }
 
-    // UMA passada (limpa + digita); se a máscara atrapalhar, no máximo mais uma.
+    // UMA passada (limpa + digita); se a máscara atrapalhar, interrompe o item.
     const resultado = await escreverValorNoCampo(input, alvo, casas, view);
     if (!resultado.ok) {
       registrarDiagnosticoDeCampo(input, { valor: value, naoRegistrado: true });
       return false;
     }
 
-    await garantirRegistroDoCampo(input, view, true, alvo, casas);
+    // Máscaras que já reagiram a uma tecla registram o valor durante a digitação;
+    // um Backspace extra pode deslocar a escala. Nos campos que só reagiram a
+    // input, a cutucada continua disponível e só seguimos se preservar o preço.
+    const precisaCutucar = !resultado.reagiuTecla;
+    const registrado = await garantirRegistroDoCampo(input, view, true, alvo, casas, precisaCutucar);
+    const valorPreservado = mesmoNumero(valorNumerico(input.value), alvo);
+    if (!registrado || !valorPreservado) {
+      registrarDiagnosticoDeCampo(input, {
+        valor: String(input.value ?? ""),
+        esperado: comCasas(alvo, casas),
+        naoRegistrado: true,
+      });
+      return false;
+    }
 
     const estado = estadoDeValidacao(input);
     if (estado.invalido) {
@@ -1618,20 +1852,38 @@ function ehElementoClicavel(el) {
  * Texto exato vale mais; id/classe/aria-label com "salvar" também identificam
  * (o botão pode ser só um ícone).
  */
+function nomeAcessivelDoBotao(el) {
+  if (!el) return "";
+  const ariaLabel = el.getAttribute?.("aria-label")?.trim();
+  if (ariaLabel) return ariaLabel;
+
+  const labelledBy = (el.getAttribute?.("aria-labelledby") || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => el.ownerDocument?.getElementById(id)?.textContent?.trim() || "")
+    .filter(Boolean)
+    .join(" ");
+  if (labelledBy) return labelledBy;
+
+  const texto = el.innerText || el.textContent || el.value || el.title || "";
+  return String(texto).replace(/\s+/g, " ").trim();
+}
+
 function pontuarBotaoSalvar(el) {
   if (!el || !isVisible(el)) return -1;
 
-  const texto = normalizeText(el.textContent || el.value || "");
+  const nome = normalizeText(nomeAcessivelDoBotao(el));
+  const texto = normalizeText(el.innerText || el.textContent || el.value || "");
   const atributos = normalizeText(
     `${el.getAttribute("aria-label") || ""} ${el.title || ""} ${el.id || ""} ${
       typeof el.className === "string" ? el.className : ""
     } ${el.getAttribute("data-testid") || ""} ${el.getAttribute("name") || ""}`,
   );
 
-  if (TEXTO_BOTAO_SALVAR_PROIBIDO.test(texto)) return -1;
+  if (TEXTO_BOTAO_SALVAR_PROIBIDO.test(texto) || TEXTO_BOTAO_SALVAR_PROIBIDO.test(nome)) return -1;
 
   let pontos = 0;
-  if (TEXTO_BOTAO_SALVAR.test(texto)) pontos += 100;
+  if (TEXTO_BOTAO_SALVAR.test(texto) || TEXTO_BOTAO_SALVAR.test(nome)) pontos += 100;
   else if (PISTAS_BOTAO_SALVAR.test(atributos) && (ehElementoClicavel(el) || el.matches(SELETOR_CLICAVEL))) pontos += 60;
   else if (el.matches('[class*="salvar" i], [id*="salvar" i]') && ehElementoClicavel(el)) pontos += 40;
 
@@ -1656,7 +1908,7 @@ function encontrarBotaoSalvar(escopo) {
 
 /** Texto do botão para relatar ao usuário ("Salvar", "Gravar item"...). */
 function descreverBotao(el) {
-  const texto = (el?.textContent || el?.value || el?.getAttribute?.("aria-label") || "").replace(/\s+/g, " ").trim();
+  const texto = nomeAcessivelDoBotao(el);
   if (texto) return texto.slice(0, 40);
   return normalizeText(typeof el?.className === "string" ? el.className : "") || "botão sem texto";
 }
@@ -1970,7 +2222,22 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
     await pausa(800);
 
     const limite = Date.now() + (tentativa === 1 ? 2600 : 2200);
+    let proximaChecagemModal = 0;
     while (Date.now() < limite) {
+      if (Date.now() >= proximaChecagemModal) {
+        proximaChecagemModal = Date.now() + 500;
+        const modal = await responderModalDeConfirmacao();
+        if (modal) {
+          relatorio.modal = modal;
+          if (modal.clicado) {
+            confirmado = true;
+            relatorio.mensagemSucesso = modal.texto || "confirmação na janela do site";
+          }
+          // Se há uma confirmação aberta, não clique novamente em Salvar.
+          if (modal.texto || modal.clicado) break;
+        }
+      }
+
       mensagens = coletarMensagens();
       const novas = mensagens.filter((m) => !mensagensAntes.includes(m));
 
@@ -2077,70 +2344,124 @@ async function salvarItem(itemNumber, allowUnassignedFields, campos) {
 
 const SELETOR_DE_MODAL = [
   '[role="dialog"]',
+  '[role="alertdialog"]',
   '[aria-modal="true"]',
   "dialog[open]",
   ".br-modal",
   ".modal.show",
   ".modal[style*=\"display: block\"]",
   ".modal-dialog",
+  ".modal-content",
+  ".modal-container",
   ".swal2-popup",
+  ".swal-modal",
+  ".sweet-alert",
   ".p-dialog",
+  ".ui-dialog",
+  ".cdk-overlay-pane",
+  ".mat-dialog-container",
   ".mat-mdc-dialog-container",
+  ".MuiDialog-paper",
 ].join(", ");
 
+const SELETOR_DE_BOTAO_MODAL = "button, input[type='submit'], input[type='button'], [role='button'], a";
 const TEXTO_BOTAO_CONFIRMAR = /^(salvar|gravar|confirmar|sim|ok|enviar|prosseguir|continuar|cadastrar)\s*!?$/i;
+const TEXTO_BOTAO_NEGATIVO = /^(nao|cancelar|voltar|fechar|rejeitar|descartar|nao salvar)$/i;
+const TEXTO_PERGUNTA_DE_CONFIRMAR = /(deseja\s+salvar|salvar\s+as\s+alteracoes|proposta.{0,120}modificad|confirm.{0,100}(?:proposta|item|cadastro|salvamento|alterac)|(?:proposta|item).{0,100}confirm)/i;
 
 /** Está visível e não é fruto de um display "atualizado" só no shadow DOM? */
 function visivelDeVerdade(el) {
   if (!el || !el.isConnected) return false;
-  const inline = el.style?.display || "";
-  if (inline === "none") return false;
-  try {
-    const view = el.ownerDocument?.defaultView || window;
-    const estilo = view.getComputedStyle(el);
-    if (estilo.display === "none" || estilo.visibility === "hidden") return false;
-    if (!inline && Number.parseFloat(estilo.opacity || "1") === 0) return false;
-  } catch (_) {
-    // sem getComputedStyle: confia no inline
+  const visitados = new Set();
+  let node = el;
+  while (node && node.nodeType === 1 && !visitados.has(node)) {
+    visitados.add(node);
+    if (node.getAttribute?.("aria-hidden") === "true") return false;
+    try {
+      const view = node.ownerDocument?.defaultView || window;
+      const estilo = view.getComputedStyle(node);
+      if (estilo.display === "none" || estilo.visibility === "hidden" || estilo.visibility === "collapse") return false;
+      if (Number.parseFloat(estilo.opacity || "1") === 0) return false;
+    } catch (_) {
+      if (node.style?.display === "none") return false;
+    }
+    // parentElement para DOM normal; host para componentes dentro de shadow DOM.
+    node = node.parentElement || node.getRootNode?.()?.host || null;
   }
   return true;
 }
 
+function rotulosDoBotaoModal(el) {
+  return [el?.textContent, el?.value, el?.getAttribute?.("aria-label"), el?.getAttribute?.("title")]
+    .map((rotulo) => normalizeText(rotulo || ""))
+    .filter(Boolean);
+}
+
+function ehBotaoNegativoModal(el) {
+  return rotulosDoBotaoModal(el).some((rotulo) => TEXTO_BOTAO_NEGATIVO.test(rotulo));
+}
+
+function ehBotaoPositivoModal(el) {
+  const rotulos = rotulosDoBotaoModal(el);
+  return !ehBotaoNegativoModal(el) && rotulos.some((rotulo) => TEXTO_BOTAO_CONFIRMAR.test(rotulo));
+}
+
+function botoesVisiveisDaJanela(escopo) {
+  return consultarProfundo(escopo, SELETOR_DE_BOTAO_MODAL)
+    .filter((el) => visivelDeVerdade(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true");
+}
+
 /**
- * O site pode pedir confirmação depois do Salvar (modal "Deseja salvar?").
- * Se houver um modal visível, registra o texto e clica no botão de confirmar
- * (nunca em "cancelar", "voltar", "fechar" ou "não").
+ * O site pode pedir confirmação depois do Salvar. Primeiro tenta os seletores
+ * comuns de diálogo; se o portal renderizar uma caixa sem role/aria/classe
+ * conhecida, procura um ancestral visível que contenha a pergunta e os botões
+ * afirmativo e negativo. Só clica num botão afirmativo explícito (nunca em Não).
  */
 async function responderModalDeConfirmacao() {
-  for (let rodada = 0; rodada < 2; rodada += 1) {
-    let modal = null;
-    for (const doc of collectDocuments()) {
-      const achados = consultarProfundo(doc, SELETOR_DE_MODAL).filter(visivelDeVerdade);
-      const visivel = achados.find((el) => normalizeText(el.textContent || "").length > 0);
-      if (visivel) {
-        modal = visivel;
-        break;
+  const candidatos = [];
+  const vistos = new Set();
+
+  const adicionarCandidato = (el, exigirDoisBotoes) => {
+    if (!el || vistos.has(el) || !visivelDeVerdade(el)) return;
+    vistos.add(el);
+    const textoCompleto = normalizeText(el.innerText || el.textContent || "");
+    if (!textoCompleto || textoCompleto.length > 1200 || !TEXTO_PERGUNTA_DE_CONFIRMAR.test(textoCompleto)) return;
+
+    const botoes = botoesVisiveisDaJanela(el);
+    const positivos = botoes.filter(ehBotaoPositivoModal);
+    const negativos = botoes.filter(ehBotaoNegativoModal);
+    if (positivos.length === 0 || (exigirDoisBotoes && negativos.length === 0)) return;
+
+    // Prefere a caixa menor e aquela que apresenta explicitamente Não/Cancelar.
+    candidatos.push({ el, textoCompleto, botoes, positivos, negativos, pontuacao: (negativos.length ? 1000 : 0) - textoCompleto.length });
+  };
+
+  for (const doc of collectDocuments()) {
+    for (const el of consultarProfundo(doc, SELETOR_DE_MODAL)) adicionarCandidato(el, false);
+
+    // Fallback para caixas como a do ComprasNet: apenas uma <div> com texto e
+    // dois botões, sem atributos ARIA e sem uma classe de modal reconhecida.
+    const botoes = botoesVisiveisDaJanela(doc);
+    const afirmativos = botoes.filter(ehBotaoPositivoModal);
+    for (const botao of afirmativos) {
+      let ancestral = botao.parentElement || botao.getRootNode?.()?.host || null;
+      for (let nivel = 0; ancestral && ancestral !== doc.body && nivel < 14; nivel += 1) {
+        adicionarCandidato(ancestral, true);
+        ancestral = ancestral.parentElement || ancestral.getRootNode?.()?.host || null;
       }
     }
-    if (!modal) return rodada === 0 ? null : { texto: "", clicado: false };
-
-    const texto = normalizeText(modal.textContent || "").slice(0, 160);
-    const botoes = consultarProfundo(modal, "button, input[type='submit'], input[type='button'], [role='button'], a")
-      .filter((el) => visivelDeVerdade(el) && !el.disabled)
-      .filter((el) => {
-        const rotulo = normalizeText(`${el.textContent || ""} ${el.value || ""} ${el.getAttribute("aria-label") || ""}`);
-        return TEXTO_BOTAO_CONFIRMAR.test(rotulo);
-      });
-
-    if (botoes.length === 0) return { texto, clicado: false };
-
-    const alvo = botoes[0];
-    const rotulo = normalizeText(alvo.textContent || alvo.value || "");
-    if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
-    await pausa(900);
-    return { texto, clicado: true, botao: rotulo };
   }
-  return null;
+
+  candidatos.sort((a, b) => b.pontuacao - a.pontuacao);
+  const candidato = candidatos[0];
+  if (!candidato) return null;
+
+  const texto = candidato.textoCompleto.slice(0, 160);
+  const alvo = candidato.positivos[0];
+  const rotulo = rotulosDoBotaoModal(alvo).find((label) => TEXTO_BOTAO_CONFIRMAR.test(label)) || "";
+  if (!clicarDeVerdade(alvo)) return { texto, clicado: false, botao: rotulo };
+  await pausa(900);
+  return { texto, clicado: true, botao: rotulo };
 }
 
 /** Resumo do botão escolhido (id/classe/texto/ícone) para o relatório do popup. */
@@ -2261,16 +2582,50 @@ function numerosNaPagina() {
   return numeros;
 }
 
-async function esperarListaMudar(antes, tempoMs = 5000) {
+async function esperarListaMudar(antes, tempoMs = 8000) {
   const limite = Date.now() + tempoMs;
+  let assinaturaEstavel = "";
+  let desdeEstavel = 0;
+
   while (Date.now() < limite) {
     await pausaConferencia(200);
-    if (assinaturaDaLista() !== antes) {
-      await pausaConferencia(250); // deixa o site terminar de montar os itens
-      return true;
+    const assinatura = assinaturaDaLista();
+
+    // Durante a troca de página o ComprasNet pode limpar a lista antes de
+    // buscar/montar os próximos itens. A lista vazia é uma transição, não a
+    // nova página: nunca a trate como sinal de que a navegação terminou.
+    if (!assinatura || assinatura === antes) {
+      assinaturaEstavel = "";
+      desdeEstavel = 0;
+      continue;
     }
+
+    // Aguarda a paginação terminar de inserir os cartões. Sem essa janela de
+    // estabilidade, o primeiro item da página podia ainda não estar no DOM e
+    // fillItems seguia para o próximo item, pulando-o.
+    if (assinatura !== assinaturaEstavel) {
+      assinaturaEstavel = assinatura;
+      desdeEstavel = Date.now();
+      continue;
+    }
+
+    if (Date.now() - desdeEstavel >= 400) return true;
   }
+
   return false;
+}
+
+/** Espera um item específico aparecer após a navegação para sua página. */
+async function esperarItemNaPagina(itemNumber, tempoMs = 2500) {
+  const chave = normalizeItemNumber(itemNumber);
+  if (!chave) return false;
+
+  const limite = Date.now() + tempoMs;
+  while (Date.now() < limite) {
+    if (numerosNaPagina().has(chave)) return true;
+    await pausaConferencia(150);
+  }
+  return numerosNaPagina().has(chave);
 }
 
 /** Vai para a página número `numero` (1, 2, 3...). */
@@ -2330,7 +2685,7 @@ async function irParaItem(itemNumber) {
 
   const tentarPagina = async (numero) => {
     if (!(await irParaPagina(numero))) return false;
-    return numerosNaPagina().has(chave);
+    return esperarItemNaPagina(chave);
   };
 
   // Já sabemos (ou o site informa) em que página ele estava.
@@ -2352,12 +2707,13 @@ async function irParaItem(itemNumber) {
 // ─── Leitura dos itens da página (extensão → sistema) ────────────────────────
 //
 // Diferente de scanPage() (que procura CAMPOS para preencher), esta leitura
-// extrai os DADOS dos itens já publicados pelo ComprasNet: número, descrição,
-// quantidade, unidade e valor estimado. Opcionalmente expande cada item
-// ("mostrar detalhes") para pegar a descrição completa.
+// extrai os DADOS de fontes públicas (ComprasNet/CNET Mobile e Radar PNCP):
+// número, descrição, quantidade, unidade e valor estimado. Opcionalmente expande
+// cada item ("mostrar detalhes") para pegar a descrição completa.
 
 const PAGE_LABELS = [
   /quantidade\s+solicitada/i,
+  /(?:qtde|qtd)\.?\s+solicitada/i,
   /unidade\s+(?:de\s+)?fornecimento/i,
   /valor\s+estimado/i,
   /proposta\s+n[aã]o\s+cadastrada/i,
@@ -2373,7 +2729,7 @@ const PAGE_LABELS = [
 const ROTULO_DE_CAMPO = new RegExp(
   "^(?:valor\\s+unit[aá]rio(?:\\s*\\(\\s*r\\$\\s*\\))?|valor\\s+total(?:\\s*\\(\\s*r\\$\\s*\\))?|" +
     "valor\\s+estimado(?:\\s*\\(\\s*unit[aá]rio\\s*\\))?|marca(?:\\s*\\/\\s*|\\s+)fabricante|" +
-    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|quantidade(?:\\s+(?:solicitada|ofertada|total))?|" +
+    "modelo(?:\\s*\\/\\s*|\\s+)vers[aã]o|(?:quantidade|qtde|qtd)\\.?(?:\\s+(?:solicitada|ofertada|total))?|" +
     "unidade(?:\\s+(?:de\\s+)?(?:fornecimento|medida))?|descri[cç][aã]o(?:\\s+detalhada)?|" +
     "termo\\s+de\\s+aceita[cç][aã]o|proposta\\s+n[aã]o\\s+cadastrada)\\s*:?\\s*\\*?$",
   "i",
@@ -2439,7 +2795,372 @@ async function expandirTodos(delay) {
   return true;
 }
 
-async function readPageItems({ expandir = true, delay = 400 } = {}) {
+function detectarFonteItens() {
+  const host = String(location.hostname || "").toLowerCase();
+  const pathname = String(location.pathname || "");
+  if (host === "marcossilva023l20.github.io" && /^\/radar-licitacoes-v2(?:\/|$)/.test(pathname)) {
+    return { id: "radar-pncp", nome: "Radar de Licitações PNCP" };
+  }
+  if (host === "cnetmobile.estaleiro.serpro.gov.br") {
+    return { id: "cnetmobile", nome: "Compras.gov.br / CNET Mobile" };
+  }
+  return { id: "comprasnet", nome: "ComprasNet" };
+}
+
+async function readPageItems(options = {}) {
+  const fonte = detectarFonteItens();
+  const { expandir = true, delay = 400 } = options;
+
+  if (fonte.id === "radar-pncp") {
+    const tabela = encontrarTabelaItensRadar();
+    if (!tabela) {
+      return {
+        ok: false,
+        error: 'No Radar, abra “Ver detalhes” da licitação e aguarde a seção “Itens da contratação” aparecer antes de ler.',
+        identificacao: readRadarIdentificacao(),
+        origem: fonte.nome,
+      };
+    }
+    return lerItensDaTabelaFonte(tabela, fonte, { expandir, delay });
+  }
+
+  if (fonte.id === "cnetmobile") {
+    const tabela = encontrarTabelaItensCnet();
+    if (tabela) return lerItensDaTabelaFonte(tabela, fonte, { expandir, delay });
+
+    // Algumas telas do CNET Mobile mostram os itens como cartões em vez de tabela.
+    // Mantém o leitor do ComprasNet como fallback para esses layouts.
+    const resultado = await readLegacyComprasNetItems({ expandir, delay });
+    if (resultado.ok) return { ...resultado, origem: fonte.nome };
+    return {
+      ...resultado,
+      error: 'No CNET Mobile, abra “Acompanhar compra” e aguarde os cartões de itens aparecerem. Se houver uma verificação de segurança, conclua-a manualmente e tente ler novamente.',
+      identificacao: resultado.identificacao || readPageIdentificacao(),
+      origem: fonte.nome,
+    };
+  }
+
+  const resultado = await readLegacyComprasNetItems({ expandir, delay });
+  return { ...resultado, origem: fonte.nome };
+}
+
+function encontrarTituloItensRadar() {
+  const prefixo = "itens da contratacao";
+  const seletores = "h1, h2, h3, h4, h5, h6, [role='heading'], strong, b, p, div, span";
+  return [...document.querySelectorAll(seletores)]
+    .filter(isVisible)
+    .filter((el) => {
+      const texto = normalizeText(el.textContent);
+      // O contador do Radar pode ser um badge irmão sem espaço no DOM:
+      // "Itens da contratação43". Não exija separador textual depois do título.
+      const sufixo = texto.slice(prefixo.length, prefixo.length + 1);
+      return texto.length <= 80 && texto.startsWith(prefixo) && (!sufixo || !/[a-z]/.test(sufixo));
+    })
+    .sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0] || null;
+}
+
+function encontrarRaizDetalheRadar() {
+  const titulo = encontrarTituloItensRadar();
+  if (!titulo) return null;
+  const dialogo = titulo.closest('dialog[open], [role="dialog"], [aria-modal="true"]');
+  if (dialogo) return dialogo;
+
+  let atual = titulo;
+  for (let nivel = 0; atual && nivel < 20; nivel += 1, atual = atual.parentElement) {
+    if (atual.classList?.contains("fixed") && atual.classList?.contains("inset-0")) return atual;
+  }
+  return titulo.closest("section")?.parentElement?.parentElement || titulo.parentElement;
+}
+
+function encontrarTabelaItensRadar() {
+  if (!encontrarTituloItensRadar()) return null;
+  const raiz = encontrarRaizDetalheRadar() || document;
+  const tabelas = [...raiz.querySelectorAll("table")].filter(isVisible);
+  for (const tabela of tabelas) {
+    const analisada = analisarCabecalhoTabelaItens(tabela);
+    if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) continue;
+    return tabela;
+  }
+  return null;
+}
+
+function encontrarTabelaItensCnet() {
+  for (const doc of collectDocuments()) {
+    for (const tabela of doc.querySelectorAll("table")) {
+      if (!isVisible(tabela)) continue;
+      const analisada = analisarCabecalhoTabelaItens(tabela);
+      if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) continue;
+      if (linhasDeDadosDaTabela(tabela, analisada).length > 0) return tabela;
+    }
+  }
+  return null;
+}
+
+function normalizarCabecalhoFonte(texto) {
+  return normalizeText(texto)
+    .replace(/[º°ª]/g, "o")
+    .replace(/[^a-z0-9#]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function analisarCabecalhoTabelaItens(tabela) {
+  const linhas = [...tabela.querySelectorAll("tr")].filter((linha) => linha.closest("table") === tabela);
+  const linhaCabecalho =
+    [...tabela.querySelectorAll("thead tr")].find((linha) => linha.closest("table") === tabela) ||
+    linhas.find((linha) => linha.querySelector("th")) ||
+    linhas[0];
+  if (!linhaCabecalho) return null;
+
+  const cabecalhos = [...linhaCabecalho.cells].map((celula) => normalizarCabecalhoFonte(textoVisivelSemControles(celula) || celula.textContent));
+  const localizar = (regra) => cabecalhos.findIndex((texto) => typeof regra === "function" ? regra(texto) : regra.test(texto));
+  const numero = localizar(/^(?:#|item(?:\s+(?:n|no|numero))?|n|no|numero)(?:\s+(?:do\s+)?item)?$/);
+  const descricao = localizar(/descri|especific|objeto/);
+  const quantidade = localizar(/quant|qtd/);
+  const unidade = localizar(/unid|fornec|medida/);
+  const valorUnitario = localizar((texto) =>
+    /(valor|vl|preco).*(unit|unidade)|(unit|unidade).*(valor|vl|preco)/.test(texto) && !/total/.test(texto),
+  );
+  const valorEstimado = localizar((texto) => /(valor|vl|preco)/.test(texto) && /estimad/.test(texto) && !/total/.test(texto));
+  const valor = valorUnitario >= 0 ? valorUnitario : valorEstimado;
+
+  return {
+    linhaCabecalho,
+    colunas: { numero, descricao, quantidade, unidade, valor },
+  };
+}
+
+function linhasDeDadosDaTabela(tabela, analisada) {
+  const { linhaCabecalho, colunas } = analisada;
+  return [...tabela.querySelectorAll("tr")].filter((linha) => {
+    if (linha === linhaCabecalho || linha.closest("table") !== tabela || !isVisible(linha)) return false;
+    const celulas = [...linha.cells];
+    if (celulas.length <= Math.max(colunas.numero, colunas.descricao, colunas.quantidade)) return false;
+    const numeroTexto = textoVisivelSemControles(celulas[colunas.numero]);
+    const descricaoTexto = textoVisivelSemControles(celulas[colunas.descricao]);
+    return Boolean(/\d/.test(numeroTexto) && descricaoTexto && !/^(?:—|-|n\/a)$/i.test(descricaoTexto.trim()));
+  });
+}
+
+function textoVisivelSemControles(raiz) {
+  if (!raiz) return "";
+  const partes = [];
+  try {
+    const walker = raiz.ownerDocument.createTreeWalker(raiz, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const pai = node.parentElement;
+      if (!pai || !isVisible(pai) || pai.tagName === "SCRIPT" || pai.tagName === "STYLE") continue;
+      if (pai.closest('button, input, select, textarea, [role="button"], [role="link"], a[href], svg, i')) continue;
+      partes.push(node.nodeValue || "");
+    }
+  } catch (_) {
+    return String(raiz.textContent || "").replace(/\s+/g, " ").trim();
+  }
+  return partes.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function textoDaCelulaFonte(celula) {
+  if (!celula) return "";
+  const visivel = textoVisivelSemControles(celula);
+  const titulo = String(celula.getAttribute("title") || "").trim();
+  const texto = titulo.length > visivel.length ? titulo : visivel;
+  return /^(?:[-–—]|n\/?a|nao informado)$/i.test(normalizeText(texto)) ? "" : texto;
+}
+
+function numeroDaCelulaFonte(texto, fallback) {
+  const inicio = String(texto || "").match(/^\s*(?:item\s*)?(\d{1,6})\b/i);
+  const qualquer = inicio || String(texto || "").match(/\b(\d{1,6})\b/);
+  return qualquer ? String(Number(qualquer[1])) : String(fallback);
+}
+
+function botoesMostrarDetalhesDaLinha(linha) {
+  return [...linha.querySelectorAll('button, [role="button"], [aria-expanded="false"]')]
+    .filter((botao) => isVisible(botao) && !botao.disabled)
+    .filter((botao) => {
+      const texto = normalizeText(`${botao.textContent || ""} ${botao.getAttribute("aria-label") || ""} ${botao.getAttribute("title") || ""}`);
+      return !/ocultar|recolher|fechar/.test(texto) && /(mostrar|ver|expandir|abrir).{0,30}detalh|detalh.{0,30}item/.test(texto);
+    });
+}
+
+async function expandirDetalhesDaLinha(linha, delay) {
+  for (const botao of botoesMostrarDetalhesDaLinha(linha)) {
+    if (botao.getAttribute("aria-expanded") === "true") continue;
+    try {
+      botao.click();
+      await sleep(Math.max(0, Number(delay) || 0));
+      return true;
+    } catch (_) {
+      // Se o controle não for clicável, a leitura ainda usa os dados resumidos.
+    }
+  }
+  return false;
+}
+
+function textoDetalhesDaLinha(linha, botoes, linhasDeDados, numeroItem, descricao) {
+  const partes = [textoVisivelSemControles(linha)];
+  for (const botao of botoes) {
+    const ids = `${botao.getAttribute("aria-controls") || ""} ${botao.getAttribute("aria-describedby") || ""}`.split(/\s+/).filter(Boolean);
+    for (const id of ids) {
+      const alvo = linha.ownerDocument.getElementById(id);
+      if (alvo && isVisible(alvo)) partes.push(textoVisivelSemControles(alvo));
+    }
+  }
+
+  let proxima = linha.nextElementSibling;
+  for (let nivel = 0; proxima && nivel < 4 && proxima.tagName === "TR"; nivel += 1, proxima = proxima.nextElementSibling) {
+    if (linhasDeDados.includes(proxima)) break;
+    if (isVisible(proxima)) partes.push(textoVisivelSemControles(proxima));
+  }
+
+  let modalDetalhe = null;
+  const descricaoChave = normalizeText(descricao).slice(0, 50);
+  const regexNumeroItem = new RegExp(`\\bitem\\s*(?:n\\s*o\\s*)?${Number(numeroItem)}\\b`);
+  for (const modal of linha.ownerDocument.querySelectorAll(SELETOR_DE_MODAL)) {
+    if (!isVisible(modal)) continue;
+    const texto = textoVisivelSemControles(modal);
+    const normalizado = normalizeText(texto);
+    if (!/descri|especifica/i.test(normalizado)) continue;
+    const pertenceAoItem =
+      regexNumeroItem.test(normalizado) ||
+      (descricaoChave.length >= 8 && normalizado.includes(descricaoChave));
+    if (!pertenceAoItem) continue;
+    partes.push(texto);
+    modalDetalhe = modal;
+    break;
+  }
+
+  return {
+    texto: partes.filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
+    modal: modalDetalhe,
+  };
+}
+
+function fecharModalDetalheFonte(modal) {
+  if (!modal || !isVisible(modal)) return false;
+  const botaoFechar = [...modal.querySelectorAll('button, [role="button"], a')].find((botao) => {
+    if (!isVisible(botao) || botao.disabled) return false;
+    const rotulos = [botao.textContent, botao.getAttribute("aria-label"), botao.getAttribute("title")]
+      .filter(Boolean)
+      .map((rotulo) => normalizeText(rotulo));
+    return rotulos.some((rotulo) => /^(?:fechar|close)(?:\s+(?:detalhes|janela|modal))?$/.test(rotulo) || /^(?:×|x)$/.test(rotulo.trim()));
+  });
+  if (!botaoFechar) return false;
+  try {
+    botaoFechar.click();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function extrairDescricaoDetalhadaFonte(texto) {
+  const bruto = String(texto || "").replace(/\s+/g, " ").trim();
+  const match = bruto.match(/(?:descri[cç][aã]o\s+(?:detalhada|complementar)|especifica[cç][aã]o(?:\s+do\s+item)?)\s*:?\s*(.+?)(?=\s+(?:quantidade(?:\s+(?:solicitada|total))?|unidade(?:\s+(?:de\s+)?(?:fornecimento|medida))?|valor(?:\s+(?:estimado|unit[aá]rio|total))?|marca(?:\s*\/\s*|\s+)fabricante|modelo(?:\s*\/\s*|\s+)vers[aã]o)\s*[:：]|$)/i);
+  if (!match) return "";
+  return limparDescricao(match[1]).slice(0, 4000);
+}
+
+async function lerItensDaTabelaFonte(tabela, fonte, { expandir = true, delay = 400 } = {}) {
+  const analisada = analisarCabecalhoTabelaItens(tabela);
+  if (!analisada || analisada.colunas.numero < 0 || analisada.colunas.descricao < 0 || analisada.colunas.quantidade < 0) {
+    return { ok: false, error: "A tabela de itens desta página não tem colunas reconhecidas." };
+  }
+
+  const linhas = linhasDeDadosDaTabela(tabela, analisada);
+  if (linhas.length === 0) return { ok: false, error: "A seção de itens apareceu, mas ainda não há linhas visíveis para ler." };
+
+  const identificacao = fonte.id === "radar-pncp" ? readRadarIdentificacao() : readPageIdentificacao();
+  const avisos = [];
+  const itens = [];
+  let expandidos = 0;
+  abortRequested = false;
+  rodandoAgora = true;
+  mostrarPainel();
+  definirStatusDoPainel(`Lendo ${linhas.length} item(ns) de ${fonte.nome}...`);
+  atualizarPainel();
+
+  if (expandir) showProgressBar(0, linhas.length);
+  try {
+    for (const [indice, linha] of linhas.entries()) {
+      if (abortRequested) {
+        avisos.push("Leitura interrompida antes do fim da lista.");
+        break;
+      }
+      await aguardarSePausado();
+      if (abortRequested) break;
+
+      const botoes = botoesMostrarDetalhesDaLinha(linha);
+      if (expandir && (await expandirDetalhesDaLinha(linha, delay))) expandidos += 1;
+
+      const celulas = [...linha.cells];
+      const get = (coluna) => coluna >= 0 ? textoDaCelulaFonte(celulas[coluna]) : "";
+      const numeroItem = numeroDaCelulaFonte(get(analisada.colunas.numero), indice + 1);
+      const descricao = limparDescricao(get(analisada.colunas.descricao).replace(new RegExp(`^\\s*(?:item\\s*)?${numeroItem}\\s*[).:\\-–—|]*\\s*`, "i"), ""));
+      const detalhe = textoDetalhesDaLinha(linha, botoes, linhas, numeroItem, descricao);
+      const descricaoDetalhada = extrairDescricaoDetalhadaFonte(detalhe.texto);
+      if (detalhe.modal) fecharModalDetalheFonte(detalhe.modal);
+      const item = {
+        numeroItem,
+        descricao,
+        descricaoDetalhada,
+        quantidade: get(analisada.colunas.quantidade),
+        unidade: get(analisada.colunas.unidade),
+        valorEstimado: get(analisada.colunas.valor),
+      };
+      if (!descricao) avisos.push(`Item ${numeroItem}: confira a descrição antes de enviar.`);
+      itens.push(item);
+      if (expandir) showProgressBar(indice + 1, linhas.length);
+    }
+  } finally {
+    if (expandir) removeProgressBar();
+    rodandoAgora = false;
+    definirStatusDoPainel(`Leitura concluída: ${itens.length} item(ns) de ${fonte.nome}.`);
+    atualizarPainel();
+  }
+
+  return {
+    ok: itens.length > 0,
+    error: itens.length ? undefined : "Não consegui ler os itens visíveis desta tabela.",
+    url: location.href,
+    origem: fonte.nome,
+    identificacao,
+    itens,
+    total: itens.length,
+    expandidos,
+    paginas: 1,
+    avisos,
+  };
+}
+
+function readRadarIdentificacao() {
+  const raiz = encontrarRaizDetalheRadar() || document;
+  const texto = String(raiz.innerText || raiz.textContent || "").replace(/\s+/g, " ").trim();
+  const numeroCompra = (
+    firstMatch(texto, /n[ºo°.]?\s*(?:da\s*)?compra\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
+    firstMatch(texto, /n[ºo°.]?\s*\/\s*ano\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
+    firstMatch(texto, /\b(\d{14}-\d-\d{4,10}\/\d{4})\b/)
+  ).replace(/\s+/g, "");
+  const tituloObjeto = raiz.querySelector("header h1, header h2, header h3")?.textContent?.trim() || "";
+  const objetoRotulado = firstMatch(texto, /objeto\s*:?\s*(.{10,300}?)(?=\s+(?:cnpj|unidade|uasg|processo|sistema de origem)\b|$)/i);
+  const uasg =
+    firstMatch(texto, /n[ºo°.]?\s*uasg(?:\s*\([^)]*\))?\s*:?\s*(\d{5,6})/i) ||
+    firstMatch(texto, /uasg\s*:?\s*(\d{5,6})/i) ||
+    firstMatch(texto, /uasg\b[^0-9]{0,80}(\d{5,6})/i);
+  const dataLimite = firstMatch(
+    texto,
+    /(?:encerramento\s+das\s+propostas|encerra\s+propostas|data\s+limite)[^0-9]{0,60}(\d{2}\/\d{2}\/\d{4}(?:\s*\d{1,2}:\d{2})?)/i,
+  );
+  return {
+    uasg,
+    numeroCompra,
+    objeto: tituloObjeto || objetoRotulado,
+    dataLimite,
+    url: location.href,
+  };
+}
+
+async function readLegacyComprasNetItems({ expandir = true, delay = 400 } = {}) {
   const identificacao = readPageIdentificacao();
   rodandoAgora = true;
   mostrarPainel();
@@ -2464,6 +3185,9 @@ async function readPageItems({ expandir = true, delay = 400 } = {}) {
 
     const resultado = await lerItensDaPaginaAtual({ expandir, delay, identificacao });
     if (!resultado.ok && pagina === 1) {
+      rodandoAgora = false;
+      definirStatusDoPainel(resultado.error || "Não encontrei itens nesta página.");
+      atualizarPainel();
       return {
         ok: false,
         error: resultado.error,
@@ -2596,6 +3320,7 @@ function readPageIdentificacao() {
   } catch (_) {
     texto = "";
   }
+  texto = `${texto} ${textoDeCamposIdentificacao()}`.replace(/\s+/g, " ").trim();
 
   const uasg =
     firstMatch(texto, /uasg\s*:?\s*(\d{5,6})\b/i) ||
@@ -2603,6 +3328,7 @@ function readPageIdentificacao() {
     "";
 
   const numeroCompra =
+    firstMatch(texto, /dispensa\s+eletr[oô]nica\s+n[ºo°.]?\s*:?\s*(\d{1,8}\s*\/\s*\d{4})/i) ||
     firstMatch(texto, /(?:n[ºo°.]?\s*(?:da\s*)?compra|n[uú]mero\s+da\s+compra)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
     firstMatch(texto, /(?:processo|n[ºo°.]?\s*processo)\s*:?\s*([0-9][0-9./-]{5,30})/i) ||
     firstMatch(texto, /\b(\d{15,20})\b/) ||
@@ -2626,6 +3352,22 @@ function readPageIdentificacao() {
   };
 }
 
+function textoDeCamposIdentificacao() {
+  const partes = [];
+  for (const doc of collectDocuments()) {
+    for (const control of doc.querySelectorAll("input, select, textarea")) {
+      if (!isVisible(control)) continue;
+      const sinais = normalizeText(getFieldSignals(control).all.join(" "));
+      const valor = String(control.value ?? control.selectedOptions?.[0]?.textContent ?? "").trim();
+      if (!valor) continue;
+      if (/uasg|unidade compradora|unidade gestora/.test(sinais)) partes.push(`UASG: ${valor}`);
+      if (/(?:numero|n|no)\s*(?:da\s*)?compra|compra\s*(?:numero|n|no)/.test(sinais)) partes.push(`Número da compra: ${valor}`);
+      if (/numero\s*(?:do\s*)?processo|processo\s*(?:numero|n|no)/.test(sinais)) partes.push(`Processo: ${valor}`);
+    }
+  }
+  return partes.join(" ");
+}
+
 function numeroCompraDaUrl() {
   try {
     const url = new URL(location.href);
@@ -2646,7 +3388,7 @@ function numeroCompraDaUrl() {
 /**
  * Encontra os blocos de item. Um bloco é o menor elemento visível que:
  *   - começa com o número do item;
- *   - contém "Quantidade solicitada";
+ *   - contém "Quantidade solicitada" ou "Qtde solicitada";
  *   - contém "Valor estimado" ou um valor em R$.
  * Blocos repetidos (contêineres maiores que envolvem os itens) são descartados.
  */
@@ -2681,14 +3423,14 @@ function findItemBlocks({ exigirVisivel = true } = {}) {
       if (!isVisible(el)) continue;
       const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
       if (!bruto || bruto.length > 3000) continue;
-      if (!/quantidade\s+solicitada/i.test(bruto)) continue;
+      if (!/(?:quantidade|qtde|qtd)\.?\s+solicitada/i.test(bruto)) continue;
       if (!/valor\s+estimado/i.test(bruto) && !/r\$/i.test(bruto)) continue;
 
       // Confirma pelo que está VISÍVEL: itens escondidos atrás de um
       // "Mostrar todos os itens" não contam (quem cuida disso é expandirTodos).
       if (exigirVisivel) {
         const visivel = textoVisivel(el);
-        if (!visivel || !/quantidade\s+solicitada/i.test(visivel)) continue;
+        if (!visivel || !/(?:quantidade|qtde|qtd)\.?\s+solicitada/i.test(visivel)) continue;
       }
 
       const numero = itemNumberFromBlock(el);
@@ -2728,7 +3470,7 @@ function itemNumberFromBlock(el) {
   const porAtributo = getItemNumberFromAttributes(el);
   if (porAtributo) return porAtributo;
 
-  const bruto = (el.textContent || "").replace(/\s+/g, " ").trim();
+  const bruto = (textoVisivel(el) || el.textContent || "").replace(/\s+/g, " ").trim();
   const porTexto = getLeadingItemNumber(bruto);
   if (porTexto) return porTexto;
 
@@ -2785,11 +3527,13 @@ function valorDoCampo(bloco, regexRotulo, regexValor) {
 
 function extractItemData(bloco, numero) {
   const quantidade =
-    valorDoCampo(bloco, /quantidade\s+(?:solicitada|ofertada)/i, /[0-9][0-9.,]*/) ||
-    valorDoCampo(bloco, /quantidade/i, /[0-9][0-9.,]*/);
+    valorDoCampo(bloco, /(?:quantidade|qtde|qtd)\.?\s+(?:solicitada|ofertada)/i, /[0-9][0-9.,]*/) ||
+    valorDoCampo(bloco, /(?:quantidade|qtde|qtd)\b/i, /[0-9][0-9.,]*/);
   const unidade =
-    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?fornecimento/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
-    valorDoCampo(bloco, /unidade\s+(?:de\\s+)?medida/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/);
+    valorDoCampo(bloco, /unidade\s+(?:de\s+)?fornecimento/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /unidade\s+(?:de\s+)?medida/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /unidade(?!\s+(?:de\s+)?(?:fornecimento|medida))/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/) ||
+    valorDoCampo(bloco, /\bunid\.?\b/i, /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ./-]{0,24}/);
   const valorEstimado = valorDoCampo(
     bloco,
     /valor\s+estimado(?:\s*\(\s*unit[aá]rio\s*\))?/i,
@@ -3261,10 +4005,12 @@ const PAINEL_ID = "__comprasnet_bot_painel__";
 const PAINEL_POSICAO = "__comprasnet_bot_painel_pos__";
 
 let rodandoAgora = false;
+let painelModo = "proposta";
 let painelStatus = "Pronto.";
 const painelLog = [];
 
 function removerPainel() {
+  if (disputaAutomatica?.ativo) pararDisputaAutomatica("Painel fechado; monitoramento de lances interrompido.");
   document.getElementById(PAINEL_ID)?.remove();
 }
 
@@ -3285,41 +4031,107 @@ function definirStatusDoPainel(texto) {
   if (el) el.textContent = texto;
 }
 
+function definirModoPainel(modo) {
+  const novoModo = modo === "disputa" ? "disputa" : "proposta";
+  if ((rodandoAgora || rodandoPeloPainel) && novoModo !== painelModo) return;
+  if (disputaAutomatica?.ativo && novoModo !== "disputa") {
+    mostrarStatusDisputa("Pare o Modo Disputa antes de voltar ao Modo Proposta.", "warning");
+    return;
+  }
+  if (novoModo === painelModo) return;
+
+  painelModo = novoModo;
+  painelStatus = novoModo === "disputa"
+    ? "Selecione a proposta correspondente à tela de disputa e inicie a automação explicitamente."
+    : "Pronto.";
+  registrarNoPainel(novoModo === "disputa" ? "⚔️ Modo Disputa selecionado. O envio só começa após validação e confirmação." : "📝 Modo Proposta selecionado.");
+  atualizarPainel();
+  if (novoModo === "disputa") carregarItensDisputaNoPainel();
+}
+
 function atualizarPainel() {
   const painel = document.getElementById(PAINEL_ID);
   if (!painel) return;
 
   const ocupado = Boolean(rodandoAgora || rodandoPeloPainel);
+  const emDisputa = painelModo === "disputa";
+  const disputaAtiva = Boolean(disputaAutomatica?.ativo);
   const iniciar = document.getElementById(`${PAINEL_ID}_iniciar`);
   if (iniciar) {
-    iniciar.disabled = ocupado;
-    iniciar.style.opacity = ocupado ? "0.6" : "1";
-    iniciar.textContent = ocupado ? "⏳ Rodando..." : "▶ Iniciar";
+    iniciar.disabled = ocupado || (emDisputa && disputaAtiva);
+    iniciar.style.opacity = iniciar.disabled ? "0.6" : "1";
+    iniciar.textContent = ocupado
+      ? "⏳ Rodando..."
+      : emDisputa
+        ? disputaAtiva ? "⚔️ Monitorando..." : "▶ Iniciar lances"
+        : "▶ Iniciar";
+    iniciar.title = emDisputa
+      ? disputaAtiva ? "A automação está ativa; use Parar para interromper." : "Valida a disputa, pede confirmação e pode enviar lances reais automaticamente."
+      : "";
+  }
+  const modoProposta = document.getElementById(`${PAINEL_ID}_modo_proposta`);
+  const modoDisputa = document.getElementById(`${PAINEL_ID}_modo_disputa`);
+  if (modoProposta) {
+    modoProposta.style.background = emDisputa ? "#fff" : "#ede9fe";
+    modoProposta.style.color = emDisputa ? "#475569" : "#5b21b6";
+    modoProposta.style.borderColor = emDisputa ? "#cbd5e1" : "#8b5cf6";
+    modoProposta.disabled = ocupado || disputaAtiva;
+  }
+  if (modoDisputa) {
+    modoDisputa.style.background = emDisputa ? "#ede9fe" : "#fff";
+    modoDisputa.style.color = emDisputa ? "#5b21b6" : "#475569";
+    modoDisputa.style.borderColor = emDisputa ? "#8b5cf6" : "#cbd5e1";
+    modoDisputa.disabled = ocupado;
+  }
+  const avisoDisputa = document.getElementById(`${PAINEL_ID}_aviso_disputa`);
+  if (avisoDisputa) {
+    avisoDisputa.style.display = emDisputa ? "block" : "none";
+    avisoDisputa.textContent = disputaAtiva
+      ? disputaAutomatica.pausado
+        ? "⏸ Monitoramento pausado; nenhum novo lance será enviado até retomar."
+        : "⚠️ Envio real ativo: só envia se o polegar estiver para baixo e vermelho, usando o Valor Mínimo atualizado. Use Parar para interromper."
+      : "Pode enviar lances reais após sua confirmação. Só polegar para baixo vermelho autoriza; polegar verde ou estado incerto não envia. Revalida o Valor Mínimo atual antes de cada clique.";
+  }
+  const itensDisputa = document.getElementById(`${PAINEL_ID}_itens_disputa`);
+  if (itensDisputa) itensDisputa.style.display = emDisputa ? "block" : "none";
+  const lerAreaDisputa = document.getElementById(`${PAINEL_ID}_ler_area_disputa`);
+  if (lerAreaDisputa) lerAreaDisputa.style.display = emDisputa ? "block" : "none";
+  const rodape = document.getElementById(`${PAINEL_ID}_rodape`);
+  if (rodape) {
+    rodape.textContent = emDisputa
+      ? disputaAtiva ? "Automação de lances real ativa · piso obrigatório por item" : "Melhor valor − intervalo · nunca abaixo do Valor Mínimo"
+      : "Preenche e salva item por item · 10 itens por página";
   }
   const pausar = document.getElementById(`${PAINEL_ID}_pausar`);
   if (pausar) {
-    // Pausar fica sempre disponível: dá para deixar o bot já pausado antes de
-    // iniciar (ele espera você mandar continuar).
-    pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
-    pausar.style.background = botPausado ? "#168821" : "#6d28d9";
+    pausar.disabled = emDisputa ? !disputaAtiva : false;
+    pausar.style.opacity = pausar.disabled ? "0.6" : "1";
+    pausar.textContent = emDisputa
+      ? disputaAutomatica.pausado ? "▶ Retomar" : "⏸ Pausar"
+      : botPausado ? "▶ Continuar" : "⏸ Pausar";
+    pausar.style.background = (emDisputa ? disputaAutomatica.pausado : botPausado) ? "#168821" : "#6d28d9";
   }
   const parar = document.getElementById(`${PAINEL_ID}_parar`);
   if (parar) {
-    parar.disabled = !ocupado;
-    parar.style.opacity = ocupado ? "1" : "0.6";
+    parar.disabled = emDisputa ? !disputaAtiva : !ocupado;
+    parar.style.opacity = parar.disabled ? "0.6" : "1";
   }
+  const seletorProposta = document.getElementById(`${PAINEL_ID}_proposta`);
+  if (seletorProposta) seletorProposta.disabled = ocupado || disputaAtiva;
   const recarregar = document.getElementById(`${PAINEL_ID}_recarregar`);
-  if (recarregar) recarregar.disabled = ocupado;
+  if (recarregar) recarregar.disabled = ocupado || disputaAtiva;
   const seletor = document.getElementById(`${PAINEL_ID}_proposta`);
-  if (seletor) seletor.disabled = ocupado;
+  if (seletor) seletor.disabled = ocupado || disputaAtiva;
 
   const el = document.getElementById(`${PAINEL_ID}_status`);
   if (el) el.textContent = botPausado ? `⏸ Pausado — ${painelStatus}` : painelStatus;
 }
 
-function mostrarPainel() {
+function mostrarPainel(modo) {
+  if (modo === "disputa" || modo === "proposta") definirModoPainel(modo);
   if (document.getElementById(PAINEL_ID)) {
     atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
     return;
   }
 
@@ -3360,7 +4172,18 @@ function mostrarPainel() {
       <button id="${PAINEL_ID}_fechar" title="Fechar painel" style="background:transparent;border:0;color:#fff;cursor:pointer;font-size:14px;">✕</button>
     </div>
     <div style="padding:10px;">
-      <label style="display:block;font-weight:600;margin-bottom:4px;color:#334155;" for="${PAINEL_ID}_proposta">📋 Proposta a preencher</label>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button id="${PAINEL_ID}_modo_proposta" type="button" style="flex:1;padding:6px;border:1px solid #8b5cf6;border-radius:8px;background:#ede9fe;color:#5b21b6;font:inherit;font-weight:700;cursor:pointer;">📝 Proposta</button>
+        <button id="${PAINEL_ID}_modo_disputa" type="button" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font:inherit;font-weight:700;cursor:pointer;">⚔️ Disputa</button>
+      </div>
+      <div id="${PAINEL_ID}_aviso_disputa" role="status" style="display:none;margin-bottom:8px;padding:7px;border:1px solid #fde68a;border-radius:8px;background:#fef9c3;color:#92400e;font-size:10px;">
+        A automação só inicia após validação da proposta e sua confirmação explícita.
+      </div>
+      <div id="${PAINEL_ID}_itens_disputa" style="display:none;margin-bottom:8px;">
+        <div style="font-weight:700;font-size:10px;color:#475569;margin-bottom:4px;">📦 Itens e valores cadastrados</div>
+        <div id="${PAINEL_ID}_lista_disputa" role="list" style="max-height:120px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#f8fafc;color:#475569;font-size:10px;">Selecione uma proposta para consultar os valores.</div>
+      </div>
+      <label style="display:block;font-weight:600;margin-bottom:4px;color:#334155;" for="${PAINEL_ID}_proposta">📋 Proposta / licitação</label>
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <select id="${PAINEL_ID}_proposta" style="flex:1;min-width:0;padding:6px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;background:#fff;">
           <option value="">Carregando propostas…</option>
@@ -3368,32 +4191,83 @@ function mostrarPainel() {
         <button id="${PAINEL_ID}_recarregar" title="Recarregar propostas" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;cursor:pointer;">🔄</button>
       </div>
       <div id="${PAINEL_ID}_status" style="font-weight:600;margin-bottom:8px;">Pronto.</div>
+      <div id="${PAINEL_ID}_ler_area_disputa" style="display:none; margin-bottom:8px;">
+        <button id="${PAINEL_ID}_ler_pagina" style="width:100%;padding:6px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1e40af;font:inherit;font-weight:600;cursor:pointer;font-size:11px;">📖 Ler página de disputa</button>
+      </div>
       <div style="display:flex;gap:6px;">
         <button id="${PAINEL_ID}_iniciar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#168821;color:#fff;font:inherit;font-weight:700;cursor:pointer;">▶ Iniciar</button>
         <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#6d28d9;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
         <button id="${PAINEL_ID}_parar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#e52207;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏹ Parar</button>
       </div>
       <pre id="${PAINEL_ID}_log" style="margin:8px 0 0;max-height:110px;overflow:auto;white-space:pre-wrap;font-family:monospace;font-size:11px;line-height:1.4;color:#475569;"></pre>
-      <div style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
+      <div id="${PAINEL_ID}_rodape" style="margin-top:6px;font-size:10px;color:#94a3b8;">Preenche e salva item por item · 10 itens por página</div>
     </div>`;
 
   document.body.appendChild(painel);
 
   document.getElementById(`${PAINEL_ID}_fechar`).addEventListener("click", removerPainel);
   document.getElementById(`${PAINEL_ID}_recarregar`).addEventListener("click", () => carregarPropostasNoPainel());
-  document.getElementById(`${PAINEL_ID}_proposta`).addEventListener("change", () => atualizarPainel());
-  document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => iniciarPeloPainel());
+  document.getElementById(`${PAINEL_ID}_proposta`).addEventListener("change", () => {
+    atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
+  });
+  document.getElementById(`${PAINEL_ID}_modo_proposta`).addEventListener("click", () => definirModoPainel("proposta"));
+  document.getElementById(`${PAINEL_ID}_modo_disputa`).addEventListener("click", () => definirModoPainel("disputa"));
+  document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => {
+    if (painelModo === "disputa") {
+      const propostaId = document.getElementById(`${PAINEL_ID}_proposta`)?.value;
+      iniciarDisputaAutomatica(propostaId)
+        .then((resultado) => {
+          const mensagem = resultado?.message || resultado?.error || "Não consegui iniciar o Modo Disputa.";
+          mostrarStatusDisputa(mensagem, resultado?.ok ? "success" : "warning");
+          if (!resultado?.ok) registrarNoPainel(`⚠️ ${mensagem}`);
+        })
+        .catch((erro) => mostrarStatusDisputa(`Falha ao iniciar: ${erro?.message || "erro desconhecido"}.`, "warning"));
+      return;
+    }
+    iniciarPeloPainel();
+  });
   document.getElementById(`${PAINEL_ID}_pausar`).addEventListener("click", () => {
+    if (painelModo === "disputa") {
+      if (!pausarOuRetomarDisputaAutomatica()) mostrarStatusDisputa("Nenhum monitoramento de disputa está ativo.", "warning");
+      return;
+    }
     botPausado = !botPausado;
     registrarNoPainel(botPausado ? "⏸ Bot pausado." : "▶ Bot retomado.");
     atualizarPainel();
   });
   document.getElementById(`${PAINEL_ID}_parar`).addEventListener("click", () => {
+    if (painelModo === "disputa") {
+      if (!pararDisputaAutomatica("Monitoramento parado pelo usuário.")) mostrarStatusDisputa("Nenhum monitoramento de disputa estava ativo.", "warning");
+      return;
+    }
     abortRequested = true;
     botPausado = false;
     registrarNoPainel("⏹ Parando depois do item atual...");
     atualizarPainel();
   });
+  const botaoLerPainel = document.getElementById(`${PAINEL_ID}_ler_pagina`);
+  if (botaoLerPainel) {
+    botaoLerPainel.addEventListener("click", () => {
+      botaoLerPainel.disabled = true;
+      const textoOriginal = botaoLerPainel.textContent;
+      botaoLerPainel.textContent = "⏳ Lendo...";
+      try {
+        const resultado = lerPaginaDisputa();
+        if (!resultado.ok) {
+          mostrarStatusDisputa(resultado.error, "warning");
+          registrarNoPainel(`⚠️ ${resultado.error}`);
+        } else {
+          registrarNoPainel(`📖 ${resultado.message}`);
+        }
+      } catch (erro) {
+        mostrarStatusDisputa(`Erro na leitura: ${erro?.message || "erro"}`, "warning");
+      } finally {
+        botaoLerPainel.disabled = false;
+        botaoLerPainel.textContent = textoOriginal;
+      }
+    });
+  }
 
   // Arrastar pelo cabeçalho.
   const topo = document.getElementById(`${PAINEL_ID}_topo`);
@@ -3441,7 +4315,7 @@ let rodandoPeloPainel = false;
  * worker da extensão (que tem permissão de host) e receber o JSON de volta.
  * O fetch direto fica como reserva para ambientes onde a ponte não existe.
  */
-async function chamarApi(url, { method = "GET", body, headers } = {}) {
+async function chamarApi(url, { method = "GET", body, headers, cache } = {}) {
   try {
     const ponte = await chrome.runtime.sendMessage({
       action: "api_request",
@@ -3449,6 +4323,7 @@ async function chamarApi(url, { method = "GET", body, headers } = {}) {
       method,
       headers: headers || (body ? { "Content-Type": "application/json" } : undefined),
       body,
+      cache,
     });
     if (ponte && (typeof ponte.status === "number" || ponte.ok)) {
       return { ok: Boolean(ponte.ok), status: ponte.status ?? 0, dados: ponte.dados, via: "extensão" };
@@ -3461,6 +4336,7 @@ async function chamarApi(url, { method = "GET", body, headers } = {}) {
     method,
     headers: headers || (body ? { "Content-Type": "application/json" } : undefined),
     body,
+    ...(cache ? { cache } : {}),
   });
   let dados = null;
   try {
@@ -3491,6 +4367,7 @@ async function carregarPropostasNoPainel() {
     select.innerHTML = '<option value="">Configure a URL do sistema (⚙️ Config)</option>';
     definirStatusDoPainel("Configure a URL do sistema no popup (⚙️ Config).");
     atualizarPainel();
+    if (painelModo === "disputa") carregarItensDisputaNoPainel();
     return;
   }
 
@@ -3507,6 +4384,7 @@ async function carregarPropostasNoPainel() {
       select.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
       definirStatusDoPainel("Nenhuma proposta no sistema ainda.");
       atualizarPainel();
+      if (painelModo === "disputa") carregarItensDisputaNoPainel();
       return;
     }
 
@@ -3543,6 +4421,1365 @@ async function carregarPropostasNoPainel() {
     );
   }
   atualizarPainel();
+  if (painelModo === "disputa") carregarItensDisputaNoPainel();
+}
+
+let requisicaoItensDisputa = 0;
+
+const DISPUTA_INTERVALO_VERIFICACAO_MS = 1200;
+const DISPUTA_INTERVALO_ENTRE_ENVIOS_MS = 1200;
+const DISPUTA_INTERVALO_ATUALIZACAO_PISOS_MS = 5000;
+const DISPUTA_TIMEOUT_CONFIRMACAO_MS = 15000;
+// Depois de digitar, o portal valida o valor fora do evento e habilita o
+// “Enviar lance” um pouco depois; é este o tempo que esperamos por ele.
+const DISPUTA_ESPERA_HABILITAR_MS = 4000;
+let disputaAutomatica = {
+  ativo: false,
+  pausado: false,
+  status: "inativo",
+  propostaId: "",
+  proposta: null,
+  itensPorNumero: new Map(),
+  observer: null,
+  intervalo: null,
+  agendamento: null,
+  processando: false,
+  ultimaSubmissaoEm: 0,
+  pendente: null,
+  ultimasTentativas: new Map(),
+  avisosRegistrados: new Set(),
+  itensNoPiso: new Set(),
+  situacoesPorNumero: new Map(),
+};
+
+function textoDaDisputa(el) {
+  if (!el) return "";
+  return String(el.innerText || el.textContent || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizarNumeroDispensaDisputa(valor, uasgEsperada = "") {
+  // O código tem 17 dígitos: mantenha-o como texto para não perder precisão.
+  const texto = typeof valor === "string" ? valor.trim() : "";
+  const codigoCompra = texto.match(/^(\d{6})(\d{2})(\d{5})(\d{4})$/);
+  if (codigoCompra) {
+    // Compras.gov.br: UASG (6) + modalidade (2) + compra (5) + ano (4).
+    // Nesta tela só há integração com dispensa (06). A UASG embutida também
+    // precisa coincidir com o cadastro; a validação contra a página vem depois.
+    const [, uasgCodigo, modalidade, numero, ano] = codigoCompra;
+    if (!/^\d{6}$/.test(uasgEsperada) || uasgCodigo !== uasgEsperada || modalidade !== "06" || Number(numero) === 0) return "";
+    return `${Number(numero)}/${ano}`;
+  }
+
+  // Não ignore um código completo conflitante em favor de um número/ano que
+  // apareça no mesmo campo; formatos misturados ou ambíguos ficam bloqueados.
+  if (/\d{17}/.test(texto)) return "";
+  const numeros = [...texto.matchAll(/(?:^|\D)(\d{1,8})\s*\/\s*(\d{4})(?!\d)/g)];
+  if (numeros.length !== 1 || Number(numeros[0][1]) === 0) return "";
+  return `${Number(numeros[0][1])}/${numeros[0][2]}`;
+}
+
+function extrairIdentificacaoDisputaPagina() {
+  const texto = normalizeText(textoDaDisputa(document.body));
+  const numero = texto.match(/dispensa\s+eletronica\s+(?:n\s*[º°o]?\s*)?(\d{1,8}\s*\/\s*\d{4})/i);
+  const uasg = texto.match(/\buasg\b\s*[:#-]?\s*(\d{6,8})/i);
+  return {
+    numeroDispensa: numero ? normalizarNumeroDispensaDisputa(numero[1]) : "",
+    uasg: uasg ? uasg[1] : "",
+    telaEnviarLance: /enviar\s+lance/i.test(texto),
+    texto,
+  };
+}
+
+/** Converte texto brasileiro ou decimal do banco para unidades de 0,0001. */
+function parseValorUnidadesDisputa(valor) {
+  if (valor === null || valor === undefined || valor === "") return null;
+  if (typeof valor === "number") {
+    if (!Number.isFinite(valor) || valor < 0) return null;
+    const unidades = Math.round(valor * 10000);
+    return Number.isSafeInteger(unidades) ? unidades : null;
+  }
+  const bruto = String(valor).trim().replace(/[^\d,.-]/g, "");
+  if (!bruto || !/\d/.test(bruto)) return null;
+  const decimal = bruto.includes(",")
+    ? bruto.replace(/\./g, "").replace(",", ".")
+    : bruto;
+  const numero = Number(decimal);
+  if (!Number.isFinite(numero) || numero < 0) return null;
+  const unidades = Math.round(numero * 10000);
+  return Number.isSafeInteger(unidades) ? unidades : null;
+}
+
+function formatarInputDisputa(unidades) {
+  if (!Number.isSafeInteger(unidades) || unidades < 0) return "";
+  return `${Math.floor(unidades / 10000)},${String(unidades % 10000).padStart(4, "0")}`;
+}
+
+function formatarValorDisputa(unidades) {
+  if (!Number.isSafeInteger(unidades) || unidades < 0) return "não identificado";
+  const inteiro = Math.floor(unidades / 10000).toLocaleString("pt-BR");
+  return `R$ ${inteiro},${String(unidades % 10000).padStart(4, "0")}`;
+}
+
+function trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
+  const inicioRotulo = texto.indexOf(rotulo);
+  if (inicioRotulo < 0) return "";
+  const inicioValor = inicioRotulo + rotulo.length;
+  const proximos = rotulosSeguintes
+    .map((proximo) => texto.indexOf(proximo, inicioValor))
+    .filter((indice) => indice >= 0);
+  const fimValor = proximos.length ? Math.min(...proximos) : texto.length;
+  return texto.slice(inicioValor, fimValor);
+}
+
+function valorAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
+  return analisarMedidaDisputa(trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes)).unidades;
+}
+
+function lerIntervaloMinimoDisputa(texto) {
+  const leitura = analisarMedidaDisputa(trechoAposRotuloDisputa(texto, "intervalo minimo entre lances", ["enviar lance"]), "intervalo");
+  return leitura.motivo === "ok" ? { tipo: leitura.tipo, unidades: leitura.unidades } : null;
+}
+
+function formatarPercentualDisputa(unidades) {
+  if (!Number.isSafeInteger(unidades) || unidades < 0) return "não identificado";
+  const inteiro = Math.floor(unidades / 10000).toLocaleString("pt-BR");
+  return `${inteiro},${String(unidades % 10000).padStart(4, "0")}%`;
+}
+
+function calcularDecrementoDisputa(melhor, intervalo) {
+  if (!Number.isSafeInteger(melhor) || melhor <= 0 || !intervalo || !Number.isSafeInteger(intervalo.unidades) || intervalo.unidades <= 0) return null;
+  if (intervalo.tipo === "valor") return intervalo.unidades;
+  if (intervalo.tipo !== "percentual") return null;
+
+  // Unidades de preço e percentual usam 0,0001. Divide por 100% e arredonda
+  // para cima à menor unidade aceita, para nunca ficar aquém do intervalo.
+  const divisor = 1_000_000n;
+  const numerador = BigInt(melhor) * BigInt(intervalo.unidades);
+  const decremento = (numerador + divisor - 1n) / divisor;
+  return decremento > 0n && decremento <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(decremento) : null;
+}
+
+function formatarIntervaloDisputa(intervalo, decrementoUnidades) {
+  if (intervalo?.tipo === "percentual") {
+    return `${formatarPercentualDisputa(intervalo.unidades)} (${formatarValorDisputa(decrementoUnidades)})`;
+  }
+  return formatarValorDisputa(intervalo?.unidades);
+}
+
+function intervalosIguaisDisputa(a, b) {
+  return Boolean(a && b && a.tipo === b.tipo && a.unidades === b.unidades);
+}
+
+const ROTULOS_PRECO_DISPUTA = [
+  "melhor valor (unitario)",
+  "meu valor (unitario)",
+  "novo lance (unitario)",
+  "intervalo minimo entre lances",
+];
+
+/** Lê somente texto renderizado; separa spans contíguos sem usar HTML ou valores ocultos. */
+function textoVisivelDisputa(el, { ignorar = "" } = {}) {
+  if (!el) return "";
+  const partes = [];
+  const visibilidade = new WeakMap();
+  const clipping = new WeakMap();
+  const view = el.ownerDocument.defaultView || window;
+  const textoEstaVisivel = (parent) => {
+    if (!isVisible(parent)) return false;
+    if (parent.closest(".sr-only, .p-sr-only, .cdk-visually-hidden, .visually-hidden, .screen-reader-only")) return false;
+    let atual = parent;
+    while (atual) {
+      if (!clipping.has(atual)) {
+        const estilo = view.getComputedStyle(atual);
+        const recorteZero = /^rect\(\s*0(?:px)?(?:[,\s]+0(?:px)?){3}\s*\)$/.test(estilo.clip || "");
+        const recorteIntegral = /^inset\(\s*50%\s*\)$/.test(estilo.clipPath || "");
+        clipping.set(atual, recorteZero || recorteIntegral);
+      }
+      if (clipping.get(atual)) return false;
+      atual = atual.parentElement;
+    }
+    return true;
+  };
+  const walker = el.ownerDocument.createTreeWalker(el, 4); // SHOW_TEXT
+  let no;
+  while ((no = walker.nextNode())) {
+    const parent = no.parentElement;
+    if (parent && ignorar && parent.closest(ignorar)) continue;
+    // aria-hidden retira conteúdo da acessibilidade, não da visão. R$ pode ser
+    // decorativo e continuar visível; já cópias sr-only não devem virar preços.
+    if (!parent || parent.closest(`script, style, template, noscript, svg, input, textarea, [role="textbox"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [hidden], [inert], #${PAINEL_ID}`)) continue;
+    if (!visibilidade.has(parent)) visibilidade.set(parent, textoEstaVisivel(parent));
+    if (!visibilidade.get(parent)) continue;
+    const texto = String(no.textContent || "").replace(/\s+/g, " ").trim();
+    if (texto) partes.push(texto);
+  }
+  return partes.join(" ").replace(/\u00a0/g, " ").trim();
+}
+
+function normalizarTextoDisputa(texto) {
+  return normalizeText(texto).replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "")
+    .replace(/\bmelhor\s*valor\s*\(\s*unitario\s*\)/g, "melhor valor (unitario) ")
+    .replace(/\bmeu\s*valor\s*\(\s*unitario\s*\)/g, "meu valor (unitario) ")
+    .replace(/\bnovo\s*lance\s*\(\s*unitario\s*\)/g, "novo lance (unitario) ")
+    .replace(/\bintervalo\s*minimo\s*entre\s*lances/g, "intervalo minimo entre lances ")
+    .replace(/\bfase\s*de\s*lances\s*aberta/g, "fase de lances aberta")
+    .replace(/\benviar\s*lance\b/g, "enviar lance")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function identificarNumeroItemDisputa(cartao, escopoLance) {
+  const lerNumero = (el) => {
+    const texto = normalizarTextoDisputa(textoVisivelDisputa(el));
+    const match = texto.match(/^(?:item\s*(?:n[º°o]?\s*)?[:#-]?\s*)?(\d{1,6})(?=\s|$|[).:\-–—])/);
+    return match && Number(match[1]) > 0 ? normalizeItemNumber(match[1]) : "";
+  };
+  const visiveis = new Set();
+  const inicial = lerNumero(cartao);
+  if (inicial) visiveis.add(inicial);
+  else {
+    // Também funciona se a ordem DOM das colunas for diferente da ordem visual.
+    for (const filho of cartao.children) {
+      if (filho === escopoLance || filho.contains(escopoLance) || !isVisible(filho)) continue;
+      const texto = normalizarTextoDisputa(textoVisivelDisputa(filho));
+      if (ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.includes(rotulo))) continue;
+      const numero = lerNumero(filho);
+      if (numero) visiveis.add(numero);
+    }
+  }
+  const atributos = new Set();
+  for (const atributo of ["data-numero-item", "data-item-number", "data-item"]) {
+    const valor = cartao.getAttribute(atributo);
+    if (/^\d{1,6}$/.test(String(valor || ""))) {
+      if (Number(valor) === 0) return { numeroItem: "", atributos: [], ambiguo: true };
+      atributos.add(normalizeItemNumber(valor));
+    }
+  }
+  const numeroItem = visiveis.size === 1 ? [...visiveis][0] : "";
+  const ambiguo = visiveis.size > 1 || atributos.size > 1 || Boolean(numeroItem && atributos.size === 1 && !atributos.has(numeroItem));
+  // Um data-item na coluna de preços não substitui o número visível do cabeçalho.
+  return { numeroItem: ambiguo ? "" : numeroItem, atributos: [...atributos], ambiguo };
+}
+
+function rotulosControleDisputa(el) {
+  const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/)
+    .filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent).filter(Boolean);
+  return [textoVisivelDisputa(el), el.getAttribute("aria-label"), el.getAttribute("title"), el.value, ...referenciados]
+    .filter(Boolean).map(normalizarTextoDisputa);
+}
+
+function controleDisputaHabilitado(el) {
+  return isVisible(el) && !el.disabled && !el.hasAttribute("disabled") &&
+    el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("disabled") &&
+    !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
+    (el.ownerDocument.defaultView || window).getComputedStyle(el).pointerEvents !== "none";
+}
+
+/**
+ * O campo “Novo lance” está sem um valor do usuário?
+ *
+ * O portal costuma deixar a própria máscara preenchida com zeros (“0,0000” /
+ * “0.0000”); isso não é um lance digitado — é o vazio do campo. Só um número
+ * com algum dígito diferente de zero conta como valor já preenchido (e, nesse
+ * caso, a automação continua sem sobrescrever).
+ */
+function campoDeLanceVazio(input) {
+  const valor = String(input?.value ?? "").trim();
+  return !valor || !/[1-9]/.test(valor);
+}
+
+/**
+ * Espera o portal aceitar o valor digitado e habilitar “Enviar lance”.
+ *
+ * O componente de lance valida o campo fora do evento de digitação: o botão
+ * costuma habilitar alguns instantes depois. Aqui relemos a página sem clicar
+ * nada e só devolvemos o cartão quando preços, intervalo, fase, o valor
+ * digitado e os controles continuarem iguais aos que autorizaram o lance.
+ */
+async function aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento, tempoMs = DISPUTA_ESPERA_HABILITAR_MS }) {
+  const inicio = Date.now();
+  const limite = inicio + tempoMs;
+  let cutucou = false;
+  let proximaChecagemPagina = 0;
+  let motivo = "releitura";
+  for (;;) {
+    if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) return { motivo: "interrompido" };
+
+    // A compra/UASG é reconferida, mas não a cada volta (ler o corpo é caro).
+    if (Date.now() >= proximaChecagemPagina) {
+      proximaChecagemPagina = Date.now() + 600;
+      const agora = extrairIdentificacaoDisputaPagina();
+      if (!agora.telaEnviarLance || agora.numeroDispensa !== identificacao.numeroDispensa || agora.uasg !== identificacao.uasg) return { motivo: "pagina_mudou" };
+    }
+
+    const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem);
+    if (atual && atual.situacaoCompetitiva.estado !== "perdendo") return { motivo: "situacao_mudou" };
+    if (!cartao.input.isConnected && !atual) return { motivo: "valor_perdido" };
+    // O DOM pode ser remontado ao digitar: o campo do cartão novo vale tanto
+    // quanto o antigo, desde que continue com o valor que foi calculado.
+    const campoAtual = cartao.input.isConnected ? cartao.input : atual.input;
+    const valorNoCampo = parseValorUnidadesDisputa(campoAtual?.value);
+    if (valorNoCampo === null) return { motivo: "valor_perdido" };
+    if (valorNoCampo !== sugestao.unidades) return { motivo: "valor_alterado" };
+
+    if (atual) {
+      const precosIguais = atual.melhor === cartao.melhor && atual.meu === cartao.meu && intervalosIguaisDisputa(atual.intervalo, cartao.intervalo);
+      const mesmoCampo = atual.input === cartao.input || (atual.campoAssociado && parseValorUnidadesDisputa(atual.input?.value) === sugestao.unidades);
+      if (precosIguais && mesmoCampo && atual.faseAberta) {
+        if (atual.enviarHabilitado) return { motivo: "ok", cartao: atual };
+        motivo = "enviar_bloqueado";
+      } else {
+        motivo = "releitura";
+      }
+    } else {
+      motivo = "releitura";
+    }
+
+    if (Date.now() >= limite) return { motivo };
+    if (!cutucou && Date.now() - inicio > 600) {
+      cutucou = true;
+      // Alguns componentes só validam no blur: avisa o campo e sai dele UMA vez,
+      // sem reescrever o preço (a máscara continua dona do valor).
+      const view = campoAtual.ownerDocument.defaultView || window;
+      disparar(campoAtual, "change", view, { data: String(campoAtual.value ?? "") });
+      disparar(campoAtual, "blur", view, {});
+      disparar(campoAtual, "focusout", view, {});
+      try { campoAtual.blur(); } catch (_) { /* opcional */ }
+    }
+    await sleep(120);
+  }
+}
+
+function encontrarControlesEnviarLance({ incluirDesabilitados = false } = {}) {
+  const seletores = 'button, a, [role="button"], input[type="button"], input[type="submit"], p-button, p-button > button, button.p-button, [class*="enviar-lance"]';
+  const candidatos = [...document.querySelectorAll(seletores)].filter((el) => {
+    if (!isVisible(el) || el.closest(`#${PAINEL_ID}, [inert], [aria-hidden="true"], [hidden]`)) return false;
+    if (!incluirDesabilitados && !controleDisputaHabilitado(el)) {
+      // Se for um wrapper p-button desabilitado, checa se tem um botão filho habilitado
+      const btnFilho = el.querySelector("button");
+      if (!btnFilho || !controleDisputaHabilitado(btnFilho)) return false;
+    }
+    return true;
+  });
+  return candidatos.map((el) => {
+    // Se é um p-button wrapper, retorna o botão real dentro dele
+    if (el.tagName.toLowerCase() === "p-button") {
+      const btnFilho = el.querySelector("button");
+      if (btnFilho) return btnFilho;
+    }
+    return el;
+  }).filter((el, idx, arr) => arr.indexOf(el) === idx).filter((el) => {
+    const rotulos = rotulosControleDisputa(el);
+    // Checa também texto do wrapper pai
+    let rotuloPai = "";
+    let p = el.parentElement;
+    for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+      rotuloPai += " " + textoVisivelDisputa(p);
+    }
+    const classes = String(el.className || el.parentElement?.className || "").toLowerCase();
+    const todosRotulos = [...rotulos, normalizarTextoDisputa(rotuloPai)];
+    // Reconhece "Enviar lance", "Enviar", "Confirmar lance"
+    return todosRotulos.some((rotulo) => /^enviar\s+lance(?:\s|$)|confirmar\s*lance/.test(rotulo)) ||
+           rotulos.some((rotulo) => /^enviar\s*$/.test(rotulo)) ||
+           /enviar.*lance|btn.*enviar/.test(classes);
+  });
+}
+
+// Cache dos últimos mapeamentos de campos feitos pela leitura manual
+let cacheCamposDisputa = new Map();
+
+function lerPaginaDisputa() {
+  const identificacao = extrairIdentificacaoDisputaPagina();
+  if (!identificacao.telaEnviarLance) {
+    return { ok: false, error: "Abra a tela real “Enviar lance” antes de ler a página." };
+  }
+  const criterioPagina = lerCriterioPaginaDisputa();
+  if (criterioPagina.bloqueado) {
+    return { ok: false, error: "Critério de julgamento não é menor preço (maior desconto detectado). O Modo Disputa só opera em menor preço." };
+  }
+  // Força uma varredura completa da página sem pular nada
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  if (controles.length === 0) {
+    return { ok: false, error: "Nenhum botão “Enviar lance” encontrado na página. Abra o item para enviar lance e tente novamente." };
+  }
+  const cartoes = encontrarCartoesDisputa();
+  cacheCamposDisputa.clear();
+  for (const cartao of cartoes) {
+    if (cartao.numeroItem && cartao.input && cartao.botao) {
+      cacheCamposDisputa.set(cartao.numeroItem, { input: cartao.input, botao: cartao.botao, escopoLance: cartao.escopoLance, lidoEm: Date.now() });
+    }
+  }
+  const abertos = cartoes.filter((c) => c.faseAberta).length;
+  const perdendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "perdendo").length;
+  const vencendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "vencendo").length;
+  const incertos = cartoes.length - perdendo - vencendo;
+  const camposEncontrados = cartoes.filter((c) => c.campoAssociado).length;
+  const botoesEncontrados = cartoes.filter((c) => c.botao).length;
+  const comPrecoValido = cartoes.filter((c) => c.criterioPreco && c.intervalo?.unidades > 0).length;
+  const mensagem = `Leitura concluída: ${cartoes.length} item(ns) identificados, ${abertos} em fase aberta, ${camposEncontrados} campo(s) de novo lance, ${botoesEncontrados} botão(ões) Enviar, ${comPrecoValido} com preço/intervalo legíveis. Situação: ${perdendo} perdendo, ${vencendo} vencendo, ${incertos} incerto(s).`;
+
+  // Atualiza o status do monitoramento se estiver ativo
+  if (disputaAutomatica?.ativo) {
+    disputaAutomatica.situacoesPorNumero = new Map(cartoes.map((c) => [c.numeroItem, c.situacaoCompetitiva]));
+    mostrarStatusDisputa(mensagem, "info");
+  }
+
+  return {
+    ok: true,
+    message: mensagem,
+    identificacao,
+    totalCartoes: cartoes.length,
+    camposEncontrados,
+    botoesEncontrados,
+    situacoes: cartoes.map((c) => ({ numeroItem: c.numeroItem, ...c.situacaoCompetitiva })),
+  };
+}
+
+/** O formulário está numa coluna; o número e a fase pertencem à linha completa do item. */
+function cartaoDaAcaoDeLance(botao, controles, diagnostico = null) {
+  let escopoLance = null;
+  const numerosDeclarados = new Set();
+  let atual = botao.parentElement;
+  for (let nivel = 0; atual && atual !== document.body && nivel < 18; nivel += 1, atual = atual.parentElement) {
+    if (!isVisible(atual)) continue;
+    const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
+    if (!ROTULOS_PRECO_DISPUTA.every((rotulo) => texto.includes(rotulo))) continue;
+    // Nunca sobe até a lista inteira e combina os valores/campos de itens diferentes.
+    const acoes = controles.filter((controle) => atual.contains(controle));
+    if (acoes.length !== 1 || acoes[0] !== botao || ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.split(rotulo).length !== 2)) {
+      if (diagnostico) diagnostico.ambiguos += 1;
+      return null;
+    }
+    if (!escopoLance) escopoLance = atual;
+    const identidade = identificarNumeroItemDisputa(atual, escopoLance);
+    for (const numero of identidade.atributos) numerosDeclarados.add(numero);
+    if (identidade.ambiguo || numerosDeclarados.size > 1 || (identidade.numeroItem && numerosDeclarados.size && !numerosDeclarados.has(identidade.numeroItem))) {
+      if (diagnostico) diagnostico.ambiguos += 1;
+      return null;
+    }
+    if (identidade.numeroItem) return { cartao: atual, escopoLance, botao };
+  }
+  if (diagnostico) {
+    if (escopoLance) diagnostico.semNumero += 1;
+    else diagnostico.semRotulos += 1;
+  }
+  return null;
+}
+
+function encontrarInputNovoLance(escopo) {
+  const seletores = 'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, [role="textbox"], [contenteditable="true"], [contenteditable=""]';
+  const campos = [...escopo.querySelectorAll(seletores)].filter(isVisible);
+  const compativel = (el) => {
+    const sinais = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name")].filter(Boolean).join(" ");
+    return isFillable(el) && !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
+      !/%|desconto|percent|quantidade|marca|modelo|senha|password|email|cpf|cnpj|observa/i.test(normalizeText(sinais)) &&
+      !/%/.test(String(el.value ?? el.textContent ?? "")) &&
+      // É um campo numérico/monetário
+      (/(moeda|valor|preco|lance|r\$|decimal|number)/i.test(normalizeText(sinais)) || el.type === "number" || el.inputMode === "decimal" || el.classList.contains("p-inputnumber-input") || el.classList.contains("money") || el.classList.contains("moeda"));
+  };
+  const textoEscopo = normalizarTextoDisputa(textoVisivelDisputa(escopo));
+  const temNovoLanceRotulo = /novo\s*lance/i.test(textoEscopo);
+
+  // 1. Procura campos nomeados explicitamente com "novo lance" ou "lance"
+  const nomeadas = campos.filter((el) => {
+    const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent).filter(Boolean);
+    const labelsVisiveis = [];
+    if (el.id) {
+      document.querySelectorAll(`label[for="${el.id}"]`).forEach((l) => labelsVisiveis.push(textoVisivelDisputa(l)));
+    }
+    let elAtual = el.parentElement;
+    for (let i = 0; i < 4 && elAtual && escopo.contains(elAtual); i++, elAtual = elAtual.parentElement) {
+      const t = textoVisivelDisputa(elAtual);
+      if (t) labelsVisiveis.push(t);
+    }
+    const todosTextos = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name"), ...referenciados, ...labelsVisiveis].filter(Boolean).join(" ");
+    return /novo\s*lance|lance\s*unitario|novo\s*valor/i.test(normalizeText(todosTextos));
+  });
+  if (nomeadas.length === 1 && compativel(nomeadas[0])) return nomeadas[0];
+  if (nomeadas.length === 1) return nomeadas[0];
+  if (nomeadas.length > 1) {
+    const compativeisNomeadas = nomeadas.filter(compativel);
+    if (compativeisNomeadas.length === 1) return compativeisNomeadas[0];
+  }
+
+  // 2. Procura rótulos "Novo lance (unitário)" e associa
+  const rotulos = [...escopo.querySelectorAll("*")].filter((label) =>
+    isVisible(label) && /novo\s*lance\s*(?:\(?unitario\)?)?\s*:?$/i.test(normalizarTextoDisputa(textoVisivelDisputa(label))),
+  );
+  const associadas = new Set();
+  for (const label of rotulos) {
+    const id = label.getAttribute("for");
+    if (id) {
+      const entrada = label.ownerDocument.getElementById(id);
+      if (campos.includes(entrada)) {
+        associadas.add(entrada);
+        continue;
+      }
+    }
+    let atual = label;
+    for (let nivel = 0; atual && nivel < 6 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
+      const encontradas = [...atual.querySelectorAll(seletores)].filter((el) => campos.includes(el));
+      if (encontradas.length === 1) {
+        associadas.add(encontradas[0]);
+        break;
+      }
+      if (encontradas.length > 1) {
+        const comp = encontradas.filter(compativel);
+        if (comp.length === 1) associadas.add(comp[0]);
+        break;
+      }
+      if (atual === escopo) break;
+    }
+  }
+  if (associadas.size === 1) return [...associadas][0];
+
+  // 3. Fallback: se só existe UM campo numérico compatível no escopo e tem rótulo de novo lance no escopo, usa ele
+  if (temNovoLanceRotulo) {
+    const camposCompativeis = campos.filter(compativel);
+    if (camposCompativeis.length === 1) return camposCompativeis[0];
+    // Ou pega o campo que está imediatamente após/ao lado do texto "novo lance"
+    if (camposCompativeis.length > 1) {
+      // Prioriza input que esteja mais próximo do rótulo
+      for (const el of camposCompativeis) {
+        let anterior = el.previousElementSibling;
+        let dist = 0;
+        while (anterior && dist < 3) {
+          if (/novo\s*lance/i.test(normalizarTextoDisputa(textoVisivelDisputa(anterior)))) return el;
+          anterior = anterior.previousElementSibling;
+          dist++;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Medida explícita e única: texto de botões/ícones não vira preço. */
+function analisarMedidaDisputa(texto, finalidade = "preco") {
+  const trecho = normalizarTextoDisputa(texto).replace(/(\d)\s*([.,])\s*(?=\d)/g, "$1$2");
+  const moedas = [...trecho.matchAll(/\br\$/g)];
+  const monetarios = [...trecho.matchAll(/\br\$\s*(-?\d[\d.,]*)(?![\d.,\p{L}])/gu)];
+  const percentuais = [...trecho.matchAll(/(-?\d[\d.,]*)\s*(?:%|por\s+cento|percentual\b)/g)];
+  const temPercentual = /%|por\s+cento|percentual\b/.test(trecho);
+  const resultado = { unidades: null, tipo: null, motivo: "valor_ilegivel", moedas: moedas.length, percentuais: percentuais.length };
+  if (finalidade === "preco" && /\b(?:total|global|estimado|estimada|referencial|quantidade|maximo|minimo)\b/.test(trecho)) return { ...resultado, motivo: "outro_valor_na_regiao" };
+  if (/\bus\$|\b(?:usd|eur)\b|€/.test(trecho) || (moedas.length && temPercentual) || (finalidade === "preco" && /desconto|percentual|%/.test(trecho))) return { ...resultado, motivo: "unidades_conflitantes" };
+  if (moedas.length > 1 || percentuais.length > 1) return { ...resultado, motivo: "valores_ambiguos" };
+  const monetario = moedas.length === 1 && monetarios.length === 1 ? monetarios[0] : null;
+  const percentual = finalidade === "intervalo" && !moedas.length && percentuais.length === 1 ? percentuais[0] : null;
+  const match = monetario || percentual;
+  if (!match) return { ...resultado, motivo: !moedas.length && !temPercentual ? "moeda_ausente" : "valor_ilegivel" };
+  // Não trunca "R$ 127 50" para 127. Contadores explicitamente rotulados não são preços.
+  const depois = trecho.slice(match.index + match[0].length).trim();
+  if (/^\d/.test(depois) && !/^\d+\s+(?:lances?|ofertas?|participantes?)\b/.test(depois)) return { ...resultado, motivo: "numero_fragmentado" };
+  const numero = match[1];
+  if (!/^-?\d+(?:\.\d{3})*(?:,\d{1,4})?$/.test(numero) && !/^-?\d+(?:\.\d{1,4})?$/.test(numero)) return { ...resultado, motivo: "valor_ilegivel" };
+  const unidades = parseValorUnidadesDisputa(numero);
+  if (unidades === null || (finalidade === "intervalo" && unidades <= 0)) return { ...resultado, motivo: "valor_invalido" };
+  return { ...resultado, unidades, tipo: monetario ? "valor" : "percentual", motivo: "ok" };
+}
+
+/** Localiza a região mínima que contém um único rótulo financeiro do próprio item. */
+function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco") {
+  const texto = normalizarTextoDisputa(textoVisivelDisputa(escopo));
+  const outrosRotulos = ROTULOS_PRECO_DISPUTA.filter((outro) => outro !== rotulo);
+  const exato = (el) => normalizarTextoDisputa(textoVisivelDisputa(el)).replace(/\s*:\s*$/, "") === rotulo;
+  const todos = [...escopo.querySelectorAll("*")].filter((el) => isVisible(el) && exato(el));
+  const rotulos = todos.filter((el) => ![...el.children].some(exato));
+  const base = { rotulosEncontrados: rotulos.length, origem: "trecho_rotulado", tagRegiao: null };
+  if (rotulos.length > 1) return { ...base, unidades: null, tipo: null, motivo: "rotulos_ambiguos", moedas: 0, percentuais: 0 };
+  if (rotulos.length === 1) {
+    const idRotulo = rotulos[0].id;
+    const referenciadas = idRotulo ? [...escopo.querySelectorAll("[aria-labelledby], [headers]")].filter((el) =>
+      !el.matches('input, textarea, [role="textbox"]') && isVisible(el) &&
+      [el.getAttribute("aria-labelledby"), el.getAttribute("headers")].filter(Boolean).join(" ").split(/\s+/).includes(idRotulo),
+    ) : [];
+    if (referenciadas.length > 1) return { ...base, unidades: null, tipo: null, motivo: "regioes_ambiguas", moedas: 0, percentuais: 0 };
+    if (referenciadas.length === 1) {
+      return { ...base, ...analisarMedidaDisputa(textoVisivelDisputa(referenciadas[0]), finalidade), origem: "referencia_rotulo", tagRegiao: referenciadas[0].tagName };
+    }
+    let moedaAusente = false;
+    let atual = rotulos[0].parentElement;
+    for (let nivel = 0; atual && nivel < 8 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
+      const regiao = normalizarTextoDisputa(textoVisivelDisputa(atual));
+      if (outrosRotulos.some((outro) => regiao.includes(outro))) break;
+      if (/\d/.test(regiao.replace(rotulo, ""))) moedaAusente = true;
+      if (/r\$|%|por\s+cento|percentual\b/.test(regiao)) {
+        // Só lê dados do bloco do rótulo. Não sobe até outro preço ou outro item.
+        const semRotulo = regiao.replace(rotulo, "");
+        const conteudo = finalidade === "intervalo" ? semRotulo.split("enviar lance")[0] : semRotulo;
+        return { ...base, ...analisarMedidaDisputa(conteudo, finalidade), origem: "regiao_rotulada", tagRegiao: atual.tagName };
+      }
+      if (atual === escopo) break;
+    }
+    // Sem uma região exclusiva/referência não usa a moeda de uma coluna vizinha.
+    return { ...base, unidades: null, tipo: null, motivo: moedaAusente ? "moeda_ausente" : "sem_regiao_exclusiva", moedas: 0, percentuais: 0 };
+  }
+  const trecho = trechoAposRotuloDisputa(texto, rotulo, [...outrosRotulos, "enviar lance"]);
+  return { ...base, ...analisarMedidaDisputa(trecho, finalidade) };
+}
+
+function lerCriterioPaginaDisputa() {
+  const ajuda = 'aside, [role="tooltip"], .tooltip, .p-tooltip, .ajuda, .help-text, app-ajuda';
+  const texto = normalizarTextoDisputa(textoVisivelDisputa(document.body));
+  const foraAjuda = normalizarTextoDisputa(textoVisivelDisputa(document.body, { ignorar: ajuda }));
+  const rotulo = /^(?:criterio\s+(?:de\s+)?julgamento|tipo\s+(?:de\s+)?julgamento|julgamento)\s*[:=–—-]?\s*$/;
+  const declaracao = /^(?:criterio\s+(?:de\s+)?julgamento|tipo\s+(?:de\s+)?julgamento|julgamento)\s*[:=–—-]?\s*(menor\s*preco|maior\s*desconto)\s*$/;
+  const tipos = [];
+  for (const el of document.querySelectorAll("div, span, p, label, dt, th, small, strong")) {
+    const rapido = String(el.textContent || "");
+    if (rapido.length > 160 || !/julgamento/i.test(rapido) || !isVisible(el) || el.closest(`#${PAINEL_ID}`)) continue;
+    const proprio = normalizarTextoDisputa(textoVisivelDisputa(el));
+    let tipo = proprio.match(declaracao)?.[1];
+    if (!tipo && rotulo.test(proprio)) {
+      const vizinho = el.nextElementSibling;
+      const valor = vizinho && normalizarTextoDisputa(textoVisivelDisputa(vizinho));
+      if (/^(?:menor\s*preco|maior\s*desconto)$/.test(valor || "")) tipo = valor;
+    }
+    if (tipo) tipos.push({ tipo: tipo.replace(/\s+/g, ""), ajuda: Boolean(el.closest(ajuda)) });
+  }
+  // Uma explicação/tutorial não declara o critério da compra. Menor preço só
+  // afasta menções em ajuda quando há um campo explícito fora daquela ajuda.
+  const menorPrecoExplicito = tipos.some((t) => t.tipo === "menorpreco" && !t.ajuda);
+  const maiorDescontoExplicito = tipos.some((t) => t.tipo === "maiordesconto");
+  const mencaoMaiorDesconto = /\bmaior\s*desconto\b/.test(texto);
+  const maiorDescontoForaAjuda = /\bmaior\s*desconto\b/.test(foraAjuda);
+  const bloqueado = maiorDescontoExplicito || maiorDescontoForaAjuda || (mencaoMaiorDesconto && !menorPrecoExplicito);
+  const identificado = bloqueado && menorPrecoExplicito ? "ambiguo" : maiorDescontoExplicito ? "maior_desconto" : bloqueado ? "nao_identificado_com_mencao_desconto" : menorPrecoExplicito ? "menor_preco" : "nao_informado";
+  return { identificado, bloqueado, menorPrecoExplicito, maiorDescontoExplicito, mencaoMaiorDesconto, maiorDescontoForaAjuda };
+}
+
+function resumoMedidaLidaDisputa(leitura) {
+  return {
+    motivo: leitura.motivo,
+    origem: leitura.origem,
+    rotulosEncontrados: leitura.rotulosEncontrados,
+    tagRegiao: leitura.tagRegiao,
+    moedas: leitura.moedas,
+    percentuais: leitura.percentuais,
+    valor: leitura.unidades === null ? "não identificado" : leitura.tipo === "percentual" ? formatarPercentualDisputa(leitura.unidades) : formatarValorDisputa(leitura.unidades),
+  };
+}
+
+function lerCartaoDisputa({ cartao, escopoLance, botao, criterioPagina }) {
+  const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
+  const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
+  const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["melhor valor (unitario)", "meu valor (unitario)", "intervalo minimo entre lances", "enviar lance"]);
+  const leituras = {
+    melhor: lerMedidaRotuladaDisputa(escopoLance, "melhor valor (unitario)"),
+    meu: lerMedidaRotuladaDisputa(escopoLance, "meu valor (unitario)"),
+    intervalo: lerMedidaRotuladaDisputa(escopoLance, "intervalo minimo entre lances", "intervalo"),
+  };
+  const bloqueioLocal = /maior\s*desconto/.test(texto) || /%|desconto|percentual/.test(novoLance);
+  const rotulosPreco = !criterioPagina.bloqueado && !bloqueioLocal;
+  const melhor = rotulosPreco ? leituras.melhor.unidades : null;
+  const meu = rotulosPreco ? leituras.meu.unidades : null;
+  const criterioPreco = rotulosPreco && melhor !== null && meu !== null;
+  const campoAssociado = encontrarInputNovoLance(escopoLance);
+  return {
+    cartao,
+    escopoLance,
+    numeroItem: identificarNumeroItemDisputa(cartao, escopoLance).numeroItem,
+    faseAberta: /fase de lances aberta/.test(texto),
+    criterioPreco,
+    situacaoCompetitiva: lerSituacaoCompetitivaDisputa(cartao),
+    melhor,
+    meu,
+    intervalo: criterioPreco && leituras.intervalo.motivo === "ok" ? { tipo: leituras.intervalo.tipo, unidades: leituras.intervalo.unidades } : null,
+    input: criterioPreco ? campoAssociado : null,
+    campoAssociado,
+    leituras,
+    motivoBloqueio: criterioPagina.bloqueado ? "criterio_pagina" : bloqueioLocal ? "criterio_ou_unidade_do_item" : !criterioPreco ? "precos_ilegíveis" : leituras.intervalo.motivo !== "ok" ? "intervalo_ilegivel" : !campoAssociado ? "campo_sem_associacao" : null,
+    botao,
+    enviarHabilitado: controleDisputaHabilitado(botao),
+    texto,
+  };
+}
+
+function encontrarCartoesDisputa(diagnostico = null) {
+  // Critério explícito prevalece sobre ajuda genérica, nunca sobre um critério conflitante.
+  const criterioPagina = lerCriterioPaginaDisputa();
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  const habilitados = controles.filter(controleDisputaHabilitado);
+  if (diagnostico) Object.assign(diagnostico, { criterioPagina, controlesVisiveis: controles.length, controlesHabilitados: habilitados.length, semRotulos: 0, semNumero: 0, ambiguos: 0, itensDuplicados: [] });
+  const cartoes = [];
+  // O Enviar pode habilitar só depois do preenchimento. Aqui apenas associa; não clica.
+  for (const botao of controles) {
+    const contexto = cartaoDaAcaoDeLance(botao, controles, diagnostico);
+    if (contexto) cartoes.push(lerCartaoDisputa({ ...contexto, criterioPagina }));
+  }
+  const contagem = new Map();
+  for (const cartao of cartoes) contagem.set(cartao.numeroItem, (contagem.get(cartao.numeroItem) || 0) + 1);
+  const duplicados = [...contagem].filter(([, quantidade]) => quantidade > 1).map(([numero]) => numero);
+  if (diagnostico) diagnostico.itensDuplicados = duplicados;
+  return cartoes.filter((cartao) => cartao.numeroItem && !duplicados.includes(cartao.numeroItem));
+}
+
+function resumoLeituraCamposDisputa(diagnostico, cartoes) {
+  const abertos = cartoes.filter((c) => c.faseAberta).length;
+  const precos = cartoes.filter((c) => c.melhor !== null && c.meu !== null && c.intervalo?.unidades > 0).length;
+  const campos = cartoes.filter((c) => c.campoAssociado && c.botao).length;
+  const motivos = [...new Set(cartoes.map((c) => c.motivoBloqueio).filter(Boolean))];
+  const aviso = motivos.length ? ` Bloqueios: ${motivos.join(", ")}; o diagnóstico detalha a leitura por rótulo.` : "";
+  return `Leitura: ${diagnostico.controlesHabilitados} controles “Enviar lance”, ${cartoes.length} itens identificados, ${abertos} em fase aberta, ${precos} com preços/intervalo legíveis e ${campos} com campo associado. Sem número: ${diagnostico.semNumero}; sem rótulos: ${diagnostico.semRotulos}; ambíguos: ${diagnostico.ambiguos + diagnostico.itensDuplicados.length}.${aviso}`;
+}
+
+/** Diagnóstico serializável e sem escrita: não consulta API, não preenche nem clica. */
+function diagnosticarCamposDisputa() {
+  const diagnostico = { somenteLeitura: true };
+  const cartoes = encontrarCartoesDisputa(diagnostico);
+  diagnostico.itens = cartoes.slice(0, 30).map((cartao) => ({
+    numeroItem: cartao.numeroItem,
+    faseAberta: cartao.faseAberta,
+    criterioPreco: cartao.criterioPreco,
+    situacaoCompetitiva: cartao.situacaoCompetitiva,
+    melhor: formatarValorDisputa(cartao.melhor),
+    meu: formatarValorDisputa(cartao.meu),
+    intervalo: cartao.intervalo ? formatarIntervaloDisputa(cartao.intervalo, calcularDecrementoDisputa(cartao.melhor, cartao.intervalo)) : "não identificado",
+    campoEncontrado: Boolean(cartao.input),
+    campoAssociado: Boolean(cartao.campoAssociado),
+    enviarHabilitado: cartao.enviarHabilitado,
+    tipoCampo: cartao.campoAssociado?.type || cartao.campoAssociado?.getAttribute("role") || null,
+    motivoBloqueio: cartao.motivoBloqueio,
+    leitura: Object.fromEntries(Object.entries(cartao.leituras).map(([nome, leitura]) => [nome, resumoMedidaLidaDisputa(leitura)])),
+  }));
+  // Registra tags/classes de textos de ação desconhecidos, nunca HTML completo ou campos ocultos.
+  const seletores = 'button, a, span, div, small, label, p, strong, [role="button"], input[type="button"], input[type="submit"]';
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  const desconhecidos = [...document.querySelectorAll(seletores)].filter((el) =>
+    isVisible(el) && !el.closest(`#${PAINEL_ID}, app-cabecalho-compra, .breadcrumb-compra`) && el.children.length <= 2 &&
+    rotulosControleDisputa(el).some((texto) => /^enviar lance$/.test(texto)),
+  );
+  diagnostico.textosDeAcao = [...new Set([...controles, ...desconhecidos])].slice(0, 6).map((el) => {
+    const ancestrais = [];
+    let atual = el.parentElement;
+    for (let nivel = 0; atual && atual !== document.body && nivel < 8; nivel += 1, atual = atual.parentElement) {
+      const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
+      const atributos = Object.fromEntries(["data-numero-item", "data-item-number", "data-item"].map((nome) => [nome, atual.getAttribute(nome)]).filter(([, valor]) => /^\d{1,6}$/.test(String(valor || ""))));
+      ancestrais.push({
+        tag: atual.tagName,
+        classes: String(atual.className || "").slice(0, 120),
+        numeroVisivel: identificarNumeroItemDisputa(atual, atual).numeroItem || null,
+        atributosNumericos: atributos,
+        rotulos: ROTULOS_PRECO_DISPUTA.filter((rotulo) => texto.includes(rotulo)),
+        camposVisiveis: [...atual.querySelectorAll('input:not([type="hidden"]), textarea, [role="textbox"]')].filter(isVisible).length,
+      });
+    }
+    return { tag: el.tagName, role: el.getAttribute("role"), classes: String(el.className || "").slice(0, 160), reconhecido: controles.includes(el), ancestrais };
+  });
+  return { ok: true, diagnostico, message: `${resumoLeituraCamposDisputa(diagnostico, cartoes)} Diagnóstico somente leitura; nenhum lance foi enviado.` };
+}
+
+function sugestaoDeLanceDisputa(cartao, itemLocal) {
+  const piso = parseValorUnidadesDisputa(itemLocal?.valorMinimo);
+  if (piso === null) return { ok: false, motivo: "Valor Mínimo não cadastrado; item ignorado." };
+  if (!cartao.faseAberta) return { ok: false, motivo: "Fase de lances não está aberta." };
+  if (cartao.melhor === null || cartao.meu === null || !cartao.intervalo || cartao.intervalo.unidades <= 0) {
+    return { ok: false, motivo: "Valores do portal incompletos ou ilegíveis; lance não calculado." };
+  }
+  if (cartao.meu <= piso) {
+    return {
+      ok: false,
+      pararItemNoPiso: true,
+      piso,
+      motivo: cartao.meu === piso
+        ? `Seu lance atingiu o Valor Mínimo de ${formatarValorDisputa(piso)}.`
+        : `Seu lance atual (${formatarValorDisputa(cartao.meu)}) está abaixo do Valor Mínimo atual (${formatarValorDisputa(piso)}); o item fica pausado para revisão.`,
+    };
+  }
+  if (cartao.situacaoCompetitiva?.estado !== "perdendo") return { ok: false, motivo: cartao.situacaoCompetitiva?.estado === "vencendo" ? "Você está vencendo (polegar para cima verde); nenhum lance." : "Não confirmei polegar para baixo vermelho; nenhum lance." };
+
+  // O indicador vermelho decide se a concorrência está ganhando; não deduza
+  // vitória de preços iguais/stale. A proposta numérica ainda tem de melhorar
+  // estritamente o “Meu valor” antes de ser digitada ou enviada.
+  const decremento = calcularDecrementoDisputa(cartao.melhor, cartao.intervalo);
+  if (decremento === null) return { ok: false, motivo: "Intervalo mínimo ilegível ou incompatível; lance não calculado." };
+  const proximo = cartao.melhor - decremento;
+  if (proximo < piso) {
+    return {
+      ok: false,
+      pararItemNoPiso: true,
+      piso,
+      motivo: `O próximo lance (${formatarValorDisputa(proximo)}) ficaria abaixo do Valor Mínimo (${formatarValorDisputa(piso)}); lances deste item encerrados.`,
+    };
+  }
+  if (proximo >= cartao.meu || proximo <= 0) return { ok: false, motivo: "Lance calculado não melhora seu valor atual." };
+  return {
+    ok: true,
+    unidades: proximo,
+    piso,
+    decremento,
+    intervalo: cartao.intervalo,
+    encerraAoConfirmar: proximo === piso,
+  };
+}
+
+function encerrarLancesDoItemNoPiso(numeroItem, piso, detalhe) {
+  const itensNoPiso = disputaAutomatica?.itensNoPiso;
+  if (!itensNoPiso || itensNoPiso.has(numeroItem)) return false;
+  itensNoPiso.add(numeroItem);
+  const mensagem = `${detalhe} Item ${numeroItem}: nenhum novo lance automático será enviado (Valor Mínimo ${formatarValorDisputa(piso)}).`;
+  mostrarStatusDisputa(mensagem, "warning");
+  registrarNoPainel(`🛑 ${mensagem}`);
+  return true;
+}
+
+function resumoDisputaParaConfirmacao(cartoes, itensPorNumero) {
+  const linhas = [];
+  for (const cartao of cartoes.slice(0, 6)) {
+    const item = itensPorNumero.get(cartao.numeroItem);
+    if (!item) {
+      linhas.push(`Item ${cartao.numeroItem}: sem correspondência na proposta selecionada.`);
+      continue;
+    }
+    const estado = cartao.situacaoCompetitiva?.estado === "perdendo"
+      ? "perdendo — polegar para baixo vermelho"
+      : cartao.situacaoCompetitiva?.estado === "vencendo"
+        ? "vencendo — polegar para cima verde"
+        : "indicador visual incerto; não enviará até confirmar polegar vermelho";
+    const sugestao = sugestaoDeLanceDisputa(cartao, item);
+    if (sugestao.ok) {
+      const intervalo = formatarIntervaloDisputa(sugestao.intervalo, sugestao.decremento);
+      const final = sugestao.encerraAoConfirmar ? "; ao confirmar este lance, o item será encerrado no piso" : "";
+      linhas.push(`Item ${cartao.numeroItem} (${estado}): melhor ${formatarValorDisputa(cartao.melhor)} − intervalo ${intervalo} → lance ${formatarValorDisputa(sugestao.unidades)} (mín. ${formatarValorDisputa(sugestao.piso)}${final}).`);
+    } else {
+      linhas.push(`Item ${cartao.numeroItem} (${estado}): ${sugestao.motivo}`);
+    }
+  }
+  return linhas.join("\n");
+}
+
+function mostrarStatusDisputa(texto, tipo = "info") {
+  const mensagem = String(texto || "").trim();
+  disputaAutomatica.status = mensagem || "inativo";
+  if (document.getElementById(PAINEL_ID)) {
+    definirStatusDoPainel(mensagem);
+    const aviso = document.getElementById(`${PAINEL_ID}_aviso_disputa`);
+    if (aviso) aviso.textContent = mensagem;
+    atualizarPainel();
+  }
+  try {
+    const monitoramento = disputaAutomatica;
+    chrome.runtime.sendMessage({
+      action: "disputa_progress",
+      status: mensagem,
+      tipo,
+      ativo: Boolean(monitoramento.ativo),
+      propostaId: monitoramento.propostaId || "",
+      situacoes: [...(monitoramento.situacoesPorNumero || new Map())].map(([numeroItem, situacao]) => ({ numeroItem, ...situacao })),
+      itensNoPiso: [...(monitoramento.itensNoPiso || [])],
+    }).catch?.(() => {});
+  } catch (_) {
+    // O popup pode estar fechado.
+  }
+}
+
+function pararDisputaAutomatica(motivo = "Monitoramento parado.") {
+  const estavaAtiva = Boolean(disputaAutomatica.ativo || disputaAutomatica.intervalo || disputaAutomatica.observer);
+  if (disputaAutomatica.intervalo) clearInterval(disputaAutomatica.intervalo);
+  if (disputaAutomatica.agendamento) clearTimeout(disputaAutomatica.agendamento);
+  disputaAutomatica.observer?.disconnect();
+  const pendente = disputaAutomatica.pendente;
+  disputaAutomatica.ativo = false;
+  disputaAutomatica.pausado = false;
+  disputaAutomatica.intervalo = null;
+  disputaAutomatica.agendamento = null;
+  disputaAutomatica.observer = null;
+  disputaAutomatica.processando = false;
+  disputaAutomatica.pendente = null;
+  disputaAutomatica.status = motivo;
+  if (pendente) motivo += " Há um lance em processamento no portal; confira a tela, pois um lance enviado não pode ser desfeito.";
+  mostrarStatusDisputa(motivo, "warning");
+  registrarNoPainel(`⏹ ${motivo}`);
+  return estavaAtiva;
+}
+
+function pausarOuRetomarDisputaAutomatica() {
+  if (!disputaAutomatica.ativo) return false;
+  disputaAutomatica.pausado = !disputaAutomatica.pausado;
+  const texto = disputaAutomatica.pausado
+    ? "Monitoramento pausado pelo usuário; nenhum novo lance será enviado."
+    : "Monitoramento retomado. A estratégia continua respeitando o Valor Mínimo.";
+  mostrarStatusDisputa(texto, disputaAutomatica.pausado ? "warning" : "info");
+  registrarNoPainel(disputaAutomatica.pausado ? "⏸ Disputa pausada." : "▶ Disputa retomada.");
+  if (!disputaAutomatica.pausado) agendarVerificacaoDisputa(0);
+  return true;
+}
+
+function agendarVerificacaoDisputa(espera = 120) {
+  if (!disputaAutomatica.ativo || disputaAutomatica.pausado || disputaAutomatica.agendamento) return;
+  disputaAutomatica.agendamento = setTimeout(() => {
+    disputaAutomatica.agendamento = null;
+    verificarDisputaAutomatica().catch((erro) => {
+      pararDisputaAutomatica(`Erro durante o monitoramento: ${erro?.message || "falha desconhecida"}.`);
+    });
+  }, Math.max(0, espera));
+}
+
+async function verificarConfirmacaoLancePendente(cartoes) {
+  const pendente = disputaAutomatica.pendente;
+  if (!pendente) return false;
+  const atual = cartoes.find((cartao) => cartao.numeroItem === pendente.numeroItem);
+  if (atual && atual.meu !== null && atual.meu === pendente.valorEnviado) {
+    const monitoramento = disputaAutomatica;
+    // Um operador pode alterar o piso enquanto o portal confirma o clique.
+    // Atualize antes de liberar qualquer item para o próximo lance.
+    try {
+      if (!(await atualizarLimitesDisputa(monitoramento, true))) return true;
+    } catch (erro) {
+      if (disputaAutomatica === monitoramento && monitoramento.ativo) pararDisputaAutomatica(`Lance do item ${pendente.numeroItem} aparece na página, mas não validei o Valor Mínimo mais recente (${erro?.message || "erro"}); automação parada.`);
+      return true;
+    }
+    if (disputaAutomatica !== monitoramento || !monitoramento.ativo) return true;
+    const confirmado = encontrarCartoesDisputa().find((c) => c.numeroItem === pendente.numeroItem);
+    if (!confirmado || confirmado.meu !== pendente.valorEnviado) return true;
+    const itemAtual = monitoramento.itensPorNumero.get(pendente.numeroItem);
+    const pisoAtual = parseValorUnidadesDisputa(itemAtual?.valorMinimo);
+    monitoramento.pendente = null;
+    monitoramento.ultimasTentativas.set(pendente.numeroItem, { meu: confirmado.meu, melhor: confirmado.melhor });
+    const mensagem = `Lance do item ${pendente.numeroItem} confirmado na página: ${formatarValorDisputa(confirmado.meu)}.`;
+    if (pisoAtual === null) {
+      monitoramento.itensNoPiso.add(pendente.numeroItem);
+      mostrarStatusDisputa(`${mensagem} O Valor Mínimo atual não está válido; item pausado sem novos lances.`, "warning");
+      registrarNoPainel(`🛑 ${mensagem} Item pausado porque o Valor Mínimo atual não está válido.`);
+    } else if (confirmado.meu < pisoAtual) {
+      encerrarLancesDoItemNoPiso(pendente.numeroItem, pisoAtual, `${mensagem} O piso foi aumentado enquanto este lance estava em processamento e o preço confirmado ficou abaixo do novo mínimo; confira esta situação antes de alterar novamente o mínimo;`);
+    } else if (confirmado.meu === pisoAtual || pendente.valorEnviado === pisoAtual) {
+      encerrarLancesDoItemNoPiso(pendente.numeroItem, pisoAtual, `${mensagem} O Valor Mínimo atual foi atingido;`);
+    } else {
+      mostrarStatusDisputa(mensagem, "success");
+      registrarNoPainel(`✅ ${mensagem}`);
+    }
+    agendarVerificacaoDisputa(250);
+    return true;
+  }
+  if (Date.now() - pendente.iniciadoEm >= DISPUTA_TIMEOUT_CONFIRMACAO_MS) {
+    pararDisputaAutomatica(`Não confirmei a atualização do item ${pendente.numeroItem}; parei para evitar repetir um lance. Confira o portal antes de reiniciar.`);
+    return true;
+  }
+  mostrarStatusDisputa(`Aguardando o portal confirmar o lance do item ${pendente.numeroItem} (${formatarValorDisputa(pendente.valorEnviado)}).`, "info");
+  return true;
+}
+
+/** Só confirma a situação quando sentido do polegar e cor concordam no mesmo item. */
+function lerSituacaoCompetitivaDisputa(cartao) {
+  const marcadores = [...cartao.querySelectorAll('i, svg, mat-icon, [data-icon], [aria-label], [title], [class*="thumb"], .material-icons, .material-symbols-outlined')];
+  const identificados = [];
+  for (const el of marcadores) {
+    if (!isVisible(el) || el.closest(`#${PAINEL_ID}, .sr-only, .p-sr-only, .visually-hidden`)) continue;
+    const sinal = normalizeText([el.getAttribute("class"), el.getAttribute("data-icon"), el.getAttribute("aria-label"), el.getAttribute("title"), el.matches('.material-icons, .material-symbols-outlined') ? el.textContent : ""].filter(Boolean).join(" "));
+    const baixo = /thumbs?(?:-o)?[-_ ]down(?:_alt)?\b|polegar.*(?:baixo)|\bperdendo\b|lance perdedor/.test(sinal);
+    const cima = /thumbs?(?:-o)?[-_ ]up(?:_alt)?\b|polegar.*(?:cima)|\bvencendo\b|lance vencedor/.test(sinal);
+    if (!baixo && !cima) continue;
+    const view = el.ownerDocument.defaultView || window;
+    const cores = [view.getComputedStyle(el).color, view.getComputedStyle(el).fill, ...[...el.querySelectorAll("path")].map((p) => view.getComputedStyle(p).fill)];
+    const tons = new Set();
+    for (const cor of cores) {
+      const rgb = String(cor || "").match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*[, ]\s*(\d+(?:\.\d+)?)\s*[, ]\s*(\d+(?:\.\d+)?)(?:\s*[,/]\s*(\d+(?:\.\d+)?))?\s*\)$/i);
+      if (!rgb || (rgb[4] !== undefined && Number(rgb[4]) < 0.5)) continue;
+      const [, r, g, b] = rgb.map(Number);
+      if (r >= 90 && r > g * 1.3 && r > b * 1.3) tons.add("vermelho");
+      else if (g >= 65 && g > r * 1.2 && g > b * 1.1) tons.add("verde");
+    }
+    const cor = tons.size === 1 ? [...tons][0] : "indefinida";
+    const estado = baixo && !cima && cor === "vermelho" ? "perdendo" : cima && !baixo && cor === "verde" ? "vencendo" : "indefinido";
+    identificados.push({ el, estado, cor, direcao: baixo && !cima ? "baixo" : cima && !baixo ? "cima" : "ambigua" });
+  }
+  const folhas = identificados.filter((m) => !identificados.some((outro) => outro !== m && m.el.contains(outro.el)));
+  if (folhas.length !== 1 || folhas[0].estado === "indefinido") return { estado: "indefinido", motivo: folhas.length > 1 ? "indicadores_ambiguos" : folhas.length ? "cor_ou_sentido_incoerente" : "indicador_ausente", indicadores: folhas.length };
+  const { estado, cor, direcao } = folhas[0];
+  return { estado, cor, direcao, motivo: "ok", indicadores: 1 };
+}
+
+function extrairItensComPisoDisputa(registros) {
+  if (!Array.isArray(registros)) throw new Error("A API não devolveu uma lista de itens válida.");
+  const itens = new Map();
+  for (const item of registros) {
+    const bruto = String(item?.numeroItem ?? item?.item ?? "").trim();
+    if (!/^\d{1,6}$/.test(bruto) || Number(bruto) <= 0) throw new Error("Número de item inválido no sistema.");
+    const numero = normalizeItemNumber(bruto);
+    if (itens.has(numero)) throw new Error(`Número de item ${numero} duplicado; pisos não são seguros.`);
+    itens.set(numero, item);
+  }
+  return itens;
+}
+
+async function atualizarLimitesDisputa(monitoramento, forcar = false) {
+  if (!forcar && Date.now() - Number(monitoramento.limitesAtualizadosEm || 0) < DISPUTA_INTERVALO_ATUALIZACAO_PISOS_MS) return true;
+  let timeout;
+  try {
+    const requisicao = (async () => {
+      if (await lerApiUrl() !== monitoramento.apiUrl) throw new Error("A URL do sistema mudou; pare e selecione novamente a proposta.");
+      const id = encodeURIComponent(monitoramento.propostaId);
+      const [proposta, itens] = await Promise.all([
+        chamarApi(`${monitoramento.apiUrl}/api/propostas/${id}/script`, { cache: "no-store" }),
+        chamarApi(`${monitoramento.apiUrl}/api/propostas/${id}/itens`, { cache: "no-store" }),
+      ]);
+      if (!proposta.ok || !itens.ok) throw new Error("Não consegui conferir os Valores Mínimos atuais no sistema.");
+      const dados = proposta.dados?.proposta;
+      const uasg = String(dados?.uasg || "").replace(/\D/g, "");
+      if (uasg !== monitoramento.proposta.uasg || normalizarNumeroDispensaDisputa(dados?.numeroDispensa, uasg) !== monitoramento.proposta.numeroDispensa) throw new Error("A proposta no sistema mudou de compra/UASG.");
+      return extrairItensComPisoDisputa(itens.dados);
+    })();
+    const novos = await Promise.race([requisicao, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("A conferência dos pisos excedeu o tempo; nenhum novo lance será enviado.")), 10000); })]);
+    if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) return false;
+    const pisosNovos = new Map();
+    let algumPisoAlterado = false;
+    for (const numero of monitoramento.pisosRegistrados.keys()) {
+      if (!novos.has(numero)) {
+        monitoramento.ultimasTentativas.delete(numero);
+        if (monitoramento.itensNoPiso.delete(numero)) algumPisoAlterado = true;
+      }
+    }
+    for (const [numero, item] of novos) {
+      const piso = parseValorUnidadesDisputa(item.valorMinimo);
+      pisosNovos.set(numero, piso);
+      if (monitoramento.pisosRegistrados.has(numero) && monitoramento.pisosRegistrados.get(numero) !== piso) {
+        algumPisoAlterado = true;
+        monitoramento.ultimasTentativas.delete(numero);
+        monitoramento.avisosRegistrados.clear();
+        if (piso !== null && monitoramento.itensNoPiso.delete(numero)) {
+          const mensagem = `Item ${numero}: Valor Mínimo alterado no sistema para ${formatarValorDisputa(piso)}; reavaliando somente se estiver perdendo.`;
+          mostrarStatusDisputa(mensagem, "info");
+          registrarNoPainel(`↻ ${mensagem}`);
+        }
+      }
+    }
+    monitoramento.pisosRegistrados = pisosNovos;
+    monitoramento.itensPorNumero = novos;
+    monitoramento.limitesAtualizadosEm = Date.now();
+    if (algumPisoAlterado && painelModo === "disputa") carregarItensDisputaNoPainel();
+    return true;
+  } finally { clearTimeout(timeout); }
+}
+
+function descartarPreparacaoDisputa(cartao, sugestao, monitoramento) {
+  // Uma sessão antiga nunca pode apagar o campo de uma automação reiniciada.
+  if (disputaAutomatica !== monitoramento) return;
+  const identificacao = extrairIdentificacaoDisputaPagina();
+  if (!identificacao.telaEnviarLance || identificacao.numeroDispensa !== monitoramento.proposta?.numeroDispensa || identificacao.uasg !== monitoramento.proposta?.uasg) return;
+  const iguais = encontrarCartoesDisputa().filter((c) => c.numeroItem === cartao.numeroItem && c.faseAberta);
+  if (iguais.length !== 1) return;
+  const atual = iguais[0];
+  if (!atual.campoAssociado || !atual.criterioPreco) return;
+  const mesmoControle = atual.input === cartao.input && atual.cartao === cartao.cartao && atual.escopoLance === cartao.escopoLance;
+  const remontagem = !cartao.input?.isConnected && atual.cartao !== cartao.cartao;
+  if (!mesmoControle && !remontagem) return;
+  const input = atual.input;
+  if (!input?.isConnected || parseValorUnidadesDisputa(input.value) !== sugestao.unidades) return;
+  const view = input.ownerDocument.defaultView || window;
+  aplicarValor(input, "", view);
+  disparar(input, "input", view, { data: null, inputType: "deleteContentBackward" });
+  disparar(input, "change", view, {});
+}
+
+async function verificarDisputaAutomatica() {
+  const mon = disputaAutomatica;
+  if (!mon.ativo || mon.pausado || mon.processando) return;
+  mon.processando = true;
+  try {
+    const identificacao = extrairIdentificacaoDisputaPagina();
+    if (!identificacao.telaEnviarLance || identificacao.numeroDispensa !== mon.proposta.numeroDispensa || identificacao.uasg !== mon.proposta.uasg) {
+      pararDisputaAutomatica("A compra/UASG da página mudou; automação interrompida."); return;
+    }
+    let cartoes = encontrarCartoesDisputa();
+    mon.situacoesPorNumero = new Map(cartoes.map((c) => [c.numeroItem, c.situacaoCompetitiva]));
+    if (await verificarConfirmacaoLancePendente(cartoes)) return;
+    try { if (!(await atualizarLimitesDisputa(mon))) return; }
+    catch (e) { if (disputaAutomatica === mon) pararDisputaAutomatica(`Não validei os pisos atuais: ${e.message}`); return; }
+    if (disputaAutomatica !== mon || !mon.ativo || mon.pausado) return;
+    cartoes = encontrarCartoesDisputa();
+    mon.situacoesPorNumero = new Map(cartoes.map((c) => [c.numeroItem, c.situacaoCompetitiva]));
+    const espera = DISPUTA_INTERVALO_ENTRE_ENVIOS_MS - (Date.now() - mon.ultimaSubmissaoEm);
+    if (mon.ultimaSubmissaoEm && espera > 0) { agendarVerificacaoDisputa(espera); return; }
+    for (const cartao of cartoes) {
+      const local = mon.itensPorNumero.get(cartao.numeroItem);
+      const piso = parseValorUnidadesDisputa(local?.valorMinimo);
+      if (!local || piso === null || !cartao.faseAberta || !cartao.criterioPreco) continue;
+      if (cartao.meu !== null && cartao.meu <= piso) {
+        const detalhe = cartao.meu === piso
+          ? "Seu lance atingiu o Valor Mínimo atual;"
+          : `Seu lance atual (${formatarValorDisputa(cartao.meu)}) está abaixo do Valor Mínimo atual;`;
+        encerrarLancesDoItemNoPiso(cartao.numeroItem, piso, detalhe);
+      }
+      if (cartao.situacaoCompetitiva.estado !== "perdendo") {
+        mon.ultimasTentativas.delete(cartao.numeroItem);
+        const estado = cartao.situacaoCompetitiva.estado;
+        const chave = `${cartao.numeroItem}:situacao:${estado}`;
+        if (!mon.avisosRegistrados.has(chave)) {
+          mon.avisosRegistrados.add(chave);
+          const mensagem = estado === "vencendo"
+            ? `Item ${cartao.numeroItem}: polegar para cima verde; você está vencendo. Nenhum lance.`
+            : `Item ${cartao.numeroItem}: não confirmei polegar para baixo vermelho (ícone ausente, cor/sentido ambíguos); nenhum lance.`;
+          registrarNoPainel(`ℹ️ ${mensagem}`);
+        }
+        continue;
+      }
+      if (mon.itensNoPiso.has(cartao.numeroItem)) continue;
+      const sugestao = sugestaoDeLanceDisputa(cartao, local);
+      if (!sugestao.ok) {
+        if (sugestao.pararItemNoPiso) encerrarLancesDoItemNoPiso(cartao.numeroItem, sugestao.piso, sugestao.motivo);
+        continue;
+      }
+      if (!cartao.input || !cartao.botao || !cartao.input.isConnected || !cartao.botao.isConnected || !campoDeLanceVazio(cartao.input)) continue;
+      const anterior = mon.ultimasTentativas.get(cartao.numeroItem);
+      if (anterior?.meu === cartao.meu && anterior?.melhor === cartao.melhor) continue;
+      mostrarStatusDisputa(`Item ${cartao.numeroItem} perdendo (polegar vermelho): preparando ${formatarValorDisputa(sugestao.unidades)}, piso ${formatarValorDisputa(piso)}.`, "info");
+      // Seleciona o zero da máscara localmente, sem mudar a digitação de propostas.
+      try { cartao.input.focus(); cartao.input.select?.(); } catch { /* segue */ }
+      const preenchido = await setInputValue(cartao.input, formatarInputDisputa(sugestao.unidades), true);
+      if (disputaAutomatica !== mon || !mon.ativo || mon.pausado) { descartarPreparacaoDisputa(cartao, sugestao, mon); return; }
+      if (!preenchido || parseValorUnidadesDisputa(cartao.input.value) !== sugestao.unidades) {
+        descartarPreparacaoDisputa(cartao, sugestao, mon);
+        pararDisputaAutomatica(`O portal não manteve o valor do item ${cartao.numeroItem}; não cliquei Enviar.`); return;
+      }
+      const aceito = await aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento: mon });
+      if (disputaAutomatica !== mon || !mon.ativo || mon.pausado) { descartarPreparacaoDisputa(cartao, sugestao, mon); return; }
+      if (aceito.motivo !== "ok") {
+        descartarPreparacaoDisputa(cartao, sugestao, mon);
+        mon.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
+        if (aceito.motivo === "pagina_mudou") pararDisputaAutomatica("A compra/UASG mudou; preparação não enviada.");
+        return;
+      }
+      // Uma mudança de piso durante a digitação nunca usa o limite antigo.
+      try { if (!(await atualizarLimitesDisputa(mon, true))) { descartarPreparacaoDisputa(cartao, sugestao, mon); return; } }
+      catch (e) { descartarPreparacaoDisputa(cartao, sugestao, mon); if (disputaAutomatica === mon) pararDisputaAutomatica(`Não validei o piso antes do clique: ${e.message}`); return; }
+      if (disputaAutomatica !== mon || !mon.ativo || mon.pausado) { descartarPreparacaoDisputa(cartao, sugestao, mon); return; }
+      const pisoAtual = parseValorUnidadesDisputa(mon.itensPorNumero.get(cartao.numeroItem)?.valorMinimo);
+      const atualIdent = extrairIdentificacaoDisputaPagina();
+      const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem && c.input === cartao.input);
+      const novaSugestao = atual ? sugestaoDeLanceDisputa(atual, mon.itensPorNumero.get(cartao.numeroItem)) : { ok: false };
+      if (pisoAtual === null || pisoAtual !== sugestao.piso || !novaSugestao.ok || novaSugestao.unidades !== sugestao.unidades ||
+          !atual || atual.cartao !== cartao.cartao || atual.escopoLance !== cartao.escopoLance || atual.botao !== aceito.cartao.botao ||
+          atual.melhor !== cartao.melhor || atual.meu !== cartao.meu || !intervalosIguaisDisputa(atual.intervalo, cartao.intervalo) ||
+          !atual.enviarHabilitado || atual.situacaoCompetitiva.estado !== "perdendo" || !cartao.input.isConnected || !atual.botao.isConnected ||
+          parseValorUnidadesDisputa(cartao.input.value) !== sugestao.unidades ||
+          !atualIdent.telaEnviarLance || atualIdent.numeroDispensa !== identificacao.numeroDispensa || atualIdent.uasg !== identificacao.uasg) {
+        descartarPreparacaoDisputa(cartao, sugestao, mon); return;
+      }
+      mon.pendente = { numeroItem: cartao.numeroItem, valorEnviado: sugestao.unidades, piso: pisoAtual, iniciadoEm: Date.now() };
+      mon.ultimasTentativas.set(cartao.numeroItem, { meu: atual.meu, melhor: atual.melhor });
+      mon.ultimaSubmissaoEm = Date.now();
+      mostrarStatusDisputa(`Enviando item ${cartao.numeroItem} perdendo: ${formatarValorDisputa(sugestao.unidades)}; aguardando confirmação.`, "info");
+      try {
+        // JSDOM, alguns navegadores incorporados e nós sem layout não expõem
+        // scrollIntoView. A rolagem é apenas conveniência; a ausência dela não
+        // pode bloquear o clique já validado.
+        if (typeof atual.botao.scrollIntoView === "function") {
+          try { atual.botao.scrollIntoView({ behavior: "instant", block: "center" }); } catch { /* segue sem rolagem */ }
+        }
+        const clicou = clicarDeVerdade(atual.botao);
+        if (!clicou) {
+          mon.pendente = null;
+          mon.ultimaSubmissaoEm = 0;
+          pararDisputaAutomatica(`Falha ao clicar no botão Enviar lance do item ${cartao.numeroItem} (elemento inacessível). Tente “📖 Ler página” novamente depois de abrir o item.`);
+        }
+      }
+      catch (e) { pararDisputaAutomatica(`Falha ao confirmar o clique em Enviar no item ${cartao.numeroItem}: ${e.message}`); }
+      return;
+    }
+    const parados = mon.itensNoPiso.size;
+    const perdendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "perdendo").length;
+    const vencendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "vencendo").length;
+    const incertos = Math.max(0, cartoes.length - perdendo - vencendo);
+    mostrarStatusDisputa(`Monitorando ${cartoes.length} itens: ${perdendo} perdendo (polegar vermelho), ${vencendo} vencendo (polegar verde), ${incertos} sem estado confirmado. Só perde gera lance. ${parados} item(ns) no limite; só reavaliam quando o Valor Mínimo mudar no sistema.`, parados ? "warning" : "info");
+  } finally { mon.processando = false; }
+}
+
+async function iniciarDisputaAutomatica(propostaId) {
+  if (disputaAutomatica.ativo) return { ok: false, error: "Já existe um monitoramento de disputa ativo nesta página." };
+  if (rodandoAgora || rodandoPeloPainel) return { ok: false, error: "Pare o Modo Proposta antes de iniciar os lances automáticos." };
+  const id = String(propostaId || "").trim();
+  if (!/^\d+$/.test(id)) return { ok: false, error: "Selecione uma proposta válida antes de iniciar." };
+
+  const identificacao = extrairIdentificacaoDisputaPagina();
+  if (!identificacao.telaEnviarLance || !identificacao.numeroDispensa || !identificacao.uasg) {
+    return { ok: false, error: "Abra a tela real “Enviar lance” e confira se o número da dispensa e a UASG estão visíveis." };
+  }
+  const apiUrl = await lerApiUrl();
+  if (!apiUrl) return { ok: false, error: "Configure a URL do sistema na extensão antes de iniciar o Modo Disputa." };
+
+  let propostaDados;
+  let itensDados;
+  try {
+    const [respostaProposta, respostaItens] = await Promise.all([
+      chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(id)}/script`, { cache: "no-store" }),
+      chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(id)}/itens`, { cache: "no-store" }),
+    ]);
+    if (!respostaProposta.ok) throw new Error(`proposta HTTP ${respostaProposta.status}`);
+    if (!respostaItens.ok) throw new Error(`itens HTTP ${respostaItens.status}`);
+    propostaDados = respostaProposta.dados?.proposta;
+    itensDados = respostaItens.dados;
+  } catch (erro) {
+    return { ok: false, error: `Não consegui validar a proposta e seus limites: ${erro?.message || "falha na API"}.` };
+  }
+
+  const propostaUasg = String(propostaDados?.uasg || "").replace(/\D/g, "");
+  const propostaNumero = normalizarNumeroDispensaDisputa(propostaDados?.numeroDispensa, propostaUasg);
+  if (propostaNumero !== identificacao.numeroDispensa || propostaUasg !== identificacao.uasg) {
+    return {
+      ok: false,
+      error: `A proposta selecionada não corresponde à página. Página: ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}; proposta: ${propostaNumero || String(propostaDados?.numeroDispensa || "").trim() || "sem número"} · UASG ${propostaUasg || "sem UASG"}. Nenhum lance foi enviado.`,
+    };
+  }
+
+  let itensPorNumero;
+  try { itensPorNumero = extrairItensComPisoDisputa(itensDados); }
+  catch (e) { return { ok: false, error: e.message }; }
+  const comPiso = [...itensPorNumero.values()].filter((item) => parseValorUnidadesDisputa(item.valorMinimo) !== null).length;
+  if (comPiso === 0) return { ok: false, error: "Nenhum item da proposta tem “Valor Mínimo” válido. Cadastre os pisos antes de iniciar a automação." };
+
+  // Faz uma leitura prévia para mapear campos
+  const leituraPrevia = lerPaginaDisputa();
+  const diagnostico = {};
+  const cartoes = encontrarCartoesDisputa(diagnostico);
+  const cartoesValidos = cartoes.filter((cartao) => cartao.faseAberta && cartao.criterioPreco && cartao.input && cartao.botao && cartao.melhor !== null && cartao.meu !== null && cartao.intervalo?.unidades > 0);
+  if (cartoesValidos.length === 0) {
+    return { ok: false, error: `Não consegui validar com segurança preços, intervalo e campo de lance dos itens. ${resumoLeituraCamposDisputa(diagnostico, cartoes)} Dica: abra a tela "Enviar lance" de cada item, clique em "📖 Ler página" no Modo Disputa para mapear os campos e tente novamente. Use também "🔎 Diagnosticar campos" para ver o relatório. Nenhum lance foi enviado.` };
+  }
+
+  const resumo = resumoDisputaParaConfirmacao(cartoesValidos, itensPorNumero);
+  const mensagem = [
+    "ATENÇÃO: o Modo Disputa enviará lances reais automaticamente após iniciar.",
+    `Disputa: Dispensa ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}.`,
+    "Só envia quando o ícone/thumbs-down do próprio item for vermelho (perdendo). Polegar para cima verde (vencendo), cor/sentido incoerentes ou indicador ausente não recebem lances.",
+    "Regra: melhor valor menos o intervalo mínimo em R$ ou %, sem ultrapassar o Valor Mínimo do sistema. Ao atingir o piso ou quando o próximo lance o cruzaria, para o item; os demais continuam. O item só é reavaliado se você alterar o Valor Mínimo no sistema. Os pisos são reconferidos antes de cada clique.",
+    "Será enviado um lance por vez e a automação aguardará a atualização de “Meu valor” antes de continuar. Use ⏹ Parar no painel para interromper toda a automação.",
+    "Confira a proposta selecionada e os valores antes de autorizar:",
+    resumo,
+    "\nIniciar monitoramento e envio automático?",
+  ].join("\n\n");
+  if (typeof window.confirm !== "function" || !window.confirm(mensagem)) {
+    return { ok: false, canceled: true, error: "Início cancelado; nenhum lance foi enviado." };
+  }
+
+  // A digitação compartilhada com o Modo Proposta observa estes flags globais.
+  // Comece uma sessão autorizada com eles limpos; o Modo Proposta já foi parado.
+  abortRequested = false;
+  botPausado = false;
+  disputaAutomatica = {
+    ativo: true,
+    pausado: false,
+    status: "Monitoramento iniciado; verificando os itens da disputa.",
+    propostaId: id,
+    proposta: { numeroDispensa: propostaNumero, uasg: propostaUasg },
+    itensPorNumero,
+    apiUrl,
+    pisosRegistrados: new Map([...itensPorNumero].map(([numero, item]) => [numero, parseValorUnidadesDisputa(item.valorMinimo)])),
+    limitesAtualizadosEm: Date.now(),
+    observer: null,
+    intervalo: null,
+    agendamento: null,
+    processando: false,
+    ultimaSubmissaoEm: 0,
+    pendente: null,
+    ultimasTentativas: new Map(),
+    avisosRegistrados: new Set(),
+    itensNoPiso: new Set(),
+    situacoesPorNumero: new Map(cartoes.map((c) => [c.numeroItem, c.situacaoCompetitiva])),
+  };
+
+  if (!document.getElementById(PAINEL_ID)) mostrarPainel("disputa");
+  else definirModoPainel("disputa");
+  const select = document.getElementById(`${PAINEL_ID}_proposta`);
+  if (select) {
+    await carregarPropostasNoPainel();
+    select.value = id;
+    await carregarItensDisputaNoPainel();
+  }
+  mostrarStatusDisputa("Monitorando: somente polegar para baixo vermelho, pisos atualizados pelo sistema e um lance por vez.", "success");
+  registrarNoPainel(`⚔️ Automação iniciada para ${propostaNumero} · UASG ${propostaUasg}.`);
+
+  if (typeof MutationObserver === "function" && document.body) {
+    disputaAutomatica.observer = new MutationObserver((registrosMutacao) => {
+      const relevantes = registrosMutacao.some((registro) => {
+        const dentroDoPainel = (no) => {
+          const elemento = no?.nodeType === 1 ? no : no?.parentElement;
+          return Boolean(elemento?.id === PAINEL_ID || elemento?.closest?.(`#${PAINEL_ID}`));
+        };
+        if (dentroDoPainel(registro.target)) return false;
+        const alterados = [...(registro.addedNodes || []), ...(registro.removedNodes || [])];
+        return alterados.length === 0 || alterados.some((no) => !dentroDoPainel(no));
+      });
+      if (relevantes) agendarVerificacaoDisputa(120);
+    });
+    disputaAutomatica.observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+  }
+  disputaAutomatica.intervalo = setInterval(() => agendarVerificacaoDisputa(0), DISPUTA_INTERVALO_VERIFICACAO_MS);
+  agendarVerificacaoDisputa(0);
+  atualizarPainel();
+  return { ok: true, active: true, propostaId: id, message: `Monitorando ${propostaNumero} · UASG ${propostaUasg}. Só enviará quando o polegar do item estiver vermelho para baixo; nunca abaixo do Valor Mínimo atual.` };
+}
+
+/** Mostra itens e valores de referência e executa lances só após confirmação explícita. */
+async function carregarItensDisputaNoPainel() {
+  const select = document.getElementById(`${PAINEL_ID}_proposta`);
+  const lista = document.getElementById(`${PAINEL_ID}_lista_disputa`);
+  if (!select || !lista || painelModo !== "disputa") return;
+
+  const propostaId = select.value;
+  const requisicao = ++requisicaoItensDisputa;
+  if (!propostaId) {
+    lista.textContent = "Selecione uma proposta para consultar os valores.";
+    return;
+  }
+
+  lista.textContent = "Carregando itens e valores…";
+  const apiUrl = await lerApiUrl();
+  if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+  if (!apiUrl) {
+    lista.textContent = "Configure a URL do sistema no popup para consultar os itens.";
+    return;
+  }
+
+  try {
+    const resposta = await chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(propostaId)}/itens`, { cache: "no-store" });
+    if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
+    if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+
+    const itens = Array.isArray(resposta.dados) ? resposta.dados : [];
+    lista.replaceChildren();
+    if (itens.length === 0) {
+      lista.textContent = "Nenhum item cadastrado nesta proposta.";
+      return;
+    }
+
+    for (const item of itens) {
+      const linha = document.createElement("div");
+      linha.setAttribute("role", "listitem");
+      linha.style.cssText = "display:flex;gap:6px;padding:5px 3px;border-bottom:1px solid #e2e8f0;";
+
+      const numero = document.createElement("strong");
+      numero.textContent = String(item.numeroItem ?? "—");
+      numero.style.cssText = "min-width:22px;color:#6d28d9;";
+
+      const dados = document.createElement("div");
+      dados.style.cssText = "min-width:0;flex:1;";
+      const descricao = document.createElement("div");
+      descricao.textContent = String(item.descricao || "(sem descrição)");
+      descricao.title = descricao.textContent;
+      descricao.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;";
+
+      const valores = document.createElement("div");
+      valores.textContent = `Atual ${formatarValorPainelDisputa(item.valorUnitario)} · Mín. ${formatarValorPainelDisputa(item.valorMinimo)}`;
+      valores.style.cssText = "font-size:9px;color:#64748b;white-space:normal;";
+
+      dados.append(descricao, valores);
+      linha.append(numero, dados);
+      lista.appendChild(linha);
+    }
+  } catch (erro) {
+    if (requisicao !== requisicaoItensDisputa || painelModo !== "disputa" || select.value !== propostaId) return;
+    lista.textContent = `Não consegui carregar os itens (${erro?.message || "erro desconhecido"}).`;
+  }
+}
+
+function formatarValorPainelDisputa(valor) {
+  if (valor === null || valor === undefined || valor === "") return "não informado";
+  const numero = Number(valor);
+  return Number.isFinite(numero)
+    ? numero.toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+    : String(valor);
 }
 
 function escapeHtml(texto) {
@@ -3551,6 +5788,15 @@ function escapeHtml(texto) {
 
 /** O botão "▶ Iniciar" do painel: preenche os itens da proposta escolhida. */
 async function iniciarPeloPainel() {
+  if (painelModo === "disputa") {
+    const propostaId = document.getElementById(`${PAINEL_ID}_proposta`)?.value;
+    const resultado = await iniciarDisputaAutomatica(propostaId);
+    const mensagem = resultado?.message || resultado?.error || "Não consegui iniciar o Modo Disputa.";
+    mostrarStatusDisputa(mensagem, resultado?.ok ? "success" : "warning");
+    if (!resultado?.ok) registrarNoPainel(`⚠️ ${mensagem}`);
+    return;
+  }
+
   if (rodandoPeloPainel || rodandoAgora) {
     registrarNoPainel("⏳ Já existe um preenchimento em andamento.");
     return;
@@ -3605,6 +5851,13 @@ async function iniciarPeloPainel() {
   try {
     const resultado = await fillItems(itens, velocidade);
     const salvos = new Set(resultado.savedItems || []);
+
+    for (const erro of resultado.errors || []) registrarNoPainel(`❌ ${erro}`);
+    for (const campo of resultado.camposProblematicos || []) {
+      registrarNoPainel(
+        `⚠️ Campo ${campo.campo} ficou com "${campo.valor}"${campo.esperado ? ` (esperado: ${campo.esperado})` : ""}; não salvei esse item.`,
+      );
+    }
 
     // Marca como enviado no sistema só o que foi realmente salvo na página.
     const paraMarcar = itens.filter((i) => i.id && salvos.has(normalizeItemNumero(i.item)));

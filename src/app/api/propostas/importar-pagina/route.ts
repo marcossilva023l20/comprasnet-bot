@@ -13,7 +13,8 @@ import {
 import { executarConsultaLinhas } from "@/lib/db-result";
 
 /**
- * Importa para o sistema os itens lidos na página do ComprasNet pela extensão.
+ * Importa para o sistema os itens lidos pelo popup da extensão no ComprasNet,
+ * CNET Mobile/Compras.gov.br ou Radar de Licitações PNCP.
  *
  * POST /api/propostas/importar-pagina
  * {
@@ -140,14 +141,14 @@ export async function POST(req: NextRequest) {
         UNION ALL
         SELECT id FROM proposta_nova
       ), removidos AS (
-        DELETE FROM itens WHERE proposta_id = (SELECT id FROM alvo) RETURNING id
+        DELETE FROM itens WHERE proposta_id = (SELECT id FROM alvo) RETURNING numero_item, valor_minimo
       )
       INSERT INTO itens (
         proposta_id, numero_item, descricao, descricao_detalhada, quantidade, unidade,
-        valor_estimado, valor_unitario, marca_fabricante, modelo_versao, enviado
+        valor_estimado, valor_unitario, valor_minimo, marca_fabricante, modelo_versao, enviado
       )
       SELECT (SELECT id FROM alvo), x.numero_item, x.descricao, x.descricao_detalhada,
-             x.quantidade, x.unidade, x.valor_estimado, x.valor_unitario,
+             x.quantidade, x.unidade, x.valor_estimado, x.valor_unitario, removidos.valor_minimo,
              x.marca_fabricante, x.modelo_versao, false
       FROM jsonb_to_recordset(${payload}::jsonb) AS x(
         numero_item integer,
@@ -160,6 +161,7 @@ export async function POST(req: NextRequest) {
         marca_fabricante text,
         modelo_versao text
       )
+      LEFT JOIN removidos ON removidos.numero_item = x.numero_item
       RETURNING proposta_id, numero_item
     `);
 

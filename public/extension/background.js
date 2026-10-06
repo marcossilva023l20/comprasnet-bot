@@ -17,6 +17,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           method: msg.method || "GET",
           headers: msg.headers || undefined,
           body: msg.body || undefined,
+          ...(msg.cache ? { cache: msg.cache } : {}),
         });
 
         const texto = await resposta.text();

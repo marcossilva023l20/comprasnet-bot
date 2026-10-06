@@ -20,6 +20,7 @@ const linhaExportada = (over: Record<string, unknown> = {}) => ({
   Unidade: "UNIDADE",
   "Valor Estimado (R$)": 37553.33,
   "Valor Unitário (R$)": 1234.56,
+  "Valor Mínimo (R$)": 800.00,
   "Marca/Fabricante": "MICHELIN",
   "Modelo/Versão": "PRIMACY 4",
   Enviado: "Não",
@@ -42,6 +43,7 @@ test("planilha exportada pelo sistema: lê número, valores BR e colunas present
   assert.equal(linhas[0].quantidade, "4");
   assert.equal(linhas[0].valorEstimado, "37553.33");
   assert.equal(linhas[1].valorUnitario, "1234.50");
+  assert.equal(linhas[0].valorMinimo, "800");
   assert.equal(linhas[0].marcaFabricante, "MICHELIN");
   assert.deepEqual(linhas[0].colunas, {
     descricaoDetalhada: true,
@@ -49,20 +51,40 @@ test("planilha exportada pelo sistema: lê número, valores BR e colunas present
     unidade: true,
     valorEstimado: true,
     valorUnitario: true,
+    valorMinimo: true,
     marcaFabricante: true,
     modeloVersao: true,
   });
 });
 
+test("planilha antiga sem a coluna Valor Mínimo importa normalmente", () => {
+  const resultado = lerLinhasDaPlanilha([
+    {
+      Item: 1,
+      Descrição: "ITEM DE PLANILHA ANTIGA",
+      Quantidade: 2,
+      "Valor Unitário (R$)": "67,4100",
+    },
+  ]);
+
+  assert.deepEqual(resultado.invalidos, []);
+  assert.equal(resultado.linhas.length, 1);
+  assert.equal(resultado.linhas[0].descricao, "ITEM DE PLANILHA ANTIGA");
+  assert.equal(resultado.linhas[0].valorMinimo, null);
+  assert.equal(resultado.linhas[0].colunas.valorMinimo, false);
+});
+
 test("colunas ausentes não são tocadas e célula em branco em coluna presente apaga o valor", () => {
   const { linhas } = lerLinhasDaPlanilha([
-    { Item: 1, Descrição: "PARAFUSO", "Valor Unitário (R$)": "" },
+    { Item: 1, Descrição: "PARAFUSO", "Valor Unitário (R$)": "", "Valor Mínimo (R$)": "" },
     { Nº: 2, Descricao: "ARRUELA", "Marca/Fabricante": "  " },
   ]);
 
-  // 1ª linha: só Item/Descrição/Valor Unitário vieram na planilha
+  // 1ª linha: Item, Descrição, Valor Unitário e Valor Mínimo vieram na planilha
   assert.equal(linhas[0].colunas.valorUnitario, true);
   assert.equal(linhas[0].valorUnitario, null); // branco = apagar
+  assert.equal(linhas[0].colunas.valorMinimo, true);
+  assert.equal(linhas[0].valorMinimo, null); // em branco apaga o valor mínimo
   assert.equal(linhas[0].colunas.marcaFabricante, false);
   assert.equal(linhas[0].colunas.quantidade, false);
   assert.equal(linhas[0].quantidade, null);
@@ -72,6 +94,7 @@ test("colunas ausentes não são tocadas e célula em branco em coluna presente 
   assert.equal(linhas[1].numeroItem, 2);
   assert.equal(linhas[1].marcaFabricante, null);
   assert.equal(linhas[1].colunas.marcaFabricante, true);
+  assert.equal(linhas[1].colunas.valorMinimo, false); // coluna ausente preserva
   assert.equal(linhas[1].descricao, "ARRUELA");
 });
 
@@ -128,12 +151,14 @@ test("valores inválidos apontam a linha e o campo", () => {
     { Item: "abc", Descrição: "NÚMERO RUIM" },
     { Item: 2, Descrição: "VALOR RUIM", "Valor Unitário (R$)": "mil reais" },
     { Item: 3, Descrição: "QUANTIDADE RUIM", Quantidade: "vários" },
+    { Item: 4, Descrição: "MÍNIMO RUIM", "Valor Mínimo (R$)": "quase cem" },
   ]);
 
-  assert.equal(invalidos.length, 3);
+  assert.equal(invalidos.length, 4);
   assert.match(invalidos[0], /linha 2: número do item/);
   assert.match(invalidos[1], /linha 3: valor unitário/);
   assert.match(invalidos[2], /linha 4: quantidade/);
+  assert.match(invalidos[3], /linha 5: valor mínimo/);
 });
 
 test("payload do Postgres usa snake_case e sinaliza as colunas presentes", () => {
@@ -148,6 +173,7 @@ test("payload do Postgres usa snake_case e sinaliza as colunas presentes", () =>
       unidade: null,
       valor_estimado: null,
       valor_unitario: null,
+      valor_minimo: null,
       marca_fabricante: "ACME",
       modelo_versao: null,
       set_descricao_detalhada: false,
@@ -155,6 +181,7 @@ test("payload do Postgres usa snake_case e sinaliza as colunas presentes", () =>
       set_unidade: false,
       set_valor_estimado: false,
       set_valor_unitario: false,
+      set_valor_minimo: false,
       set_marca_fabricante: true,
       set_modelo_versao: false,
     },
@@ -171,6 +198,7 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
       unidade: "UNIDADE",
       valorEstimado: "37553.3300",
       valorUnitario: "1234.5600",
+      valorMinimo: "800.0000",
       marcaFabricante: "MICHELIN",
       modeloVersao: "PRIMACY 4",
       enviado: true,
@@ -183,6 +211,7 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
       unidade: "PAR",
       valorEstimado: null,
       valorUnitario: null,
+      valorMinimo: null,
       marcaFabricante: null,
       modeloVersao: null,
       enviado: false,
@@ -220,6 +249,7 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
     unidade: itens[indice].unidade,
     valorEstimado: itens[indice].valorEstimado === null ? null : Number(itens[indice].valorEstimado),
     valorUnitario: itens[indice].valorUnitario === null ? null : Number(itens[indice].valorUnitario),
+    valorMinimo: itens[indice].valorMinimo === null ? null : Number(itens[indice].valorMinimo),
     marcaFabricante: itens[indice].marcaFabricante,
     modeloVersao: itens[indice].modeloVersao,
   });
@@ -231,6 +261,7 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
     unidade: importadas[indice].unidade,
     valorEstimado: importadas[indice].valorEstimado === null ? null : Number(importadas[indice].valorEstimado),
     valorUnitario: importadas[indice].valorUnitario === null ? null : Number(importadas[indice].valorUnitario),
+    valorMinimo: importadas[indice].valorMinimo === null ? null : Number(importadas[indice].valorMinimo),
     marcaFabricante: importadas[indice].marcaFabricante,
     modeloVersao: importadas[indice].modeloVersao,
   });
@@ -244,12 +275,13 @@ test("ida e volta: exportar → editar no Excel → importar devolve os mesmos i
     unidade: true,
     valorEstimado: true,
     valorUnitario: true,
+    valorMinimo: true,
     marcaFabricante: true,
     modeloVersao: true,
   });
 });
 
-test("exportação: valores unitário e estimado saem com 4 casas (44,0000)", () => {
+test("exportação: valores unitário, estimado e mínimo saem com 4 casas (44,0000)", () => {
   const itens = [
     {
       numeroItem: 1,
@@ -259,6 +291,7 @@ test("exportação: valores unitário e estimado saem com 4 casas (44,0000)", ()
       unidade: "Unidade",
       valorEstimado: "44.0000",
       valorUnitario: "44.0000",
+      valorMinimo: "12.3400",
       marcaFabricante: "ACME",
       modeloVersao: "X1",
       enviado: false,
@@ -272,10 +305,13 @@ test("exportação: valores unitário e estimado saem com 4 casas (44,0000)", ()
   const coluna = (nome: string) => String.fromCharCode(65 + COLUNAS_EXPORTACAO.indexOf(nome as never));
   const estimado = ws[`${coluna("Valor Estimado (R$)")}2`];
   const unitario = ws[`${coluna("Valor Unitário (R$)")}2`];
+  const minimo = ws[`${coluna("Valor Mínimo (R$)")}2`];
 
   assert.equal(unitario.v, 44);
   assert.equal(unitario.z, FORMATO_QUATRO_CASAS);
   assert.equal(estimado.z, FORMATO_QUATRO_CASAS);
+  assert.equal(minimo.v, 12.34);
+  assert.equal(minimo.z, FORMATO_QUATRO_CASAS);
 
   // formatado, o Excel mostra exatamente "44,0000" (pt-BR)
   const exibido = Number(unitario.v).toLocaleString("pt-BR", {

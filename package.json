@@ -15,9 +15,9 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "pretest": "node scripts/build-extension.mjs",
-    "teste:extensao": "node tests/extensao-harness/harness.mjs && node tests/extensao-harness/salvar.mjs && node tests/extensao-harness/paginacao.mjs && node tests/extensao-harness/painel.mjs"
+    "teste:extensao": "node tests/extensao-harness/harness.mjs && node tests/extensao-harness/salvar.mjs && node tests/extensao-harness/paginacao.mjs && node tests/extensao-harness/painel.mjs && node tests/extensao-harness/fontes.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",

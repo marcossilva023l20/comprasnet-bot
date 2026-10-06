@@ -1,0 +1,1 @@
+ALTER TABLE "itens" ADD COLUMN "valor_minimo" numeric(14, 4);

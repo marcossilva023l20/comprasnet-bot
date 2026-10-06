@@ -239,6 +239,58 @@ export async function rodarPainel() {
     checar(/3\/3/.test(status) || /3/.test(status), `o painel mostra o resultado ("${status}")`);
   }
 
+  console.log("\n── 6) Modo Disputa exige tela real e bloqueia página de propostas ──");
+  {
+    const { window, enviar, salvos } = ambiente(1);
+    window.__armazenamento.apiUrl = "https://app.exemplo.com";
+    const chamadas = [];
+    window.fetch = async (url, opcoes = {}) => {
+      chamadas.push(`${opcoes.method || "GET"} ${url}`);
+      if (String(url).endsWith("/api/propostas")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ id: 7, numeroDispensa: "45/2026", totalItens: 1, itensPreenchidos: 1 }],
+        };
+      }
+      if (String(url).endsWith("/api/propostas/7/itens")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ numeroItem: 1, descricao: "ITEM DE TESTE", valorUnitario: "20.0000", valorMinimo: "12.3400" }],
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    await enviar({ action: "painel_mostrar", modo: "disputa" });
+
+    const painel = window.document.getElementById("__comprasnet_bot_painel__");
+    const iniciar = window.document.getElementById("__comprasnet_bot_painel___iniciar");
+    const aviso = window.document.getElementById("__comprasnet_bot_painel___aviso_disputa");
+    checar(Boolean(painel), "abriu o painel flutuante do Modo Disputa");
+    checar(iniciar?.disabled === false, "a proposta habilita o comando explícito de iniciar disputa");
+    checar(aviso?.style.display === "block" && /polegar.*vermelho/i.test(aviso?.textContent || ""), "o painel alerta que só perdendo com polegar vermelho pode gerar lance");
+    checar(/Iniciar lances/.test(iniciar?.textContent || ""), "o controle indica que requer início explícito");
+    const lista = window.document.getElementById("__comprasnet_bot_painel___lista_disputa");
+    const limite = Date.now() + 3000;
+    while (Date.now() < limite && !lista?.textContent.includes("Mín. 12,3400")) await sleep(20);
+    checar(lista?.textContent.includes("ITEM DE TESTE"), "exibe a descrição do item cadastrado");
+    checar(lista?.textContent.includes("Mín. 12,3400"), "exibe o Valor Mínimo com quatro casas decimais");
+    checar(lista?.textContent.includes("Atual 20,0000"), "exibe também o valor unitário atual");
+
+    // Um clique no comando explícito não deve passar da validação de página
+    // se o harness não representa a tela real de disputa/compra/UASG.
+    iniciar.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await sleep(50);
+    checar(salvos.length === 0, "nenhum item foi preenchido ou salvo no Modo Disputa");
+    checar(!chamadas.some((c) => c.includes("/script") || c.startsWith("PUT")), "não buscou script nem enviou alterações/lances");
+    checar(
+      /tela real “Enviar lance”/.test(window.document.getElementById("__comprasnet_bot_painel___status").textContent),
+      "o handler recusa iniciar sem validar a tela de disputa real",
+    );
+  }
+
   return falhas;
 }
 

@@ -15,6 +15,7 @@ export type ItemParaExportar = {
   unidade: string;
   valorEstimado: string | null;
   valorUnitario: string | null;
+  valorMinimo: string | null;
   marcaFabricante: string | null;
   modeloVersao: string | null;
   enviado: boolean | null;
@@ -29,18 +30,19 @@ export const COLUNAS_EXPORTACAO = [
   "Unidade",
   "Valor Estimado (R$)",
   "Valor Unitário (R$)",
+  "Valor Mínimo (R$)",
   "Marca/Fabricante",
   "Modelo/Versão",
   "Enviado",
 ] as const;
 
 /** Larguras (em caracteres) de cada coluna, casadas com COLUNAS_EXPORTACAO. */
-export const LARGURAS_EXPORTACAO = [6, 35, 50, 12, 12, 18, 18, 25, 25, 10];
+export const LARGURAS_EXPORTACAO = [6, 35, 50, 12, 12, 18, 18, 18, 25, 25, 10];
 
 const numero = (valor: string | null) => (valor === null || valor === "" ? "" : parseFloat(valor));
 
 /** Colunas de valores: o portal usa 4 casas decimais ("44,0000"). */
-export const COLUNAS_QUATRO_CASAS = ["Valor Estimado (R$)", "Valor Unitário (R$)"] as const;
+export const COLUNAS_QUATRO_CASAS = ["Valor Estimado (R$)", "Valor Unitário (R$)", "Valor Mínimo (R$)"] as const;
 
 /** Formato de célula para o Excel mostrar "44,0000" (e não "44"). */
 export const FORMATO_QUATRO_CASAS = "0.0000";
@@ -76,6 +78,7 @@ export function montarLinhasExportacao(itens: ItemParaExportar[]): Record<string
     Unidade: item.unidade,
     "Valor Estimado (R$)": numero(item.valorEstimado),
     "Valor Unitário (R$)": numero(item.valorUnitario),
+    "Valor Mínimo (R$)": numero(item.valorMinimo),
     "Marca/Fabricante": item.marcaFabricante || "",
     "Modelo/Versão": item.modeloVersao || "",
     Enviado: item.enviado ? "Sim" : "Não",

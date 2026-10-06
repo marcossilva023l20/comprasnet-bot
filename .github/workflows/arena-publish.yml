@@ -62,6 +62,8 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
+          # Os pacotes históricos são reconstruídos de revisões imutáveis.
+          fetch-depth: 0
 
       - name: Node.js 22
         uses: actions/setup-node@v5

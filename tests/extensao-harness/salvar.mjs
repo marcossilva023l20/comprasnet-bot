@@ -12,7 +12,7 @@
  * 10) Máscara de moeda que só aceita digitação tecla a tecla → preenche e salva
  * 11) Site pede confirmação em janela ("Salvar" → "Confirmar") → confirma e salva
  * 12) Máscara de 4 casas do portal ("44,0000") → é esse o valor que salva
- * 13) Máscara de 2 casas: o bot ajusta o formato para o valor ficar certo
+ * 13) Máscara de 2 casas: escala detectada na primeira tecla, sem relançar
  * 14) Formulário tipo Angular (ng-pristine): o reforço faz o site registrar o valor
  * 15) Site recusa ("campo é obrigatório"): não conta como salvo e avisa
  * 16) Portal só contabiliza com tecla real: o Backspace do bot faz o total sair de 0,0000
@@ -22,6 +22,15 @@
  * 20) Velocidade turbo: 0,03s e o máximo (0,001s) preenchem igual e mais rápido
  * 21) Máscara ASSÍNCRONA (Angular) em velocidade máxima: sem dígito duplicado
  *     (1.232,8000 não pode virar 12.328,0000)
+ * 22) Valores 1/10/100/1000/10000 mantêm quatro casas, lançam uma vez e
+ *     continuam preenchendo marca/fabricante e modelo/versão
+ * 23) Valor 67,4100 exato e confirmação Não/Sim sem ARIA/classes conhecidas
+ * 24) Se a máscara corromper o preço, o bot não salva e continua os outros campos
+ * 25) A máscara pode exibir 6,0000 primeiro; continua com o prefixo cru e salva 67,4100
+ * 26) O botão Salvar do portal (br-button) é encontrado pelo nome acessível
+ * 27) Entrada 61,41 com zeros iniciais e máscara assíncrona não duplica keydown/keypress
+ * 28) Prefixo numérico é escalado antes do input, impedindo 674.100,0000
+ * 29) Máscara de texto que inicia em 6,0000 recebe a vírgula e preserva 67,4100
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
@@ -880,8 +889,8 @@ export async function rodarSalvar() {
       checar(r.filled === 1, `item preenchido (${r.filled})`);
     }
 
-    // c) máscara de 2 casas: o bot corrige a escala em 1 correção (no máximo 2
-    //    lançamentos) em vez de ficar tentando formato por formato
+    // c) máscara de 2 casas: o bot identifica a escala na primeira tecla e
+    //    termina em uma única passada, sem limpar e relançar o valor.
     {
       const { window, eventos, enviar } = montar(2);
       const r = await enviar({
@@ -891,10 +900,10 @@ export async function rodarSalvar() {
       });
       const valor = window.document.getElementById("vu1").value;
       checar(valor === "1.232,80", `o valor virou "1.232,80" (${valor})`);
-      checar(eventos.limpezas === 1, `uma única correção de escala (limpezas: ${eventos.limpezas})`);
+      checar(eventos.limpezas === 0, `sem relançamento para corrigir a escala (limpezas: ${eventos.limpezas})`);
       checar(
-        r.salvamentos[0]?.lancamentos?.valorUnitario === 2,
-        `relatório: 2 lançamentos (1 + a correção da máscara) — ${JSON.stringify(r.salvamentos[0]?.lancamentos)}`,
+        r.salvamentos[0]?.lancamentos?.valorUnitario === 1,
+        `relatório: valor lançado uma vez (${JSON.stringify(r.salvamentos[0]?.lancamentos)})`,
       );
       checar(eventos.salvos[0] === "1.232,80", `o site salvou 1.232,80 (${JSON.stringify(eventos.salvos)})`);
       checar(r.salvamentos[0]?.confirmado === true, "relatório: salvo e confirmado");
@@ -1255,6 +1264,594 @@ export async function rodarSalvar() {
       checar(eventos.salvos[0] === "1.232,8000", `1s: o site salvou 1.232,8000 (${JSON.stringify(eventos.salvos)})`);
       checar(r.filled === 1, `1s: item preenchido (${r.filled})`);
     }
+  }
+
+  console.log("\n── 22) Valores inteiros preservam todos os dígitos e continuam nos outros campos ──");
+  {
+    const numeros = [1, 10, 100, 1000, 10000];
+    const item = (n) => `
+      <section class="item" data-item="${n}">
+        <div class="cabecalho"><div class="numero">${n}</div><div class="titulo">ITEM ${n}</div>
+          <div class="publicados"><div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">1</span></div></div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes" style="display:none">
+          <label>Valor unitário (R$)</label><input id="vu${n}" placeholder="0,0000" />
+          <label>Marca/Fabricante</label><input id="mf${n}" />
+          <label>Modelo/Versão</label><input id="mv${n}" />
+          <button id="salvar${n}">Salvar</button>
+        </div>
+      </section>`;
+    const html = `<!DOCTYPE html><html><body><h2>Itens</h2><div id="lista">${numeros.map(item).join("")}</div></body></html>`;
+    const eventos = { salvos: [] };
+    const formatar = (digitos) => `${(Number(digitos || "0") / 10000).toFixed(4)}`.replace(".", ",");
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w, cliques) => {
+        w.document.querySelectorAll(".seta").forEach((botao) => botao.addEventListener("click", () => {
+          botao.closest(".item").querySelector(".detalhes").style.display = "block";
+        }));
+        w.document.querySelectorAll('input[id^="vu"]').forEach((campo) => campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace") {
+            campo.value = formatar(campo.value.replace(/\D/g, "").slice(0, -1));
+            return;
+          }
+          if (/^\d$/.test(event.key || "")) {
+            campo.value = formatar((campo.value.replace(/\D/g, "") + event.key).slice(-12));
+          }
+        }));
+        w.document.querySelectorAll('button[id^="salvar"]').forEach((botao) => botao.addEventListener("click", () => {
+          eventos.salvos.push(botao.closest(".item").querySelector('input[id^="vu"]').value);
+          cliques.salvos.push(botao.id);
+          const aviso = w.document.createElement("div");
+          aviso.setAttribute("role", "alert");
+          aviso.className = "alert alert-success";
+          aviso.textContent = "Item salvo com sucesso";
+          botao.closest(".item").appendChild(aviso);
+        }));
+      },
+    });
+
+    const itens = numeros.map((numero) => ({
+      item: numero,
+      valorUnitario: `${numero},0000`,
+      marcaFabricante: `Marca ${numero}`,
+      modeloVersao: `Modelo ${numero}`,
+    }));
+    const r = await enviar({ action: "fill_items", delay: 1, items: itens });
+
+    checar(r.filled === numeros.length && r.errors.length === 0, `preencheu sem erros (${r.filled}/${numeros.length}; ${JSON.stringify(r.errors)})`);
+    checar(JSON.stringify(r.savedItems) === JSON.stringify(numeros), `salvou os itens na ordem (${JSON.stringify(r.savedItems)})`);
+    checar(JSON.stringify(eventos.salvos) === JSON.stringify(numeros.map((numero) => `${numero},0000`)), `salvou os valores exatos (${JSON.stringify(eventos.salvos)})`);
+    for (const numero of numeros) {
+      const valor = window.document.getElementById(`vu${numero}`).value;
+      checar(valor === `${numero},0000`, `item ${numero}: valor unitário ${numero},0000 sem perder dígitos ("${valor}")`);
+      checar(window.document.getElementById(`vu${numero}`).value.replace(/\D/g, "") === `${numero}0000`, `item ${numero}: escala de 4 casas preservada`);
+      checar(window.document.getElementById(`mf${numero}`).value === `Marca ${numero}`, `item ${numero}: preencheu marca depois do valor`);
+      checar(window.document.getElementById(`mv${numero}`).value === `Modelo ${numero}`, `item ${numero}: preencheu modelo depois do valor`);
+    }
+    checar(
+      r.salvamentos.every((salvamento) => salvamento.lancamentos?.valorUnitario === 1),
+      `cada valor foi lançado uma única vez (${JSON.stringify(r.salvamentos.map((salvamento) => salvamento.lancamentos?.valorUnitario))})`,
+    );
+  }
+
+  console.log("\n── 23) Valor 67,4100 + confirmação sem ARIA/classe conhecida ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="entrada" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+          <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+          <button id="salvar1">Salvar</button>
+        </div>
+      </section>
+      <div id="janela-confirmacao" style="display:none">
+        <div>Confirmação</div>
+        <p>A proposta do item 1 foi modificada. Deseja salvar as alterações?</p>
+        <div>
+          <button id="btn-nao">Não</button>
+          <button id="btn-sim">Sim</button>
+        </div>
+      </div>
+    </body></html>`;
+
+    const eventos = { salvamentos: [], sim: 0, nao: 0 };
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        const atualizarTotal = () => {
+          const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+          w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          })}`;
+        };
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        // Máscara controlada por input: só o Backspace usado para registrar o
+        // modelo atualiza o total; a tecla não deve apagar/redigitar o preço.
+        campo.addEventListener("input", () => {
+          campo.value = formatarMoeda(campo.value.replace(/\D/g, ""));
+        });
+        campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace") {
+            atualizarTotal();
+            campo.className = "entrada ng-dirty ng-touched ng-valid";
+          }
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          w.document.getElementById("janela-confirmacao").style.display = "block";
+        });
+        w.document.getElementById("btn-nao").addEventListener("click", () => {
+          eventos.nao += 1;
+          w.document.getElementById("janela-confirmacao").style.display = "none";
+        });
+        w.document.getElementById("btn-sim").addEventListener("click", () => {
+          eventos.sim += 1;
+          eventos.salvamentos.push(campo.value);
+          w.document.getElementById("janela-confirmacao").style.display = "none";
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Proposta cadastrada com sucesso";
+          w.document.querySelector("section[data-item='1']").appendChild(toast);
+        });
+      },
+    });
+
+    const modal = window.document.getElementById("janela-confirmacao");
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const valor = window.document.getElementById("vu1").value;
+    checar(valor === "67,4100", `campo preserva exatamente 67,4100 ("${valor}")`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `o portal calculou o total correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.sim === 1 && eventos.nao === 0, `clicou em Sim e nunca em Não (Sim ${eventos.sim}, Não ${eventos.nao})`);
+    checar(eventos.salvamentos[0] === "67,4100", `o site salvou o valor unitário correto (${JSON.stringify(eventos.salvamentos)})`);
+    checar(r.salvamentos[0]?.modal?.botao === "sim", `o relatório reconheceu a confirmação sem ARIA/classe (${r.salvamentos[0]?.modal?.botao})`);
+    checar(r.salvamentos[0]?.confirmado === true && JSON.stringify(r.savedItems) === "[1]", "item confirmado e salvo no relatório");
+    checar(r.salvamentos[0]?.lancamentos?.valorUnitario === 1, "valor unitário lançado uma única vez");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "marca e modelo continuam sendo preenchidos depois do preço");
+    checar(!modal.getAttribute("role") && !modal.getAttribute("aria-modal") && !modal.className, "caixa de confirmação não usa role, aria-modal nem classe conhecida");
+  }
+
+  console.log("\n── 24) Se a máscara trocar 67,4100 por 6,0000, não salva o preço errado ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <section data-item="1">
+        <div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+        <div><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+        <div><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+        <button class="seta" title="Mostrar detalhes do item">Detalhes</button>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" />
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { salvamentos: 0, corrompeu: false };
+    let digitosDaMascara = "";
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("input", (event) => {
+          // Reproduz máscara baseada em InputEvent.data: setter com texto inteiro
+          // e evento que carrega apenas o último caractere não sincronizam o modelo.
+          if (event.inputType === "deleteContentBackward") digitosDaMascara = digitosDaMascara.slice(0, -1);
+          else if (/^\d$/.test(event.data || "")) digitosDaMascara += event.data;
+          campo.value = formatarMoeda(digitosDaMascara);
+        });
+        campo.addEventListener("keydown", (event) => {
+          if (event.key === "Backspace" && !eventos.corrompeu) {
+            eventos.corrompeu = true;
+            digitosDaMascara = campo.value.replace(/\D/g, "");
+            campo.value = "6,0000"; // reproduz a escala incorreta observada na captura
+          }
+        });
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvamentos += 1;
+        });
+      },
+    });
+
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    checar(eventos.corrompeu, "o harness aplicou a alteração incorreta da máscara");
+    checar(eventos.salvamentos === 0 && !r.savedItems.length, "não clicou Salvar nem marcou o item como enviado");
+    checar(r.filled === 0, `item não conta como preenchido/salvo (${r.filled})`);
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "mesmo sem salvar, continuou preenchendo marca e modelo");
+    checar(r.errors.some((erro) => /valor unitário/i.test(erro)), `informa que o valor precisa ser corrigido (${JSON.stringify(r.errors)})`);
+    checar(r.camposProblematicos.some((campo) => campo.esperado === "67,4100"), `o relatório diferencia o preço esperado 67,4100 (${JSON.stringify(r.camposProblematicos)})`);
+  }
+
+  console.log("\n── 25) Máscara mostra 6,0000; prefixo com escala decimal termina em 67,4100 ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="entrada ng-pristine" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" class="entrada" />
+          <label>Modelo/Versão</label><input id="mv1" class="entrada" />
+          <button type="button" class="mini br-button ml-2 mb-1 ng-star-inserted">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+
+    const eventos = { salvamentos: [], teclas: [], valorInicialFormatado: false };
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const atualizarTotal = (w, valor) => {
+      w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("keydown", (event) => {
+          eventos.teclas.push(event.key);
+          if (/^\d$/.test(event.key || "") && !eventos.valorInicialFormatado) {
+            // Reproduz a máscara observada: o primeiro 6 vira o visual 6,0000;
+            // as próximas teclas keydown não mudam o value do campo.
+            campo.value = `${event.key},0000`;
+            eventos.valorInicialFormatado = campo.value === "6,0000";
+          }
+        });
+        campo.addEventListener("input", () => {
+          // O componente lê o texto recebido: se o bot concatenar ao visual
+          // "6,0000", os zeros decimais viram novos dígitos (674.100,0000).
+          const digitos = campo.value.replace(/\D/g, "");
+          campo.value = formatarMoeda(digitos);
+          campo.className = "entrada ng-dirty ng-touched ng-valid";
+          const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+          atualizarTotal(w, valor);
+        });
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        const botao = w.document.querySelector("button.br-button");
+        botao.addEventListener("click", () => {
+          const valor = campo.value;
+          eventos.salvamentos.push({ valor, total: w.document.getElementById("total1").textContent });
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector("section[data-item='1']").appendChild(toast);
+        });
+      },
+    });
+
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    const total = window.document.getElementById("total1").textContent;
+    checar(eventos.valorInicialFormatado, "a máscara exibiu 6,0000 imediatamente após a primeira tecla 6");
+    checar(campo.value === "67,4100", `prefixo convertido para a escala decimal manteve 67,4100 (${campo.value})`);
+    checar(total === "R$ 1.011,1500", `total calculado corretamente (${total})`);
+    checar(eventos.salvamentos.length === 1 && eventos.salvamentos[0]?.valor === "67,4100", `clicou no botão br-button Salvar com preço correto (${JSON.stringify(eventos.salvamentos)})`);
+    checar(eventos.salvamentos[0]?.total === "R$ 1.011,1500", "o item foi salvo depois do total correto");
+    checar(r.filled === 1 && JSON.stringify(r.savedItems) === "[1]" && r.salvamentos[0]?.confirmado, "item confirmado no relatório de salvamento");
+    checar(r.salvamentos[0]?.botao === "Salvar", `reconheceu o nome do botão (${r.salvamentos[0]?.botao})`);
+    checar(r.salvamentos[0]?.lancamentos?.valorUnitario === 1, "valor unitário lançado uma única vez");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "preencheu marca e modelo depois do preço");
+    checar(!eventos.teclas.includes("Backspace"), "não enviou Backspace extra depois que a máscara já reagiu ao keydown");
+  }
+
+  console.log("\n── 26) Botão br-button sem texto DOM é encontrado pelo nome acessível ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <section class="item" data-item="1">
+        <div class="cabecalho">
+          <div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" />
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <span id="rotulo-botao-salvar" hidden>Salvar</span>
+          <button type="button" class="mini br-button ml-2 mb-1 ng-star-inserted" aria-labelledby="rotulo-botao-salvar"><svg></svg></button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { cliques: 0 };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        w.document.querySelector("button.br-button").addEventListener("click", () => {
+          eventos.cliques += 1;
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector("section.item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    checar(eventos.cliques === 1, `clicou no botão pelo nome acessível “Salvar” (${eventos.cliques})`);
+    checar(r.salvamentos[0]?.botao === "Salvar" && r.salvamentos[0]?.confirmado, "relatório reconheceu e confirmou o botão sem texto interno");
+    checar(window.document.querySelector("#vu1").value === "67,4100", "manteve o valor unitário exato ao localizar o botão");
+  }
+
+  console.log("\n── 27) Valor 61,41 com zeros iniciais e máscara que ouve keydown/keyPress ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">BRINQUEDO EM GERAL</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 61,41</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { keydown: 0, keypress: 0, salvos: [] };
+    const formatarMoeda = (digitos) => (Number(digitos || "0") / 10000).toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const atualizarComTecla = (w, campo, event) => {
+      if (!/^\d$/.test(event.key || "")) return;
+      eventos[event.type] += 1;
+      const digitos = `${campo.value.replace(/\D/g, "")}${event.key}`.slice(-12);
+      campo.value = formatarMoeda(digitos);
+      campo.className = "ng-dirty ng-touched ng-valid";
+      const valor = Number(campo.value.replace(/\./g, "").replace(",", ".")) || 0;
+      w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 4,
+      })}`;
+    };
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        // O componente do portal pode observar os dois eventos; keydown reage
+        // de forma assíncrona. Se o bot também disparar keypress sem esperar,
+        // cada dígito é consumido duas vezes.
+        campo.addEventListener("keydown", (event) => {
+          event.preventDefault();
+          setTimeout(() => atualizarComTecla(w, campo, event), 15);
+        });
+        campo.addEventListener("keypress", (event) => atualizarComTecla(w, campo, event));
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "61,41", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(campo.value === "61,4100", `normalizou 61,41 sem alterar o valor e preservou 4 casas (${campo.value})`);
+    checar(eventos.keydown === 6 && eventos.keypress === 0, `cada dígito foi consumido uma vez só pelo keydown (keydown=${eventos.keydown}, keypress=${eventos.keypress})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 921,1500", `total correto para quantidade 15 (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "61,4100", `salvou somente o preço correto (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "o item foi confirmado no relatório");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "continuou preenchendo marca e modelo");
+  }
+
+  console.log("\n── 28) A máscara interpreta prefixos sem vírgula como reais inteiros ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { salvos: [], primeiroKeydown: false };
+    const lerNumero = (texto) => {
+      const limpo = String(texto).replace(/[^\d.,-]/g, "");
+      const ultimo = Math.max(limpo.lastIndexOf(","), limpo.lastIndexOf("."));
+      if (ultimo < 0) return Number(limpo) || 0;
+      const parteInteira = limpo.slice(0, ultimo).replace(/[.,]/g, "");
+      const parteFracionaria = limpo.slice(ultimo + 1).replace(/[.,]/g, "");
+      return Number(`${parteInteira || "0"}.${parteFracionaria || "0"}`) || 0;
+    };
+    const formatar = (numero) => numero.toLocaleString("pt-BR", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("keydown", (event) => {
+          if (!/^\d$/.test(event.key || "")) return;
+          if (!eventos.primeiroKeydown) {
+            eventos.primeiroKeydown = true;
+            campo.value = `${event.key},0000`;
+            campo.className = "ng-dirty ng-touched ng-valid";
+          }
+        });
+        // Esta máscara lê o value inteiro no input. Se receber "674100" sem
+        // separador, interpreta como R$ 674.100,0000, reproduzindo o relato.
+        campo.addEventListener("input", () => {
+          const valor = lerNumero(campo.value);
+          campo.value = formatar(valor);
+          campo.className = "ng-dirty ng-touched ng-valid";
+          w.document.getElementById("total1").textContent = `R$ ${formatar(valor * 15)}`;
+        });
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(eventos.primeiroKeydown, "a máscara transformou o primeiro 6 em 6,0000");
+    checar(campo.value === "67,4100", `enviou o prefixo com a escala certa, sem chegar a 674.100,0000 (${campo.value})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `total calculado a partir do valor correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "67,4100", `salvou uma vez com 67,4100 (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "o item foi confirmado");
+    checar(window.document.getElementById("mf1").value === "ACME" && window.document.getElementById("mv1").value === "Modelo 1", "preencheu marca e modelo");
+  }
+
+  console.log("\n── 29) Máscara de texto aceita a vírgula e separa centavos ──");
+  {
+    const html = `<!DOCTYPE html><html><body>
+      <h2>Itens</h2>
+      <section class="item" data-item="1">
+        <div class="cabecalho"><div class="numero">1</div><div class="titulo">ITEM 1</div>
+          <div class="publicados">
+            <div class="campo"><span class="rotulo">Quantidade solicitada</span><span class="valor">15</span></div>
+            <div class="campo"><span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span></div>
+          </div>
+          <button class="seta" title="Mostrar detalhes do item"><svg></svg></button>
+        </div>
+        <div class="detalhes">
+          <label>Valor unitário (R$)</label><input id="vu1" class="ng-pristine" value="0,0000" placeholder="0,0000" />
+          <div class="campo"><span class="rotulo">Valor total</span><span class="valor" id="total1">R$ 0,0000</span></div>
+          <label>Marca/Fabricante</label><input id="mf1" />
+          <label>Modelo/Versão</label><input id="mv1" />
+          <button type="button" id="salvar1">Salvar</button>
+        </div>
+      </section>
+    </body></html>`;
+    const eventos = { teclas: [], virgula: false, salvos: [] };
+    let parteInteira = "";
+    let parteFracionaria = "";
+    let entrouNosDecimais = false;
+    const formatar = () => `${Number(parteInteira || "0").toLocaleString("pt-BR")},${parteFracionaria.padEnd(4, "0")}`;
+    const { window, enviar } = montarPagina(html, {
+      preparar: (w) => {
+        const campo = w.document.getElementById("vu1");
+        campo.addEventListener("keydown", (event) => {
+          eventos.teclas.push(`${event.type}:${event.key}`);
+          if (event.key === ",") {
+            event.preventDefault();
+            eventos.virgula = true;
+            entrouNosDecimais = true;
+            return;
+          }
+          if (!/^\d$/.test(event.key || "")) return;
+          event.preventDefault();
+          if (entrouNosDecimais) parteFracionaria = `${parteFracionaria}${event.key}`.slice(0, 4);
+          else parteInteira = `${parteInteira}${event.key}`.replace(/^0+(?=\d)/, "");
+          const valorTexto = formatar();
+          campo.value = valorTexto;
+          campo.className = "ng-dirty ng-touched ng-valid";
+          const valor = Number(valorTexto.replace(/\./g, "").replace(",", ".")) || 0;
+          w.document.getElementById("total1").textContent = `R$ ${(valor * 15).toLocaleString("pt-BR", {
+            minimumFractionDigits: 4,
+            maximumFractionDigits: 4,
+          })}`;
+        });
+        campo.addEventListener("keypress", (event) => eventos.teclas.push(`${event.type}:${event.key}`));
+        w.document.querySelector(".seta").addEventListener("click", () => {
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+        w.document.getElementById("salvar1").addEventListener("click", () => {
+          eventos.salvos.push(campo.value);
+          const toast = w.document.createElement("div");
+          toast.setAttribute("role", "alert");
+          toast.textContent = "Item salvo com sucesso";
+          w.document.querySelector(".item").appendChild(toast);
+        });
+      },
+    });
+    const r = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "67,4100", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    const campo = window.document.getElementById("vu1");
+    checar(campo.value === "67,4100", `preservou 67,4100 após a vírgula digitada (${campo.value})`);
+    checar(eventos.virgula, "enviou a vírgula para a máscara que posiciona o separador decimal");
+    checar(eventos.teclas.filter((tecla) => tecla.startsWith("keydown:")).length === 7 && !eventos.teclas.some((tecla) => tecla.startsWith("keypress:")), `uma sequência de keydown por caractere, sem duplicar keypress (${JSON.stringify(eventos.teclas)})`);
+    checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `total correto (${window.document.getElementById("total1").textContent})`);
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "67,4100", `salvou só o valor correto (${JSON.stringify(eventos.salvos)})`);
+    checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "item confirmado");
   }
 
   return falhas;

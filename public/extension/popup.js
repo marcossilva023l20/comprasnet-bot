@@ -8,6 +8,7 @@ let allItems = [];
 let selectedIds = new Set();
 let running = false;
 let currentTab = null;
+let disputaSituacoes = new Map();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
@@ -17,7 +18,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   aplicarVelocidadeNaTela(cfg.delayMs);
 
   bindEvents();
+  if (new URLSearchParams(location.search).get("modo") === "disputa") showTab("disputa");
   await getCurrentTab();
+  await sincronizarEstadoDisputaPopup();
   checkPage();
   loadPropostas();
   iniciarAtualizacoes();
@@ -32,6 +35,15 @@ document.addEventListener("DOMContentLoaded", async () => {
  * Funciona mesmo com a janela do popup fechada — o painel na página continua.
  */
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.action === "disputa_progress") {
+    atualizarBloqueioDisputaPopup(Boolean(msg.ativo), msg.propostaId);
+    if (Array.isArray(msg.situacoes)) {
+      disputaSituacoes = new Map(msg.situacoes.map((s) => [String(s.numeroItem), s]));
+      renderDisputaItems();
+    }
+    setDisputaStatus(msg.tipo || "info", msg.status || "Monitoramento atualizado.");
+    return;
+  }
   if (msg?.action !== "progresso") return;
   if (msg.status === "preenchendo") {
     setProgress((msg.indice || 1) - 1, msg.total || 1);
@@ -43,6 +55,34 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+function atualizarBloqueioDisputaPopup(ativo, propostaId = "") {
+  const select = document.getElementById("disputa-proposta-select");
+  const principal = document.getElementById("proposta-select");
+  const iniciar = document.getElementById("disputa-start-btn");
+  const parar = document.getElementById("disputa-stop-btn");
+  if (ativo && propostaId) {
+    if (select) select.value = String(propostaId);
+    if (principal) principal.value = String(propostaId);
+  }
+  if (select) select.disabled = Boolean(ativo);
+  if (principal) principal.disabled = Boolean(ativo);
+  if (iniciar) {
+    iniciar.disabled = Boolean(ativo);
+    if (ativo) iniciar.textContent = "⚔️ Monitorando…";
+    else iniciar.textContent = "▶ Iniciar envio automático";
+  }
+  if (parar) parar.disabled = !ativo;
+}
+
+async function sincronizarEstadoDisputaPopup() {
+  try {
+    if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) { atualizarBloqueioDisputaPopup(false); return; }
+    const estado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_status" });
+    atualizarBloqueioDisputaPopup(Boolean(estado?.ativo), estado?.propostaId || "");
+    if (estado?.ativo) iniciarAtualizacaoMinimosDisputaPopup();
+  } catch (_) { atualizarBloqueioDisputaPopup(false); }
+}
+
 function bindEvents() {
   document.querySelectorAll('[data-action="tab"]').forEach((el) => {
     el.addEventListener("click", () => showTab(el.dataset.tab));
@@ -53,6 +93,16 @@ function bindEvents() {
   on("btn-check-page", "click", checkPage);
   on("btn-read-page", "click", () => readPage());
   on("proposta-select", "change", loadItems);
+  on("disputa-proposta-select", "change", () => {
+    const principal = document.getElementById("proposta-select");
+    const disputa = document.getElementById("disputa-proposta-select");
+    if (principal && disputa && principal.value !== disputa.value) {
+      principal.value = disputa.value;
+      loadItems();
+    } else {
+      renderDisputaItems();
+    }
+  });
   on("btn-select-all", "click", selectAll);
   on("btn-select-filled", "click", selectFilled);
 
@@ -61,6 +111,7 @@ function bindEvents() {
     botao.addEventListener("click", async () => {
       const ms = aplicarVelocidadeNaTela(Number(botao.dataset.delay) * 1000);
       await salvarVelocidade(ms);
+      atualizarVelocidadeDisputa();
       addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens (vale para digitação e esperas).`);
     });
   });
@@ -68,6 +119,7 @@ function bindEvents() {
   campoDelay?.addEventListener("change", async () => {
     const ms = aplicarVelocidadeNaTela(delayDaTela());
     await salvarVelocidade(ms);
+    atualizarVelocidadeDisputa();
     addLog("info", `⚡ Velocidade: ${formatarSegundos(ms)} entre itens.`);
   });
   on("btn-clear-sel", "click", clearSel);
@@ -75,7 +127,15 @@ function bindEvents() {
   on("stop-btn", "click", stopBot);
   on("pause-btn", "click", alternarPausa);
   on("pin-btn", "click", fixarPainelNaPagina);
-  on("float-btn", "click", abrirJanelaFlutuante);
+  on("float-btn", "click", () => abrirJanelaFlutuante("bot"));
+  on("disputa-pin-btn", "click", fixarPainelDisputaNaPagina);
+  on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
+  on("disputa-start-btn", "click", iniciarDisputaAutomaticaPopup);
+  on("disputa-read-page-btn", "click", lerPaginaDisputaPopup);
+  on("disputa-refresh-btn", "click", () => atualizarMinimosDisputaPopup(true));
+  on("disputa-stop-btn", "click", pararDisputaAutomaticaPopup);
+  on("disputa-diagnostico-btn", "click", diagnosticarCamposDisputaPopup);
+  on("disputa-copy-diagnostico-btn", "click", copiarDiagnosticoDisputaPopup);
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -123,10 +183,15 @@ async function getCurrentTab() {
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 function showTab(name) {
-  ["bot", "config", "ajuda"].forEach((t) => {
+  ["bot", "disputa", "config", "ajuda"].forEach((t) => {
     document.getElementById(`panel-${t}`)?.classList.toggle("hidden", t !== name);
     document.getElementById(`tab-${t}`)?.classList.toggle("active", t === name);
   });
+  if (name === "disputa") {
+    syncDisputaPropostas();
+    renderDisputaItems();
+    atualizarVelocidadeDisputa();
+  }
 }
 
 // ─── Page Status / Leitura ────────────────────────────────────────────────────
@@ -136,20 +201,20 @@ async function checkPage() {
     return;
   }
 
-  if (!isComprasNetPage(currentTab.url || "")) {
-    setStatus("warn", "Abra o ComprasNet");
+  if (!isSourceItemsPage(currentTab.url || "")) {
+    setStatus("warn", "Abra o ComprasNet, o CNET Mobile ou o Radar PNCP");
     return;
   }
 
   try {
     const resp = await chrome.tabs.sendMessage(currentTab.id, { action: "ping" });
     if (resp?.ok) {
-      setStatus("ok", "ComprasNet detectado ✓");
+      setStatus("ok", `${nomeFonteItens(currentTab.url || "")} detectado ✓`);
     } else {
       setStatus("warn", "Página carregando...");
     }
   } catch (_) {
-    setStatus("warn", "Recarregue a página");
+    setStatus("warn", "Recarregue a página para ativar a extensão");
   }
 }
 
@@ -171,10 +236,50 @@ function isComprasNetPage(rawUrl) {
   }
 }
 
+function isRadarLicitacoesPage(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.hostname.toLowerCase() === "marcossilva023l20.github.io" && /^\/radar-licitacoes-v2(?:\/|$)/.test(url.pathname);
+  } catch (_) {
+    return false;
+  }
+}
+
+function isCnetMobilePage(rawUrl) {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase() === "cnetmobile.estaleiro.serpro.gov.br";
+  } catch (_) {
+    return false;
+  }
+}
+
+function isSourceItemsPage(rawUrl) {
+  return isRadarLicitacoesPage(rawUrl) || isComprasNetPage(rawUrl);
+}
+
+function isSourceOnlyPage(rawUrl) {
+  return isRadarLicitacoesPage(rawUrl) || isCnetMobilePage(rawUrl);
+}
+
+function nomeFonteItens(rawUrl) {
+  if (isRadarLicitacoesPage(rawUrl)) return "Radar PNCP";
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (host === "cnetmobile.estaleiro.serpro.gov.br") return "CNET Mobile";
+  } catch (_) {
+    // URL da aba indisponível.
+  }
+  return "ComprasNet";
+}
+
 async function readPage({ quiet = false } = {}) {
   const button = document.getElementById("btn-read-page");
   if (!currentTab?.id) {
     setReadStatus("warning", "Não encontrei uma aba ativa para ler.");
+    return null;
+  }
+  if (isSourceOnlyPage(currentTab.url || "")) {
+    setReadStatus("warning", "Esta é uma fonte de itens. Para importar, use “📥 Ler itens da página” nesta aba.");
     return null;
   }
   if (!isComprasNetPage(currentTab.url || "")) {
@@ -259,7 +364,7 @@ function setStatus(type, msg) {
 
 // ─── Importar itens da página (extensão → sistema) ────────────────────────────
 //
-// Fluxo: lê os itens publicados na página do ComprasNet, mostra o que foi lido,
+// Fluxo: lê os itens publicados no ComprasNet/CNET Mobile ou no Radar PNCP, mostra o que foi lido,
 // confere no sistema qual proposta corresponde à página e, com confirmação
 // explícita, envia os itens (substituindo os itens atuais daquela proposta).
 
@@ -272,18 +377,19 @@ async function readItemsFromPage() {
     setImportStatus("warning", "Não encontrei uma aba ativa para ler.");
     return;
   }
-  if (!isComprasNetPage(currentTab.url || "")) {
-    setImportStatus("warning", "Abra primeiro a página de cadastro de propostas do ComprasNet.");
+  if (!isSourceItemsPage(currentTab.url || "")) {
+    setImportStatus("warning", "Abra uma página do ComprasNet/CNET Mobile ou do Radar de Licitações PNCP.");
     return;
   }
 
+  const fonte = nomeFonteItens(currentTab.url || "");
   const expandir = document.getElementById("import-expandir")?.checked !== false;
   const button = document.getElementById("btn-read-items");
   if (button) {
     button.disabled = true;
     button.textContent = "⏳ Lendo itens...";
   }
-  setImportStatus("info", expandir ? "Lendo e expandindo cada item da página..." : "Lendo os itens da página...");
+  setImportStatus("info", expandir ? `Lendo itens de ${fonte} e expandindo os detalhes disponíveis...` : `Lendo itens de ${fonte}...`);
   document.getElementById("import-preview")?.classList.add("hidden");
   document.getElementById("import-envio")?.classList.add("hidden");
   document.getElementById("import-destino")?.classList.add("hidden");
@@ -293,7 +399,7 @@ async function readItemsFromPage() {
 
   try {
     const result = await chrome.tabs.sendMessage(currentTab.id, {
-      action: "read_comprasnet_items",
+      action: "read_source_items",
       expandir,
       delay: 450,
     });
@@ -333,6 +439,7 @@ function renderImportPreview(result) {
     resumo.className = "text-xs mt-2";
     resumo.innerHTML = "";
     const linhas = [
+      result.origem ? `Fonte: ${result.origem}` : null,
       ident.uasg ? `UASG: ${ident.uasg}` : null,
       ident.numeroCompra ? `Compra/processo: ${ident.numeroCompra}` : null,
       ident.objeto ? `Objeto: ${ident.objeto}` : null,
@@ -557,6 +664,8 @@ async function loadPropostas() {
   if (!apiUrl) {
     const sel = document.getElementById("proposta-select");
     sel.innerHTML = '<option value="">⚠️ Configure a URL do sistema na aba ⚙️</option>';
+    syncDisputaPropostas();
+    renderDisputaItems();
     return;
   }
 
@@ -567,6 +676,8 @@ async function loadPropostas() {
     const sel = document.getElementById("proposta-select");
     if (!Array.isArray(data) || data.length === 0) {
       sel.innerHTML = '<option value="">Nenhuma proposta cadastrada</option>';
+      syncDisputaPropostas();
+      renderDisputaItems();
       return;
     }
 
@@ -577,18 +688,330 @@ async function loadPropostas() {
       opt.textContent = `Nº ${p.numeroDispensa}${p.uasg ? " — " + p.uasg : ""}`;
       sel.appendChild(opt);
     });
+    syncDisputaPropostas();
   } catch (e) {
+    syncDisputaPropostas();
     addLog("error", "Erro ao carregar propostas: " + e.message);
   }
 }
 
 // ─── Load Items ───────────────────────────────────────────────────────────────
+function syncDisputaPropostas() {
+  const principal = document.getElementById("proposta-select");
+  const disputa = document.getElementById("disputa-proposta-select");
+  if (!principal || !disputa) return;
+
+  const selecionada = disputa.value;
+  disputa.innerHTML = principal.innerHTML;
+  const existeSelecionada = [...disputa.options].some((option) => option.value === selecionada);
+  disputa.value = existeSelecionada ? selecionada : principal.value;
+}
+
+function atualizarVelocidadeDisputa() {
+  const label = document.getElementById("disputa-speed");
+  if (label) label.textContent = "Modo Disputa acompanha as atualizações da página; não altera a velocidade do Modo Proposta.";
+}
+
+function renderDisputaItems() {
+  const card = document.getElementById("disputa-items-card");
+  const list = document.getElementById("disputa-items-list");
+  const select = document.getElementById("disputa-proposta-select");
+  if (!card || !list || !select) return;
+
+  const propostaSelecionada = select.value;
+  const propostaPrincipal = document.getElementById("proposta-select")?.value || "";
+  if (!propostaSelecionada || propostaSelecionada !== propostaPrincipal) {
+    card.style.display = "none";
+    list.innerHTML = "";
+    return;
+  }
+
+  card.style.display = "block";
+  list.innerHTML = "";
+  if (!Array.isArray(allItems) || allItems.length === 0) {
+    const vazio = document.createElement("div");
+    vazio.className = "text-xs";
+    vazio.textContent = "Nenhum item cadastrado nesta proposta.";
+    list.appendChild(vazio);
+    return;
+  }
+
+  allItems.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "item-row";
+
+    const num = document.createElement("div");
+    num.className = "item-num";
+    num.textContent = String(item.numeroItem);
+
+    const desc = document.createElement("div");
+    desc.className = "item-desc";
+    desc.title = item.descricao || "";
+    desc.textContent = item.descricao || "(sem descrição)";
+
+    const values = document.createElement("div");
+    values.style.cssText = "font-size:9px;color:#475569;text-align:right;white-space:nowrap;";
+    const temAtual = item.valorUnitario !== null && item.valorUnitario !== undefined && item.valorUnitario !== "";
+    const temMinimo = item.valorMinimo !== null && item.valorMinimo !== undefined && item.valorMinimo !== "";
+    const atual = temAtual ? `Atual ${formatValor(item.valorUnitario)}` : "Sem preço";
+    const minimo = temMinimo ? `Mín. ${formatValor(item.valorMinimo)}` : "Mín. não informado";
+    const situacao = disputaSituacoes.get(String(item.numeroItem));
+    const indicador = situacao?.estado === "perdendo" ? " · 👎 perdendo (vermelho)"
+      : situacao?.estado === "vencendo" ? " · 👍 vencendo (verde)"
+        : situacao ? " · estado incerto — sem lance" : " · estado aguarda leitura da página";
+    values.textContent = `${atual} · ${minimo}${indicador}`;
+    if (situacao?.estado === "perdendo") values.style.color = "#dc2626";
+    else if (situacao?.estado === "vencendo") values.style.color = "#168821";
+    values.title = `Valor unitário: ${temAtual ? formatValor(item.valorUnitario) : "não informado"}; Valor Mínimo: ${temMinimo ? formatValor(item.valorMinimo) : "não informado"}; estado: ${situacao?.estado || "não lido"}`;
+
+    row.append(num, desc, values);
+    list.appendChild(row);
+  });
+}
+
+function setDisputaStatus(tipo, mensagem) {
+  const el = document.getElementById("disputa-availability");
+  if (!el) return;
+  const classe = ["info", "warning", "success"].includes(tipo) ? tipo : "info";
+  el.className = `alert alert-${classe}`;
+  el.textContent = String(mensagem || "");
+}
+
+let disputaPollTimer = null;
+let disputaPollEmCurso = false;
+
+function pararAtualizacaoMinimosDisputaPopup() {
+  if (disputaPollTimer) clearInterval(disputaPollTimer);
+  disputaPollTimer = null;
+}
+
+function iniciarAtualizacaoMinimosDisputaPopup() {
+  pararAtualizacaoMinimosDisputaPopup();
+  atualizarMinimosDisputaPopup();
+  disputaPollTimer = setInterval(() => atualizarMinimosDisputaPopup(false), 10000);
+}
+
+async function atualizarMinimosDisputaPopup(manual = false) {
+  if (disputaPollEmCurso || !currentTab?.id || !isComprasNetPage(currentTab.url || "")) return;
+  disputaPollEmCurso = true;
+  const botao = document.getElementById("disputa-refresh-btn");
+  if (botao) botao.disabled = true;
+  try {
+    const estado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_status" });
+    if (!manual && !estado?.ativo) {
+      atualizarBloqueioDisputaPopup(false);
+      pararAtualizacaoMinimosDisputaPopup();
+      return;
+    }
+    const propostaId = document.getElementById("disputa-proposta-select")?.value;
+    if (!propostaId) return;
+    if (!apiUrl) throw new Error("Configure a URL do sistema na aba Config.");
+    if (estado?.ativo && estado.propostaId && estado.propostaId !== propostaId) {
+      setDisputaStatus("warning", "O monitoramento usa outra proposta. Pare-o antes de trocar ou atualizar os valores exibidos.");
+      return;
+    }
+    const url = `${apiUrl}/api/propostas/${encodeURIComponent(propostaId)}/itens?disputa_minimos=${Date.now()}`;
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const itens = await response.json();
+    if (document.getElementById("disputa-proposta-select")?.value !== propostaId) return;
+    allItems = Array.isArray(itens) ? itens : [];
+    const hora = new Date().toLocaleTimeString("pt-BR");
+    disputaSituacoes = new Map((estado.situacoes || []).map((s) => [String(s.numeroItem), s]));
+    renderDisputaItems();
+    const aviso = estado.ativo ? estado.pausado ? "Monitoramento pausado" : "Monitoramento ativo" : "Consulta manual";
+    const perdendo = [...disputaSituacoes.values()].filter((s) => s.estado === "perdendo").length;
+    const vencendo = [...disputaSituacoes.values()].filter((s) => s.estado === "vencendo").length;
+    const incertos = disputaSituacoes.size - perdendo - vencendo;
+    const stop = Array.isArray(estado.itensNoPiso) && estado.itensNoPiso.length ? ` Itens pausados no piso: ${estado.itensNoPiso.join(", ")}; altere o Valor Mínimo no sistema para reavaliá-los.` : "";
+    const prefixo = estado.ativo ? ` · Situação visível: ${perdendo} perdendo/vermelho, ${vencendo} vencendo/verde, ${Math.max(0, incertos)} incerto(s).` : "";
+    setDisputaStatus(estado.pausado ? "warning" : "info", `${aviso} · Valores Mínimos atualizados às ${hora}${prefixo}. Só polegar para baixo vermelho pode gerar lance; o content script confere compra e piso antes do clique.${stop}`);
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui atualizar os Valores Mínimos (${erro?.message || "erro"}). Nenhum lance é enviado sem validação atual no content script.`);
+  } finally {
+    disputaPollEmCurso = false;
+    if (botao) botao.disabled = false;
+  }
+}
+
+function setDisputaReadStatus(tipo, mensagem) {
+  const statusEl = document.getElementById("disputa-read-status");
+  if (!statusEl) return;
+  statusEl.classList.remove("hidden", "alert-info", "alert-warning", "alert-success");
+  const classe = tipo === "warning" ? "alert-warning" : tipo === "success" ? "alert-success" : "alert-info";
+  statusEl.classList.add(classe);
+  statusEl.textContent = mensagem;
+}
+
+async function lerPaginaDisputaPopup() {
+  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
+    setDisputaReadStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de ler a página.");
+    return;
+  }
+  const botao = document.getElementById("disputa-read-page-btn");
+  if (botao) {
+    botao.disabled = true;
+    botao.textContent = "⏳ Lendo...";
+  }
+  setDisputaReadStatus("info", "Analisando os campos de lance, polegares e botões de envio da página...");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_ler_pagina" });
+    if (!resultado?.ok) {
+      setDisputaReadStatus("warning", resultado?.error || "Não consegui ler os campos da página.");
+      setDisputaStatus("warning", resultado?.error || "Falha na leitura da página.");
+      return;
+    }
+    // Atualiza as situações com o que foi lido
+    if (resultado.situacoes) {
+      disputaSituacoes = new Map(resultado.situacoes.map((s) => [String(s.numeroItem), s]));
+      renderDisputaItems();
+    }
+    setDisputaReadStatus("success", resultado.message || "Página lida com sucesso: campos de lance identificados.");
+    setDisputaStatus("success", resultado.message || "Página lida; campos de lance mapeados.");
+  } catch (erro) {
+    setDisputaReadStatus("warning", `Não consegui ler a página. Recarregue o ComprasNet e tente novamente (${erro?.message || "erro"}).`);
+    setDisputaStatus("warning", "Falha ao ler a página.");
+  } finally {
+    if (botao) {
+      botao.disabled = false;
+      botao.textContent = "📖 Ler página";
+    }
+  }
+}
+
+async function diagnosticarCamposDisputaPopup() {
+  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
+    setDisputaStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de diagnosticar.");
+    return;
+  }
+  const botao = document.getElementById("disputa-diagnostico-btn");
+  const area = document.getElementById("disputa-diagnostico-area");
+  const texto = document.getElementById("disputa-diagnostico-texto");
+  if (botao) botao.disabled = true;
+  area?.classList.add("hidden");
+  if (texto) texto.value = "";
+  setDisputaStatus("info", "Lendo os campos da tela, sem preencher nem enviar lances…");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_diagnosticar" });
+    if (!resultado?.ok || !resultado?.diagnostico) {
+      setDisputaStatus("warning", resultado?.error || "Não consegui ler o diagnóstico da página.");
+      return;
+    }
+    if (texto) texto.value = JSON.stringify({ versaoExtensao: VERSAO_INSTALADA, abaAlvo: currentTab.id, ...resultado.diagnostico }, null, 2);
+    area?.classList.remove("hidden");
+    setDisputaStatus("info", resultado.message || "Diagnóstico somente leitura concluído. Use Copiar diagnóstico para compartilhar a leitura.");
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui diagnosticar. Recarregue a página (F5) depois de atualizar a extensão (${erro?.message || "erro"}).`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
+}
+
+async function copiarDiagnosticoDisputaPopup() {
+  const area = document.getElementById("disputa-diagnostico-texto");
+  if (!area?.value) return;
+  try {
+    await navigator.clipboard.writeText(area.value);
+    setDisputaStatus("success", "Diagnóstico copiado. Pode colá-lo no suporte; copiar não inicia nem envia lances.");
+  } catch (_) {
+    area.focus();
+    area.select();
+    let copiado = false;
+    try { copiado = typeof document.execCommand === "function" && document.execCommand("copy"); } catch (_) { /* usa Ctrl+C manualmente */ }
+    setDisputaStatus(copiado ? "success" : "warning", copiado ? "Diagnóstico copiado." : "Selecione o texto do diagnóstico e use Ctrl+C para copiar manualmente.");
+  }
+}
+
+async function iniciarDisputaAutomaticaPopup() {
+  const propostaId = document.getElementById("disputa-proposta-select")?.value;
+  if (!propostaId) {
+    setDisputaStatus("warning", "Selecione a proposta correspondente à dispensa e à UASG desta página.");
+    return;
+  }
+  if (!currentTab?.id) {
+    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
+    return;
+  }
+  if (!isComprasNetPage(currentTab.url || "")) {
+    setDisputaStatus("warning", "Abra no navegador a tela “Enviar lance” do Compras.gov.br/ComprasNet antes de iniciar.");
+    return;
+  }
+
+  const botao = document.getElementById("disputa-start-btn");
+  let iniciou = false;
+  if (botao) {
+    botao.disabled = true;
+    botao.textContent = "⏳ Validando disputa…";
+  }
+  setDisputaStatus("info", "Validando número da dispensa, UASG, itens e Valores Mínimos. O portal pedirá confirmação antes de iniciar.");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_start", propostaId });
+    if (!resultado?.ok) {
+      setDisputaStatus(resultado?.canceled ? "info" : "warning", resultado?.error || "Não consegui iniciar o Modo Disputa.");
+      if (resultado?.error) addLog("warn", `Modo Disputa: ${resultado.error}`);
+      await sincronizarEstadoDisputaPopup();
+      return;
+    }
+    iniciou = true;
+    atualizarBloqueioDisputaPopup(true, resultado.propostaId || propostaId);
+    setDisputaStatus("success", resultado.message || "Monitoramento iniciado: só polegar vermelho para baixo envia; o piso será conferido antes de cada clique.");
+    addLog("success", `⚔️ ${resultado.message || "Modo Disputa iniciado."}`);
+    iniciarAtualizacaoMinimosDisputaPopup();
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui conversar com a página. Recarregue a tela “Enviar lance” e tente novamente (${erro?.message || "erro"}).`);
+  } finally {
+    if (botao && !iniciou) {
+      botao.disabled = false;
+      botao.textContent = "▶ Iniciar envio automático";
+    }
+  }
+}
+
+async function pararDisputaAutomaticaPopup() {
+  if (!currentTab?.id) {
+    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
+    return;
+  }
+  const botao = document.getElementById("disputa-stop-btn");
+  if (botao) botao.disabled = true;
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_stop" });
+    setDisputaStatus(resultado?.stopped ? "warning" : "info", resultado?.message || "Comando de parada enviado.");
+    if (resultado?.stopped) {
+      atualizarBloqueioDisputaPopup(false);
+      pararAtualizacaoMinimosDisputaPopup();
+      addLog("warn", "⏹ Monitoramento de disputa parado pelo usuário.");
+    }
+  } catch (erro) {
+    setDisputaStatus("warning", `Não consegui parar pela extensão (${erro?.message || "erro"}). Use ⏹ Parar no painel da página.`);
+  } finally {
+    if (botao) botao.disabled = false;
+  }
+}
+
+async function fixarPainelDisputaNaPagina() {
+  if (!currentTab?.id) {
+    addLog("warn", "Abra a página do ComprasNet primeiro.");
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "disputa" });
+    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Inicie somente após conferir proposta, UASG e Valor Mínimo.");
+  } catch (_) {
+    addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
+  }
+}
+
 async function loadItems() {
   const propostaId = document.getElementById("proposta-select").value;
+  const disputaSelect = document.getElementById("disputa-proposta-select");
+  if (disputaSelect && disputaSelect.value !== propostaId) disputaSelect.value = propostaId;
   if (!propostaId) {
+    allItems = [];
     document.getElementById("stats-grid").style.display = "none";
     document.getElementById("items-card").style.display = "none";
     document.getElementById("run-card").style.display = "none";
+    renderDisputaItems();
     return;
   }
 
@@ -603,6 +1026,7 @@ async function loadItems() {
 
     renderItems();
     updateStats();
+    renderDisputaItems();
 
     document.getElementById("stats-grid").style.display = "grid";
     document.getElementById("items-card").style.display = "block";
@@ -699,6 +1123,10 @@ function updateSelCount() {
 async function runBot() {
   if (running) return;
   if (!currentTab?.id) { addLog("error", "Sem aba ativa"); return; }
+  if (!isComprasNetPage(currentTab.url || "") || isSourceOnlyPage(currentTab.url || "")) {
+    addLog("error", "Esta página é apenas uma fonte de itens. Para preencher, abra a tela de cadastro de propostas do ComprasNet.");
+    return;
+  }
   if (selectedIds.size === 0) { addLog("error", "Selecione pelo menos um item"); return; }
 
   const toFill = allItems.filter((i) => selectedIds.has(i.id) && i.valorUnitario && i.marcaFabricante);
@@ -807,7 +1235,7 @@ async function runBot() {
         for (const campo of result.camposProblematicos) {
           addLog(
             "warn",
-            `📝 Campo "${campo.campo}" ficou com "${campo.valor}" e o site não registrou${campo.invalido ? " (marcado como inválido)" : ""}. O site pode exigir outro formato.`,
+            `📝 Campo "${campo.campo}" ficou com "${campo.valor}"${campo.esperado ? ` (esperado: ${campo.esperado})` : ""} e o site não registrou${campo.invalido ? " (marcado como inválido)" : ""}. O site pode exigir outro formato.`,
           );
         }
       }
@@ -852,7 +1280,7 @@ async function fixarPainelNaPagina() {
     return;
   }
   try {
-    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar" });
+    await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "proposta" });
     addLog("info", "📌 Painel fixado na página — ele continua aberto mesmo se você fechar este popup.");
   } catch (_) {
     addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
@@ -860,11 +1288,12 @@ async function fixarPainelNaPagina() {
 }
 
 /** Abre o popup numa janela separada, que não fecha ao clicar fora. */
-async function abrirJanelaFlutuante() {
+async function abrirJanelaFlutuante(modo = "bot") {
   try {
-    if (currentTab?.id) await chrome.storage.session.set({ janelaTabId: currentTab.id });
+    if (currentTab?.id) await chrome.storage.session.set({ janelaTabId: currentTab.id, janelaModo: modo });
+    const query = new URLSearchParams({ janela: "1", modo });
     await chrome.windows.create({
-      url: chrome.runtime.getURL("popup.html?janela=1"),
+      url: `${chrome.runtime.getURL("popup.html")}?${query.toString()}`,
       type: "popup",
       width: 440,
       height: 700,

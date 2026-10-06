@@ -27,6 +27,7 @@ export async function GET(
         item: i.numeroItem,
         // 4 casas como no portal: 44,0000 (2 casas a máscara do site lê errado)
         valorUnitario: formatarValorBR(i.valorUnitario),
+        valorMinimo: i.valorMinimo === null ? null : formatarValorBR(i.valorMinimo),
         marcaFabricante: i.marcaFabricante!,
         modeloVersao: i.modeloVersao || "",
       }));
