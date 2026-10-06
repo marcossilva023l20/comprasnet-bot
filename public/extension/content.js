@@ -83,48 +83,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.action === "disputa_diagnosticar") {
-    if (disputaAutomatica?.ativo || rodandoAgora || rodandoPeloPainel) {
-      sendResponse({ ok: false, error: "Pare a automação (Modo Proposta ou Modo Disputa) antes de ler o diagnóstico sem envio." });
-      return true;
-    }
-    try {
-      sendResponse(diagnosticarCamposDisputa());
-    } catch (err) {
-      sendResponse({ ok: false, error: `Falha ao ler os campos da disputa: ${err?.message || "erro"}.` });
-    }
-    return true;
-  }
-
-  if (msg.action === "disputa_start") {
-    iniciarDisputaAutomatica(msg.propostaId)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ ok: false, error: err?.message || "Falha ao iniciar o Modo Disputa." }));
-    return true;
-  }
-
-  if (msg.action === "disputa_stop") {
-    const stopped = pararDisputaAutomatica("Monitoramento parado pelo usuário.");
-    sendResponse({ ok: true, stopped, message: stopped ? "Monitoramento de lances parado." : "Não havia monitoramento ativo." });
-    return true;
-  }
-
-  if (msg.action === "disputa_status") {
-    sendResponse({
-      ok: true,
-      ativo: Boolean(disputaAutomatica?.ativo),
-      pausado: Boolean(disputaAutomatica?.pausado),
-      status: disputaAutomatica?.status || "inativo",
-      itensNoPiso: [...(disputaAutomatica?.itensNoPiso || [])],
-    });
-    return true;
-  }
-
   if (msg.action === "fill_items") {
-    if (disputaAutomatica?.ativo) {
-      sendResponse({ ok: false, error: "Pare o Modo Disputa antes de iniciar um preenchimento de proposta." });
-      return true;
-    }
     mostrarPainel("proposta");
     fillItems(Array.isArray(msg.items) ? msg.items : [], Number(msg.delay) || DELAY_PADRAO_MS)
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -957,17 +916,7 @@ async function limparCampoComTeclas(input, view) {
   // deixar o campo vazio: um campo só com zeros conta como vazio — os zeros à
   // frente não mudam o número que vai ser digitado.
   const semConteudo = () => campoVazio(input) || !/[1-9]/.test(String(input.value ?? ""));
-  if (semConteudo()) {
-    // Nada a apagar, mas o conteúdo (o zero da máscara) fica selecionado para a
-    // digitação substituí-lo por inteiro em vez de ser concatenado a ele.
-    try {
-      input.focus();
-      if (typeof input.select === "function") input.select();
-    } catch (_) {
-      // segue só com o foco
-    }
-    return true;
-  }
+  if (semConteudo()) return true;
 
   const teclaBackspace = { key: "Backspace", code: "Backspace", keyCode: 8, which: 8 };
   try {
@@ -4001,7 +3950,6 @@ let painelStatus = "Pronto.";
 const painelLog = [];
 
 function removerPainel() {
-  if (disputaAutomatica?.ativo) pararDisputaAutomatica("Painel fechado; monitoramento de lances interrompido.");
   document.getElementById(PAINEL_ID)?.remove();
 }
 
@@ -4025,17 +3973,13 @@ function definirStatusDoPainel(texto) {
 function definirModoPainel(modo) {
   const novoModo = modo === "disputa" ? "disputa" : "proposta";
   if ((rodandoAgora || rodandoPeloPainel) && novoModo !== painelModo) return;
-  if (disputaAutomatica?.ativo && novoModo !== "disputa") {
-    mostrarStatusDisputa("Pare o Modo Disputa antes de voltar ao Modo Proposta.", "warning");
-    return;
-  }
   if (novoModo === painelModo) return;
 
   painelModo = novoModo;
   painelStatus = novoModo === "disputa"
-    ? "Selecione a proposta correspondente à tela de disputa e inicie a automação explicitamente."
+    ? "Estrutura pronta; monitoramento e envio de lances aguardam integração."
     : "Pronto.";
-  registrarNoPainel(novoModo === "disputa" ? "⚔️ Modo Disputa selecionado. O envio só começa após validação e confirmação." : "📝 Modo Proposta selecionado.");
+  registrarNoPainel(novoModo === "disputa" ? "⚔️ Modo Disputa selecionado. Nenhum lance será enviado nesta versão." : "📝 Modo Proposta selecionado.");
   atualizarPainel();
   if (novoModo === "disputa") carregarItensDisputaNoPainel();
 }
@@ -4046,19 +3990,12 @@ function atualizarPainel() {
 
   const ocupado = Boolean(rodandoAgora || rodandoPeloPainel);
   const emDisputa = painelModo === "disputa";
-  const disputaAtiva = Boolean(disputaAutomatica?.ativo);
   const iniciar = document.getElementById(`${PAINEL_ID}_iniciar`);
   if (iniciar) {
-    iniciar.disabled = ocupado || (emDisputa && disputaAtiva);
-    iniciar.style.opacity = iniciar.disabled ? "0.6" : "1";
-    iniciar.textContent = ocupado
-      ? "⏳ Rodando..."
-      : emDisputa
-        ? disputaAtiva ? "⚔️ Monitorando..." : "▶ Iniciar lances"
-        : "▶ Iniciar";
-    iniciar.title = emDisputa
-      ? disputaAtiva ? "A automação está ativa; use Parar para interromper." : "Valida a disputa, pede confirmação e pode enviar lances reais automaticamente."
-      : "";
+    iniciar.disabled = ocupado || emDisputa;
+    iniciar.style.opacity = ocupado || emDisputa ? "0.6" : "1";
+    iniciar.textContent = ocupado ? "⏳ Rodando..." : emDisputa ? "⏳ Em preparação" : "▶ Iniciar";
+    iniciar.title = emDisputa ? "Monitoramento e envio de lances ainda não estão habilitados." : "";
   }
   const modoProposta = document.getElementById(`${PAINEL_ID}_modo_proposta`);
   const modoDisputa = document.getElementById(`${PAINEL_ID}_modo_disputa`);
@@ -4066,7 +4003,7 @@ function atualizarPainel() {
     modoProposta.style.background = emDisputa ? "#fff" : "#ede9fe";
     modoProposta.style.color = emDisputa ? "#475569" : "#5b21b6";
     modoProposta.style.borderColor = emDisputa ? "#cbd5e1" : "#8b5cf6";
-    modoProposta.disabled = ocupado || disputaAtiva;
+    modoProposta.disabled = ocupado;
   }
   if (modoDisputa) {
     modoDisputa.style.background = emDisputa ? "#ede9fe" : "#fff";
@@ -4075,40 +4012,32 @@ function atualizarPainel() {
     modoDisputa.disabled = ocupado;
   }
   const avisoDisputa = document.getElementById(`${PAINEL_ID}_aviso_disputa`);
-  if (avisoDisputa) {
-    avisoDisputa.style.display = emDisputa ? "block" : "none";
-    avisoDisputa.textContent = disputaAtiva
-      ? disputaAutomatica.pausado
-        ? "⏸ Monitoramento pausado; nenhum novo lance será enviado até retomar."
-        : "⚠️ Envio automático ativo: melhor valor − intervalo, limitado pelo Valor Mínimo. Use Parar para interromper."
-      : "A automação envia lances reais após confirmação. Só age com a proposta/UASG correspondentes, valores legíveis, fase aberta e Valor Mínimo cadastrado.";
-  }
+  if (avisoDisputa) avisoDisputa.style.display = emDisputa ? "block" : "none";
   const itensDisputa = document.getElementById(`${PAINEL_ID}_itens_disputa`);
   if (itensDisputa) itensDisputa.style.display = emDisputa ? "block" : "none";
   const rodape = document.getElementById(`${PAINEL_ID}_rodape`);
   if (rodape) {
     rodape.textContent = emDisputa
-      ? disputaAtiva ? "Automação de lances real ativa · piso obrigatório por item" : "Melhor valor − intervalo · nunca abaixo do Valor Mínimo"
+      ? "Estrutura em preparação · nenhum lance será enviado"
       : "Preenche e salva item por item · 10 itens por página";
   }
   const pausar = document.getElementById(`${PAINEL_ID}_pausar`);
   if (pausar) {
-    pausar.disabled = emDisputa ? !disputaAtiva : false;
+    // Pausar fica disponível no Modo Proposta; o Modo Disputa ainda não executa.
+    pausar.disabled = emDisputa && !ocupado;
     pausar.style.opacity = pausar.disabled ? "0.6" : "1";
-    pausar.textContent = emDisputa
-      ? disputaAutomatica.pausado ? "▶ Retomar" : "⏸ Pausar"
-      : botPausado ? "▶ Continuar" : "⏸ Pausar";
-    pausar.style.background = (emDisputa ? disputaAutomatica.pausado : botPausado) ? "#168821" : "#6d28d9";
+    pausar.textContent = botPausado ? "▶ Continuar" : "⏸ Pausar";
+    pausar.style.background = botPausado ? "#168821" : "#6d28d9";
   }
   const parar = document.getElementById(`${PAINEL_ID}_parar`);
   if (parar) {
-    parar.disabled = emDisputa ? !disputaAtiva : !ocupado;
-    parar.style.opacity = parar.disabled ? "0.6" : "1";
+    parar.disabled = !ocupado;
+    parar.style.opacity = ocupado ? "1" : "0.6";
   }
   const recarregar = document.getElementById(`${PAINEL_ID}_recarregar`);
-  if (recarregar) recarregar.disabled = ocupado || disputaAtiva;
+  if (recarregar) recarregar.disabled = ocupado;
   const seletor = document.getElementById(`${PAINEL_ID}_proposta`);
-  if (seletor) seletor.disabled = ocupado || disputaAtiva;
+  if (seletor) seletor.disabled = ocupado;
 
   const el = document.getElementById(`${PAINEL_ID}_status`);
   if (el) el.textContent = botPausado ? `⏸ Pausado — ${painelStatus}` : painelStatus;
@@ -4164,7 +4093,7 @@ function mostrarPainel(modo) {
         <button id="${PAINEL_ID}_modo_disputa" type="button" style="flex:1;padding:6px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#475569;font:inherit;font-weight:700;cursor:pointer;">⚔️ Disputa</button>
       </div>
       <div id="${PAINEL_ID}_aviso_disputa" role="status" style="display:none;margin-bottom:8px;padding:7px;border:1px solid #fde68a;border-radius:8px;background:#fef9c3;color:#92400e;font-size:10px;">
-        A automação só inicia após validação da proposta e sua confirmação explícita.
+        Estrutura inicial: monitoramento e envio automático de lances desativados. Será usada a mesma velocidade do Modo Proposta.
       </div>
       <div id="${PAINEL_ID}_itens_disputa" style="display:none;margin-bottom:8px;">
         <div style="font-weight:700;font-size:10px;color:#475569;margin-bottom:4px;">📦 Itens e valores cadastrados</div>
@@ -4199,32 +4128,18 @@ function mostrarPainel(modo) {
   document.getElementById(`${PAINEL_ID}_modo_disputa`).addEventListener("click", () => definirModoPainel("disputa"));
   document.getElementById(`${PAINEL_ID}_iniciar`).addEventListener("click", () => {
     if (painelModo === "disputa") {
-      const propostaId = document.getElementById(`${PAINEL_ID}_proposta`)?.value;
-      iniciarDisputaAutomatica(propostaId)
-        .then((resultado) => {
-          const mensagem = resultado?.message || resultado?.error || "Não consegui iniciar o Modo Disputa.";
-          mostrarStatusDisputa(mensagem, resultado?.ok ? "success" : "warning");
-          if (!resultado?.ok) registrarNoPainel(`⚠️ ${mensagem}`);
-        })
-        .catch((erro) => mostrarStatusDisputa(`Falha ao iniciar: ${erro?.message || "erro desconhecido"}.`, "warning"));
+      definirStatusDoPainel("Modo Disputa ainda não envia lances. Aguardando dados da licitação ativa.");
+      registrarNoPainel("⏳ Monitoramento de disputa ainda está desativado.");
       return;
     }
     iniciarPeloPainel();
   });
   document.getElementById(`${PAINEL_ID}_pausar`).addEventListener("click", () => {
-    if (painelModo === "disputa") {
-      if (!pausarOuRetomarDisputaAutomatica()) mostrarStatusDisputa("Nenhum monitoramento de disputa está ativo.", "warning");
-      return;
-    }
     botPausado = !botPausado;
     registrarNoPainel(botPausado ? "⏸ Bot pausado." : "▶ Bot retomado.");
     atualizarPainel();
   });
   document.getElementById(`${PAINEL_ID}_parar`).addEventListener("click", () => {
-    if (painelModo === "disputa") {
-      if (!pararDisputaAutomatica("Monitoramento parado pelo usuário.")) mostrarStatusDisputa("Nenhum monitoramento de disputa estava ativo.", "warning");
-      return;
-    }
     abortRequested = true;
     botPausado = false;
     registrarNoPainel("⏹ Parando depois do item atual...");
@@ -4386,1067 +4301,7 @@ async function carregarPropostasNoPainel() {
 
 let requisicaoItensDisputa = 0;
 
-const DISPUTA_INTERVALO_VERIFICACAO_MS = 1200;
-const DISPUTA_INTERVALO_ENTRE_ENVIOS_MS = 1200;
-const DISPUTA_TIMEOUT_CONFIRMACAO_MS = 15000;
-// Depois de digitar, o portal valida o valor fora do evento e habilita o
-// “Enviar lance” um pouco depois; é este o tempo que esperamos por ele.
-const DISPUTA_ESPERA_HABILITAR_MS = 4000;
-let disputaAutomatica = {
-  ativo: false,
-  pausado: false,
-  status: "inativo",
-  propostaId: "",
-  proposta: null,
-  itensPorNumero: new Map(),
-  observer: null,
-  intervalo: null,
-  agendamento: null,
-  processando: false,
-  ultimaSubmissaoEm: 0,
-  pendente: null,
-  ultimasTentativas: new Map(),
-  avisosRegistrados: new Set(),
-  itensNoPiso: new Set(),
-};
-
-function textoDaDisputa(el) {
-  if (!el) return "";
-  return String(el.innerText || el.textContent || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function normalizarNumeroDispensaDisputa(valor, uasgEsperada = "") {
-  // O código tem 17 dígitos: mantenha-o como texto para não perder precisão.
-  const texto = typeof valor === "string" ? valor.trim() : "";
-  const codigoCompra = texto.match(/^(\d{6})(\d{2})(\d{5})(\d{4})$/);
-  if (codigoCompra) {
-    // Compras.gov.br: UASG (6) + modalidade (2) + compra (5) + ano (4).
-    // Nesta tela só há integração com dispensa (06). A UASG embutida também
-    // precisa coincidir com o cadastro; a validação contra a página vem depois.
-    const [, uasgCodigo, modalidade, numero, ano] = codigoCompra;
-    if (!/^\d{6}$/.test(uasgEsperada) || uasgCodigo !== uasgEsperada || modalidade !== "06" || Number(numero) === 0) return "";
-    return `${Number(numero)}/${ano}`;
-  }
-
-  // Não ignore um código completo conflitante em favor de um número/ano que
-  // apareça no mesmo campo; formatos misturados ou ambíguos ficam bloqueados.
-  if (/\d{17}/.test(texto)) return "";
-  const numeros = [...texto.matchAll(/(?:^|\D)(\d{1,8})\s*\/\s*(\d{4})(?!\d)/g)];
-  if (numeros.length !== 1 || Number(numeros[0][1]) === 0) return "";
-  return `${Number(numeros[0][1])}/${numeros[0][2]}`;
-}
-
-function extrairIdentificacaoDisputaPagina() {
-  const texto = normalizeText(textoDaDisputa(document.body));
-  const numero = texto.match(/dispensa\s+eletronica\s+(?:n\s*[º°o]?\s*)?(\d{1,8}\s*\/\s*\d{4})/i);
-  const uasg = texto.match(/\buasg\b\s*[:#-]?\s*(\d{6,8})/i);
-  return {
-    numeroDispensa: numero ? normalizarNumeroDispensaDisputa(numero[1]) : "",
-    uasg: uasg ? uasg[1] : "",
-    telaEnviarLance: /enviar\s+lance/i.test(texto),
-    texto,
-  };
-}
-
-/** Converte texto brasileiro ou decimal do banco para unidades de 0,0001. */
-function parseValorUnidadesDisputa(valor) {
-  if (valor === null || valor === undefined || valor === "") return null;
-  if (typeof valor === "number") {
-    if (!Number.isFinite(valor) || valor < 0) return null;
-    const unidades = Math.round(valor * 10000);
-    return Number.isSafeInteger(unidades) ? unidades : null;
-  }
-  const bruto = String(valor).trim().replace(/[^\d,.-]/g, "");
-  if (!bruto || !/\d/.test(bruto)) return null;
-  const decimal = bruto.includes(",")
-    ? bruto.replace(/\./g, "").replace(",", ".")
-    : bruto;
-  const numero = Number(decimal);
-  if (!Number.isFinite(numero) || numero < 0) return null;
-  const unidades = Math.round(numero * 10000);
-  return Number.isSafeInteger(unidades) ? unidades : null;
-}
-
-function formatarInputDisputa(unidades) {
-  if (!Number.isSafeInteger(unidades) || unidades < 0) return "";
-  return `${Math.floor(unidades / 10000)},${String(unidades % 10000).padStart(4, "0")}`;
-}
-
-function formatarValorDisputa(unidades) {
-  if (!Number.isSafeInteger(unidades) || unidades < 0) return "não identificado";
-  const inteiro = Math.floor(unidades / 10000).toLocaleString("pt-BR");
-  return `R$ ${inteiro},${String(unidades % 10000).padStart(4, "0")}`;
-}
-
-function trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
-  const inicioRotulo = texto.indexOf(rotulo);
-  if (inicioRotulo < 0) return "";
-  const inicioValor = inicioRotulo + rotulo.length;
-  const proximos = rotulosSeguintes
-    .map((proximo) => texto.indexOf(proximo, inicioValor))
-    .filter((indice) => indice >= 0);
-  const fimValor = proximos.length ? Math.min(...proximos) : texto.length;
-  return texto.slice(inicioValor, fimValor);
-}
-
-function valorAposRotuloDisputa(texto, rotulo, rotulosSeguintes = []) {
-  return analisarMedidaDisputa(trechoAposRotuloDisputa(texto, rotulo, rotulosSeguintes)).unidades;
-}
-
-function lerIntervaloMinimoDisputa(texto) {
-  const leitura = analisarMedidaDisputa(trechoAposRotuloDisputa(texto, "intervalo minimo entre lances", ["enviar lance"]), "intervalo");
-  return leitura.motivo === "ok" ? { tipo: leitura.tipo, unidades: leitura.unidades } : null;
-}
-
-function formatarPercentualDisputa(unidades) {
-  if (!Number.isSafeInteger(unidades) || unidades < 0) return "não identificado";
-  const inteiro = Math.floor(unidades / 10000).toLocaleString("pt-BR");
-  return `${inteiro},${String(unidades % 10000).padStart(4, "0")}%`;
-}
-
-function calcularDecrementoDisputa(melhor, intervalo) {
-  if (!Number.isSafeInteger(melhor) || melhor <= 0 || !intervalo || !Number.isSafeInteger(intervalo.unidades) || intervalo.unidades <= 0) return null;
-  if (intervalo.tipo === "valor") return intervalo.unidades;
-  if (intervalo.tipo !== "percentual") return null;
-
-  // Unidades de preço e percentual usam 0,0001. Divide por 100% e arredonda
-  // para cima à menor unidade aceita, para nunca ficar aquém do intervalo.
-  const divisor = 1_000_000n;
-  const numerador = BigInt(melhor) * BigInt(intervalo.unidades);
-  const decremento = (numerador + divisor - 1n) / divisor;
-  return decremento > 0n && decremento <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(decremento) : null;
-}
-
-function formatarIntervaloDisputa(intervalo, decrementoUnidades) {
-  if (intervalo?.tipo === "percentual") {
-    return `${formatarPercentualDisputa(intervalo.unidades)} (${formatarValorDisputa(decrementoUnidades)})`;
-  }
-  return formatarValorDisputa(intervalo?.unidades);
-}
-
-function intervalosIguaisDisputa(a, b) {
-  return Boolean(a && b && a.tipo === b.tipo && a.unidades === b.unidades);
-}
-
-const ROTULOS_PRECO_DISPUTA = [
-  "melhor valor (unitario)",
-  "meu valor (unitario)",
-  "novo lance (unitario)",
-  "intervalo minimo entre lances",
-];
-
-/** Lê somente texto renderizado; separa spans contíguos sem usar HTML ou valores ocultos. */
-function textoVisivelDisputa(el, { ignorar = "" } = {}) {
-  if (!el) return "";
-  const partes = [];
-  const visibilidade = new WeakMap();
-  const clipping = new WeakMap();
-  const view = el.ownerDocument.defaultView || window;
-  const textoEstaVisivel = (parent) => {
-    if (!isVisible(parent)) return false;
-    if (parent.closest(".sr-only, .p-sr-only, .cdk-visually-hidden, .visually-hidden, .screen-reader-only")) return false;
-    let atual = parent;
-    while (atual) {
-      if (!clipping.has(atual)) {
-        const estilo = view.getComputedStyle(atual);
-        const recorteZero = /^rect\(\s*0(?:px)?(?:[,\s]+0(?:px)?){3}\s*\)$/.test(estilo.clip || "");
-        const recorteIntegral = /^inset\(\s*50%\s*\)$/.test(estilo.clipPath || "");
-        clipping.set(atual, recorteZero || recorteIntegral);
-      }
-      if (clipping.get(atual)) return false;
-      atual = atual.parentElement;
-    }
-    return true;
-  };
-  const walker = el.ownerDocument.createTreeWalker(el, 4); // SHOW_TEXT
-  let no;
-  while ((no = walker.nextNode())) {
-    const parent = no.parentElement;
-    if (parent && ignorar && parent.closest(ignorar)) continue;
-    // aria-hidden retira conteúdo da acessibilidade, não da visão. R$ pode ser
-    // decorativo e continuar visível; já cópias sr-only não devem virar preços.
-    if (!parent || parent.closest(`script, style, template, noscript, svg, input, textarea, [role="textbox"], [contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"], [hidden], [inert], #${PAINEL_ID}`)) continue;
-    if (!visibilidade.has(parent)) visibilidade.set(parent, textoEstaVisivel(parent));
-    if (!visibilidade.get(parent)) continue;
-    const texto = String(no.textContent || "").replace(/\s+/g, " ").trim();
-    if (texto) partes.push(texto);
-  }
-  return partes.join(" ").replace(/\u00a0/g, " ").trim();
-}
-
-function normalizarTextoDisputa(texto) {
-  return normalizeText(texto).replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "")
-    .replace(/\bmelhor\s*valor\s*\(\s*unitario\s*\)/g, "melhor valor (unitario) ")
-    .replace(/\bmeu\s*valor\s*\(\s*unitario\s*\)/g, "meu valor (unitario) ")
-    .replace(/\bnovo\s*lance\s*\(\s*unitario\s*\)/g, "novo lance (unitario) ")
-    .replace(/\bintervalo\s*minimo\s*entre\s*lances/g, "intervalo minimo entre lances ")
-    .replace(/\bfase\s*de\s*lances\s*aberta/g, "fase de lances aberta")
-    .replace(/\benviar\s*lance\b/g, "enviar lance")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function identificarNumeroItemDisputa(cartao, escopoLance) {
-  const lerNumero = (el) => {
-    const texto = normalizarTextoDisputa(textoVisivelDisputa(el));
-    const match = texto.match(/^(?:item\s*(?:n[º°o]?\s*)?[:#-]?\s*)?(\d{1,6})(?=\s|$|[).:\-–—])/);
-    return match && Number(match[1]) > 0 ? normalizeItemNumber(match[1]) : "";
-  };
-  const visiveis = new Set();
-  const inicial = lerNumero(cartao);
-  if (inicial) visiveis.add(inicial);
-  else {
-    // Também funciona se a ordem DOM das colunas for diferente da ordem visual.
-    for (const filho of cartao.children) {
-      if (filho === escopoLance || filho.contains(escopoLance) || !isVisible(filho)) continue;
-      const texto = normalizarTextoDisputa(textoVisivelDisputa(filho));
-      if (ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.includes(rotulo))) continue;
-      const numero = lerNumero(filho);
-      if (numero) visiveis.add(numero);
-    }
-  }
-  const atributos = new Set();
-  for (const atributo of ["data-numero-item", "data-item-number", "data-item"]) {
-    const valor = cartao.getAttribute(atributo);
-    if (/^\d{1,6}$/.test(String(valor || ""))) {
-      if (Number(valor) === 0) return { numeroItem: "", atributos: [], ambiguo: true };
-      atributos.add(normalizeItemNumber(valor));
-    }
-  }
-  const numeroItem = visiveis.size === 1 ? [...visiveis][0] : "";
-  const ambiguo = visiveis.size > 1 || atributos.size > 1 || Boolean(numeroItem && atributos.size === 1 && !atributos.has(numeroItem));
-  // Um data-item na coluna de preços não substitui o número visível do cabeçalho.
-  return { numeroItem: ambiguo ? "" : numeroItem, atributos: [...atributos], ambiguo };
-}
-
-function rotulosControleDisputa(el) {
-  const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/)
-    .filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent).filter(Boolean);
-  return [textoVisivelDisputa(el), el.getAttribute("aria-label"), el.getAttribute("title"), el.value, ...referenciados]
-    .filter(Boolean).map(normalizarTextoDisputa);
-}
-
-function controleDisputaHabilitado(el) {
-  return isVisible(el) && !el.disabled && !el.hasAttribute("disabled") &&
-    el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("disabled") &&
-    !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
-    (el.ownerDocument.defaultView || window).getComputedStyle(el).pointerEvents !== "none";
-}
-
-/**
- * O campo “Novo lance” está sem um valor do usuário?
- *
- * O portal costuma deixar a própria máscara preenchida com zeros (“0,0000” /
- * “0.0000”); isso não é um lance digitado — é o vazio do campo. Só um número
- * com algum dígito diferente de zero conta como valor já preenchido (e, nesse
- * caso, a automação continua sem sobrescrever).
- */
-function campoDeLanceVazio(input) {
-  const valor = String(input?.value ?? "").trim();
-  return !valor || !/[1-9]/.test(valor);
-}
-
-/**
- * Espera o portal aceitar o valor digitado e habilitar “Enviar lance”.
- *
- * O componente de lance valida o campo fora do evento de digitação: o botão
- * costuma habilitar alguns instantes depois. Aqui relemos a página sem clicar
- * nada e só devolvemos o cartão quando preços, intervalo, fase, o valor
- * digitado e os controles continuarem iguais aos que autorizaram o lance.
- */
-async function aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento, tempoMs = DISPUTA_ESPERA_HABILITAR_MS }) {
-  const inicio = Date.now();
-  const limite = inicio + tempoMs;
-  let cutucou = false;
-  let proximaChecagemPagina = 0;
-  let motivo = "releitura";
-  for (;;) {
-    if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) return { motivo: "interrompido" };
-
-    // A compra/UASG é reconferida, mas não a cada volta (ler o corpo é caro).
-    if (Date.now() >= proximaChecagemPagina) {
-      proximaChecagemPagina = Date.now() + 600;
-      const agora = extrairIdentificacaoDisputaPagina();
-      if (!agora.telaEnviarLance || agora.numeroDispensa !== identificacao.numeroDispensa || agora.uasg !== identificacao.uasg) return { motivo: "pagina_mudou" };
-    }
-
-    const atual = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem);
-    if (!cartao.input.isConnected && !atual) return { motivo: "valor_perdido" };
-    // O DOM pode ser remontado ao digitar: o campo do cartão novo vale tanto
-    // quanto o antigo, desde que continue com o valor que foi calculado.
-    const campoAtual = cartao.input.isConnected ? cartao.input : atual.input;
-    const valorNoCampo = parseValorUnidadesDisputa(campoAtual?.value);
-    if (valorNoCampo === null) return { motivo: "valor_perdido" };
-    if (valorNoCampo !== sugestao.unidades) return { motivo: "valor_alterado" };
-
-    if (atual) {
-      const precosIguais = atual.melhor === cartao.melhor && atual.meu === cartao.meu && intervalosIguaisDisputa(atual.intervalo, cartao.intervalo);
-      const mesmoCampo = atual.input === cartao.input || (atual.campoAssociado && parseValorUnidadesDisputa(atual.input?.value) === sugestao.unidades);
-      if (precosIguais && mesmoCampo && atual.faseAberta) {
-        if (atual.enviarHabilitado) return { motivo: "ok", cartao: atual };
-        motivo = "enviar_bloqueado";
-      } else {
-        motivo = "releitura";
-      }
-    } else {
-      motivo = "releitura";
-    }
-
-    if (Date.now() >= limite) return { motivo };
-    if (!cutucou && Date.now() - inicio > 600) {
-      cutucou = true;
-      // Alguns componentes só validam no blur: avisa o campo e sai dele UMA vez,
-      // sem reescrever o preço (a máscara continua dona do valor).
-      const view = campoAtual.ownerDocument.defaultView || window;
-      disparar(campoAtual, "change", view, { data: String(campoAtual.value ?? "") });
-      disparar(campoAtual, "blur", view, {});
-      disparar(campoAtual, "focusout", view, {});
-      try { campoAtual.blur(); } catch (_) { /* opcional */ }
-    }
-    await sleep(120);
-  }
-}
-
-function encontrarControlesEnviarLance({ incluirDesabilitados = false } = {}) {
-  const seletores = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
-  return [...document.querySelectorAll(seletores)].filter((el) => {
-    if (!isVisible(el) || el.closest(`#${PAINEL_ID}, [inert], [aria-hidden="true"], [hidden]`)) return false;
-    if (!incluirDesabilitados && !controleDisputaHabilitado(el)) return false;
-    return rotulosControleDisputa(el).some((rotulo) => /^enviar\s+lance(?:\s|$)/.test(rotulo));
-  });
-}
-
-/** O formulário está numa coluna; o número e a fase pertencem à linha completa do item. */
-function cartaoDaAcaoDeLance(botao, controles, diagnostico = null) {
-  let escopoLance = null;
-  const numerosDeclarados = new Set();
-  let atual = botao.parentElement;
-  for (let nivel = 0; atual && atual !== document.body && nivel < 18; nivel += 1, atual = atual.parentElement) {
-    if (!isVisible(atual)) continue;
-    const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
-    if (!ROTULOS_PRECO_DISPUTA.every((rotulo) => texto.includes(rotulo))) continue;
-    // Nunca sobe até a lista inteira e combina os valores/campos de itens diferentes.
-    const acoes = controles.filter((controle) => atual.contains(controle));
-    if (acoes.length !== 1 || acoes[0] !== botao || ROTULOS_PRECO_DISPUTA.some((rotulo) => texto.split(rotulo).length !== 2)) {
-      if (diagnostico) diagnostico.ambiguos += 1;
-      return null;
-    }
-    if (!escopoLance) escopoLance = atual;
-    const identidade = identificarNumeroItemDisputa(atual, escopoLance);
-    for (const numero of identidade.atributos) numerosDeclarados.add(numero);
-    if (identidade.ambiguo || numerosDeclarados.size > 1 || (identidade.numeroItem && numerosDeclarados.size && !numerosDeclarados.has(identidade.numeroItem))) {
-      if (diagnostico) diagnostico.ambiguos += 1;
-      return null;
-    }
-    if (identidade.numeroItem) return { cartao: atual, escopoLance, botao };
-  }
-  if (diagnostico) {
-    if (escopoLance) diagnostico.semNumero += 1;
-    else diagnostico.semRotulos += 1;
-  }
-  return null;
-}
-
-function encontrarInputNovoLance(escopo) {
-  const seletores = 'input:not([type="hidden"]), textarea, [role="textbox"]';
-  const campos = [...escopo.querySelectorAll(seletores)].filter(isVisible);
-  const compativel = (el) => {
-    const sinais = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title")].filter(Boolean).join(" ");
-    return isFillable(el) && !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
-      !/%|desconto|percent|quantidade|marca|modelo|senha|password|email|cpf|cnpj/i.test(normalizeText(sinais)) &&
-      !/%/.test(String(el.value ?? el.textContent ?? ""));
-  };
-  const nomeadas = campos.filter((el) => {
-    // O conteúdo digitado nunca é o nome do campo (nem é usado como preço do portal).
-    const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent);
-    return [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), ...referenciados].filter(Boolean).some((texto) => /novo\s*lance/i.test(normalizeText(texto)));
-  });
-  if (nomeadas.length === 1) return compativel(nomeadas[0]) ? nomeadas[0] : null;
-  if (nomeadas.length > 1) return null;
-
-  const rotulos = [...escopo.querySelectorAll("*")].filter((label) =>
-    isVisible(label) && /^novo lance \(unitario\)\s*:?$/.test(normalizarTextoDisputa(textoVisivelDisputa(label))),
-  );
-  const associadas = new Set();
-  for (const label of rotulos) {
-    const id = label.getAttribute("for");
-    if (id) {
-      const entrada = label.ownerDocument.getElementById(id);
-      if (!campos.includes(entrada) || !compativel(entrada)) return null;
-      associadas.add(entrada);
-      continue;
-    }
-    let atual = label;
-    for (let nivel = 0; atual && nivel < 5 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
-      const encontradas = [...atual.querySelectorAll(seletores)].filter((el) => campos.includes(el));
-      if (encontradas.length > 1) return null;
-      if (encontradas.length === 1) {
-        if (!compativel(encontradas[0])) return null;
-        associadas.add(encontradas[0]);
-        break;
-      }
-      if (atual === escopo) break;
-    }
-  }
-  // Exige associação com o rótulo ou nome do campo; não escolhe um input genérico.
-  return associadas.size === 1 ? [...associadas][0] : null;
-}
-
-/** Medida explícita e única: texto de botões/ícones não vira preço. */
-function analisarMedidaDisputa(texto, finalidade = "preco") {
-  const trecho = normalizarTextoDisputa(texto).replace(/(\d)\s*([.,])\s*(?=\d)/g, "$1$2");
-  const moedas = [...trecho.matchAll(/\br\$/g)];
-  const monetarios = [...trecho.matchAll(/\br\$\s*(-?\d[\d.,]*)(?![\d.,\p{L}])/gu)];
-  const percentuais = [...trecho.matchAll(/(-?\d[\d.,]*)\s*(?:%|por\s+cento|percentual\b)/g)];
-  const temPercentual = /%|por\s+cento|percentual\b/.test(trecho);
-  const resultado = { unidades: null, tipo: null, motivo: "valor_ilegivel", moedas: moedas.length, percentuais: percentuais.length };
-  if (finalidade === "preco" && /\b(?:total|global|estimado|estimada|referencial|quantidade|maximo|minimo)\b/.test(trecho)) return { ...resultado, motivo: "outro_valor_na_regiao" };
-  if (/\bus\$|\b(?:usd|eur)\b|€/.test(trecho) || (moedas.length && temPercentual) || (finalidade === "preco" && /desconto|percentual|%/.test(trecho))) return { ...resultado, motivo: "unidades_conflitantes" };
-  if (moedas.length > 1 || percentuais.length > 1) return { ...resultado, motivo: "valores_ambiguos" };
-  const monetario = moedas.length === 1 && monetarios.length === 1 ? monetarios[0] : null;
-  const percentual = finalidade === "intervalo" && !moedas.length && percentuais.length === 1 ? percentuais[0] : null;
-  const match = monetario || percentual;
-  if (!match) return { ...resultado, motivo: !moedas.length && !temPercentual ? "moeda_ausente" : "valor_ilegivel" };
-  // Não trunca "R$ 127 50" para 127. Contadores explicitamente rotulados não são preços.
-  const depois = trecho.slice(match.index + match[0].length).trim();
-  if (/^\d/.test(depois) && !/^\d+\s+(?:lances?|ofertas?|participantes?)\b/.test(depois)) return { ...resultado, motivo: "numero_fragmentado" };
-  const numero = match[1];
-  if (!/^-?\d+(?:\.\d{3})*(?:,\d{1,4})?$/.test(numero) && !/^-?\d+(?:\.\d{1,4})?$/.test(numero)) return { ...resultado, motivo: "valor_ilegivel" };
-  const unidades = parseValorUnidadesDisputa(numero);
-  if (unidades === null || (finalidade === "intervalo" && unidades <= 0)) return { ...resultado, motivo: "valor_invalido" };
-  return { ...resultado, unidades, tipo: monetario ? "valor" : "percentual", motivo: "ok" };
-}
-
-/** Localiza a região mínima que contém um único rótulo financeiro do próprio item. */
-function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco") {
-  const texto = normalizarTextoDisputa(textoVisivelDisputa(escopo));
-  const outrosRotulos = ROTULOS_PRECO_DISPUTA.filter((outro) => outro !== rotulo);
-  const exato = (el) => normalizarTextoDisputa(textoVisivelDisputa(el)).replace(/\s*:\s*$/, "") === rotulo;
-  const todos = [...escopo.querySelectorAll("*")].filter((el) => isVisible(el) && exato(el));
-  const rotulos = todos.filter((el) => ![...el.children].some(exato));
-  const base = { rotulosEncontrados: rotulos.length, origem: "trecho_rotulado", tagRegiao: null };
-  if (rotulos.length > 1) return { ...base, unidades: null, tipo: null, motivo: "rotulos_ambiguos", moedas: 0, percentuais: 0 };
-  if (rotulos.length === 1) {
-    const idRotulo = rotulos[0].id;
-    const referenciadas = idRotulo ? [...escopo.querySelectorAll("[aria-labelledby], [headers]")].filter((el) =>
-      !el.matches('input, textarea, [role="textbox"]') && isVisible(el) &&
-      [el.getAttribute("aria-labelledby"), el.getAttribute("headers")].filter(Boolean).join(" ").split(/\s+/).includes(idRotulo),
-    ) : [];
-    if (referenciadas.length > 1) return { ...base, unidades: null, tipo: null, motivo: "regioes_ambiguas", moedas: 0, percentuais: 0 };
-    if (referenciadas.length === 1) {
-      return { ...base, ...analisarMedidaDisputa(textoVisivelDisputa(referenciadas[0]), finalidade), origem: "referencia_rotulo", tagRegiao: referenciadas[0].tagName };
-    }
-    let moedaAusente = false;
-    let atual = rotulos[0].parentElement;
-    for (let nivel = 0; atual && nivel < 8 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
-      const regiao = normalizarTextoDisputa(textoVisivelDisputa(atual));
-      if (outrosRotulos.some((outro) => regiao.includes(outro))) break;
-      if (/\d/.test(regiao.replace(rotulo, ""))) moedaAusente = true;
-      if (/r\$|%|por\s+cento|percentual\b/.test(regiao)) {
-        // Só lê dados do bloco do rótulo. Não sobe até outro preço ou outro item.
-        const semRotulo = regiao.replace(rotulo, "");
-        const conteudo = finalidade === "intervalo" ? semRotulo.split("enviar lance")[0] : semRotulo;
-        return { ...base, ...analisarMedidaDisputa(conteudo, finalidade), origem: "regiao_rotulada", tagRegiao: atual.tagName };
-      }
-      if (atual === escopo) break;
-    }
-    // Sem uma região exclusiva/referência não usa a moeda de uma coluna vizinha.
-    return { ...base, unidades: null, tipo: null, motivo: moedaAusente ? "moeda_ausente" : "sem_regiao_exclusiva", moedas: 0, percentuais: 0 };
-  }
-  const trecho = trechoAposRotuloDisputa(texto, rotulo, [...outrosRotulos, "enviar lance"]);
-  return { ...base, ...analisarMedidaDisputa(trecho, finalidade) };
-}
-
-function lerCriterioPaginaDisputa() {
-  const ajuda = 'aside, [role="tooltip"], .tooltip, .p-tooltip, .ajuda, .help-text, app-ajuda';
-  const texto = normalizarTextoDisputa(textoVisivelDisputa(document.body));
-  const foraAjuda = normalizarTextoDisputa(textoVisivelDisputa(document.body, { ignorar: ajuda }));
-  const rotulo = /^(?:criterio\s+(?:de\s+)?julgamento|tipo\s+(?:de\s+)?julgamento|julgamento)\s*[:=–—-]?\s*$/;
-  const declaracao = /^(?:criterio\s+(?:de\s+)?julgamento|tipo\s+(?:de\s+)?julgamento|julgamento)\s*[:=–—-]?\s*(menor\s*preco|maior\s*desconto)\s*$/;
-  const tipos = [];
-  for (const el of document.querySelectorAll("div, span, p, label, dt, th, small, strong")) {
-    const rapido = String(el.textContent || "");
-    if (rapido.length > 160 || !/julgamento/i.test(rapido) || !isVisible(el) || el.closest(`#${PAINEL_ID}`)) continue;
-    const proprio = normalizarTextoDisputa(textoVisivelDisputa(el));
-    let tipo = proprio.match(declaracao)?.[1];
-    if (!tipo && rotulo.test(proprio)) {
-      const vizinho = el.nextElementSibling;
-      const valor = vizinho && normalizarTextoDisputa(textoVisivelDisputa(vizinho));
-      if (/^(?:menor\s*preco|maior\s*desconto)$/.test(valor || "")) tipo = valor;
-    }
-    if (tipo) tipos.push({ tipo: tipo.replace(/\s+/g, ""), ajuda: Boolean(el.closest(ajuda)) });
-  }
-  // Uma explicação/tutorial não declara o critério da compra. Menor preço só
-  // afasta menções em ajuda quando há um campo explícito fora daquela ajuda.
-  const menorPrecoExplicito = tipos.some((t) => t.tipo === "menorpreco" && !t.ajuda);
-  const maiorDescontoExplicito = tipos.some((t) => t.tipo === "maiordesconto");
-  const mencaoMaiorDesconto = /\bmaior\s*desconto\b/.test(texto);
-  const maiorDescontoForaAjuda = /\bmaior\s*desconto\b/.test(foraAjuda);
-  const bloqueado = maiorDescontoExplicito || maiorDescontoForaAjuda || (mencaoMaiorDesconto && !menorPrecoExplicito);
-  const identificado = bloqueado && menorPrecoExplicito ? "ambiguo" : maiorDescontoExplicito ? "maior_desconto" : bloqueado ? "nao_identificado_com_mencao_desconto" : menorPrecoExplicito ? "menor_preco" : "nao_informado";
-  return { identificado, bloqueado, menorPrecoExplicito, maiorDescontoExplicito, mencaoMaiorDesconto, maiorDescontoForaAjuda };
-}
-
-function resumoMedidaLidaDisputa(leitura) {
-  return {
-    motivo: leitura.motivo,
-    origem: leitura.origem,
-    rotulosEncontrados: leitura.rotulosEncontrados,
-    tagRegiao: leitura.tagRegiao,
-    moedas: leitura.moedas,
-    percentuais: leitura.percentuais,
-    valor: leitura.unidades === null ? "não identificado" : leitura.tipo === "percentual" ? formatarPercentualDisputa(leitura.unidades) : formatarValorDisputa(leitura.unidades),
-  };
-}
-
-function lerCartaoDisputa({ cartao, escopoLance, botao, criterioPagina }) {
-  const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
-  const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
-  const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["melhor valor (unitario)", "meu valor (unitario)", "intervalo minimo entre lances", "enviar lance"]);
-  const leituras = {
-    melhor: lerMedidaRotuladaDisputa(escopoLance, "melhor valor (unitario)"),
-    meu: lerMedidaRotuladaDisputa(escopoLance, "meu valor (unitario)"),
-    intervalo: lerMedidaRotuladaDisputa(escopoLance, "intervalo minimo entre lances", "intervalo"),
-  };
-  const bloqueioLocal = /maior\s*desconto/.test(texto) || /%|desconto|percentual/.test(novoLance);
-  const rotulosPreco = !criterioPagina.bloqueado && !bloqueioLocal;
-  const melhor = rotulosPreco ? leituras.melhor.unidades : null;
-  const meu = rotulosPreco ? leituras.meu.unidades : null;
-  const criterioPreco = rotulosPreco && melhor !== null && meu !== null;
-  const campoAssociado = encontrarInputNovoLance(escopoLance);
-  return {
-    cartao,
-    escopoLance,
-    numeroItem: identificarNumeroItemDisputa(cartao, escopoLance).numeroItem,
-    faseAberta: /fase de lances aberta/.test(texto),
-    criterioPreco,
-    melhor,
-    meu,
-    intervalo: criterioPreco && leituras.intervalo.motivo === "ok" ? { tipo: leituras.intervalo.tipo, unidades: leituras.intervalo.unidades } : null,
-    input: criterioPreco ? campoAssociado : null,
-    campoAssociado,
-    leituras,
-    motivoBloqueio: criterioPagina.bloqueado ? "criterio_pagina" : bloqueioLocal ? "criterio_ou_unidade_do_item" : !criterioPreco ? "precos_ilegíveis" : leituras.intervalo.motivo !== "ok" ? "intervalo_ilegivel" : !campoAssociado ? "campo_sem_associacao" : null,
-    botao,
-    enviarHabilitado: controleDisputaHabilitado(botao),
-    texto,
-  };
-}
-
-function encontrarCartoesDisputa(diagnostico = null) {
-  // Critério explícito prevalece sobre ajuda genérica, nunca sobre um critério conflitante.
-  const criterioPagina = lerCriterioPaginaDisputa();
-  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
-  const habilitados = controles.filter(controleDisputaHabilitado);
-  if (diagnostico) Object.assign(diagnostico, { criterioPagina, controlesVisiveis: controles.length, controlesHabilitados: habilitados.length, semRotulos: 0, semNumero: 0, ambiguos: 0, itensDuplicados: [] });
-  const cartoes = [];
-  // O Enviar pode habilitar só depois do preenchimento. Aqui apenas associa; não clica.
-  for (const botao of controles) {
-    const contexto = cartaoDaAcaoDeLance(botao, controles, diagnostico);
-    if (contexto) cartoes.push(lerCartaoDisputa({ ...contexto, criterioPagina }));
-  }
-  const contagem = new Map();
-  for (const cartao of cartoes) contagem.set(cartao.numeroItem, (contagem.get(cartao.numeroItem) || 0) + 1);
-  const duplicados = [...contagem].filter(([, quantidade]) => quantidade > 1).map(([numero]) => numero);
-  if (diagnostico) diagnostico.itensDuplicados = duplicados;
-  return cartoes.filter((cartao) => cartao.numeroItem && !duplicados.includes(cartao.numeroItem));
-}
-
-function resumoLeituraCamposDisputa(diagnostico, cartoes) {
-  const abertos = cartoes.filter((c) => c.faseAberta).length;
-  const precos = cartoes.filter((c) => c.melhor !== null && c.meu !== null && c.intervalo?.unidades > 0).length;
-  const campos = cartoes.filter((c) => c.campoAssociado && c.botao).length;
-  const motivos = [...new Set(cartoes.map((c) => c.motivoBloqueio).filter(Boolean))];
-  const aviso = motivos.length ? ` Bloqueios: ${motivos.join(", ")}; o diagnóstico detalha a leitura por rótulo.` : "";
-  return `Leitura: ${diagnostico.controlesHabilitados} controles “Enviar lance”, ${cartoes.length} itens identificados, ${abertos} em fase aberta, ${precos} com preços/intervalo legíveis e ${campos} com campo associado. Sem número: ${diagnostico.semNumero}; sem rótulos: ${diagnostico.semRotulos}; ambíguos: ${diagnostico.ambiguos + diagnostico.itensDuplicados.length}.${aviso}`;
-}
-
-/** Diagnóstico serializável e sem escrita: não consulta API, não preenche nem clica. */
-function diagnosticarCamposDisputa() {
-  const diagnostico = { somenteLeitura: true };
-  const cartoes = encontrarCartoesDisputa(diagnostico);
-  diagnostico.itens = cartoes.slice(0, 30).map((cartao) => ({
-    numeroItem: cartao.numeroItem,
-    faseAberta: cartao.faseAberta,
-    criterioPreco: cartao.criterioPreco,
-    melhor: formatarValorDisputa(cartao.melhor),
-    meu: formatarValorDisputa(cartao.meu),
-    intervalo: cartao.intervalo ? formatarIntervaloDisputa(cartao.intervalo, calcularDecrementoDisputa(cartao.melhor, cartao.intervalo)) : "não identificado",
-    campoEncontrado: Boolean(cartao.input),
-    campoAssociado: Boolean(cartao.campoAssociado),
-    enviarHabilitado: cartao.enviarHabilitado,
-    tipoCampo: cartao.campoAssociado?.type || cartao.campoAssociado?.getAttribute("role") || null,
-    motivoBloqueio: cartao.motivoBloqueio,
-    leitura: Object.fromEntries(Object.entries(cartao.leituras).map(([nome, leitura]) => [nome, resumoMedidaLidaDisputa(leitura)])),
-  }));
-  // Registra tags/classes de textos de ação desconhecidos, nunca HTML completo ou campos ocultos.
-  const seletores = 'button, a, span, div, small, label, p, strong, [role="button"], input[type="button"], input[type="submit"]';
-  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
-  const desconhecidos = [...document.querySelectorAll(seletores)].filter((el) =>
-    isVisible(el) && !el.closest(`#${PAINEL_ID}, app-cabecalho-compra, .breadcrumb-compra`) && el.children.length <= 2 &&
-    rotulosControleDisputa(el).some((texto) => /^enviar lance$/.test(texto)),
-  );
-  diagnostico.textosDeAcao = [...new Set([...controles, ...desconhecidos])].slice(0, 6).map((el) => {
-    const ancestrais = [];
-    let atual = el.parentElement;
-    for (let nivel = 0; atual && atual !== document.body && nivel < 8; nivel += 1, atual = atual.parentElement) {
-      const texto = normalizarTextoDisputa(textoVisivelDisputa(atual));
-      const atributos = Object.fromEntries(["data-numero-item", "data-item-number", "data-item"].map((nome) => [nome, atual.getAttribute(nome)]).filter(([, valor]) => /^\d{1,6}$/.test(String(valor || ""))));
-      ancestrais.push({
-        tag: atual.tagName,
-        classes: String(atual.className || "").slice(0, 120),
-        numeroVisivel: identificarNumeroItemDisputa(atual, atual).numeroItem || null,
-        atributosNumericos: atributos,
-        rotulos: ROTULOS_PRECO_DISPUTA.filter((rotulo) => texto.includes(rotulo)),
-        camposVisiveis: [...atual.querySelectorAll('input:not([type="hidden"]), textarea, [role="textbox"]')].filter(isVisible).length,
-      });
-    }
-    return { tag: el.tagName, role: el.getAttribute("role"), classes: String(el.className || "").slice(0, 160), reconhecido: controles.includes(el), ancestrais };
-  });
-  return { ok: true, diagnostico, message: `${resumoLeituraCamposDisputa(diagnostico, cartoes)} Diagnóstico somente leitura; nenhum lance foi enviado.` };
-}
-
-function sugestaoDeLanceDisputa(cartao, itemLocal) {
-  const piso = parseValorUnidadesDisputa(itemLocal?.valorMinimo);
-  if (piso === null) return { ok: false, motivo: "Valor Mínimo não cadastrado; item ignorado." };
-  if (!cartao.faseAberta) return { ok: false, motivo: "Fase de lances não está aberta." };
-  if (cartao.melhor === null || cartao.meu === null || !cartao.intervalo || cartao.intervalo.unidades <= 0) {
-    return { ok: false, motivo: "Valores do portal incompletos ou ilegíveis; lance não calculado." };
-  }
-  if (cartao.meu <= piso) {
-    return {
-      ok: false,
-      pararItemNoPiso: true,
-      piso,
-      motivo: `Seu lance já atingiu o Valor Mínimo de ${formatarValorDisputa(piso)}.`,
-    };
-  }
-  if (cartao.meu <= cartao.melhor) return { ok: false, motivo: "Seu valor já é igual ou melhor que o melhor valor." };
-
-  const decremento = calcularDecrementoDisputa(cartao.melhor, cartao.intervalo);
-  if (decremento === null) return { ok: false, motivo: "Intervalo mínimo ilegível ou incompatível; lance não calculado." };
-  const proximo = cartao.melhor - decremento;
-  if (proximo < piso) {
-    return {
-      ok: false,
-      pararItemNoPiso: true,
-      piso,
-      motivo: `O próximo lance (${formatarValorDisputa(proximo)}) ficaria abaixo do Valor Mínimo (${formatarValorDisputa(piso)}); lances deste item encerrados.`,
-    };
-  }
-  if (proximo >= cartao.meu || proximo <= 0) return { ok: false, motivo: "Lance calculado não melhora seu valor atual." };
-  return {
-    ok: true,
-    unidades: proximo,
-    piso,
-    decremento,
-    intervalo: cartao.intervalo,
-    encerraAoConfirmar: proximo === piso,
-  };
-}
-
-function encerrarLancesDoItemNoPiso(numeroItem, piso, detalhe) {
-  const itensNoPiso = disputaAutomatica?.itensNoPiso;
-  if (!itensNoPiso || itensNoPiso.has(numeroItem)) return false;
-  itensNoPiso.add(numeroItem);
-  const mensagem = `${detalhe} Item ${numeroItem}: nenhum novo lance automático será enviado (Valor Mínimo ${formatarValorDisputa(piso)}).`;
-  mostrarStatusDisputa(mensagem, "warning");
-  registrarNoPainel(`🛑 ${mensagem}`);
-  return true;
-}
-
-function resumoDisputaParaConfirmacao(cartoes, itensPorNumero) {
-  const linhas = [];
-  for (const cartao of cartoes.slice(0, 6)) {
-    const item = itensPorNumero.get(cartao.numeroItem);
-    if (!item) {
-      linhas.push(`Item ${cartao.numeroItem}: sem correspondência na proposta selecionada.`);
-      continue;
-    }
-    const sugestao = sugestaoDeLanceDisputa(cartao, item);
-    if (sugestao.ok) {
-      const intervalo = formatarIntervaloDisputa(sugestao.intervalo, sugestao.decremento);
-      const final = sugestao.encerraAoConfirmar ? "; ao confirmar este lance, o item será encerrado no piso" : "";
-      linhas.push(`Item ${cartao.numeroItem}: melhor ${formatarValorDisputa(cartao.melhor)} − intervalo ${intervalo} → lance ${formatarValorDisputa(sugestao.unidades)} (mín. ${formatarValorDisputa(sugestao.piso)}${final}).`);
-    } else {
-      linhas.push(`Item ${cartao.numeroItem}: ${sugestao.motivo}`);
-    }
-  }
-  return linhas.join("\n");
-}
-
-function mostrarStatusDisputa(texto, tipo = "info") {
-  const mensagem = String(texto || "").trim();
-  disputaAutomatica.status = mensagem || "inativo";
-  if (document.getElementById(PAINEL_ID)) {
-    definirStatusDoPainel(mensagem);
-    const aviso = document.getElementById(`${PAINEL_ID}_aviso_disputa`);
-    if (aviso) aviso.textContent = mensagem;
-    atualizarPainel();
-  }
-  try {
-    chrome.runtime.sendMessage({ action: "disputa_progress", status: mensagem, tipo }).catch?.(() => {});
-  } catch (_) {
-    // O popup pode estar fechado.
-  }
-}
-
-function pararDisputaAutomatica(motivo = "Monitoramento parado.") {
-  const estavaAtiva = Boolean(disputaAutomatica.ativo || disputaAutomatica.intervalo || disputaAutomatica.observer);
-  if (disputaAutomatica.intervalo) clearInterval(disputaAutomatica.intervalo);
-  if (disputaAutomatica.agendamento) clearTimeout(disputaAutomatica.agendamento);
-  disputaAutomatica.observer?.disconnect();
-  const pendente = disputaAutomatica.pendente;
-  disputaAutomatica.ativo = false;
-  disputaAutomatica.pausado = false;
-  disputaAutomatica.intervalo = null;
-  disputaAutomatica.agendamento = null;
-  disputaAutomatica.observer = null;
-  disputaAutomatica.processando = false;
-  disputaAutomatica.pendente = null;
-  disputaAutomatica.status = motivo;
-  if (pendente) motivo += " Há um lance em processamento no portal; confira a tela, pois um lance enviado não pode ser desfeito.";
-  mostrarStatusDisputa(motivo, "warning");
-  registrarNoPainel(`⏹ ${motivo}`);
-  return estavaAtiva;
-}
-
-function pausarOuRetomarDisputaAutomatica() {
-  if (!disputaAutomatica.ativo) return false;
-  disputaAutomatica.pausado = !disputaAutomatica.pausado;
-  const texto = disputaAutomatica.pausado
-    ? "Monitoramento pausado pelo usuário; nenhum novo lance será enviado."
-    : "Monitoramento retomado. A estratégia continua respeitando o Valor Mínimo.";
-  mostrarStatusDisputa(texto, disputaAutomatica.pausado ? "warning" : "info");
-  registrarNoPainel(disputaAutomatica.pausado ? "⏸ Disputa pausada." : "▶ Disputa retomada.");
-  if (!disputaAutomatica.pausado) agendarVerificacaoDisputa(0);
-  return true;
-}
-
-function agendarVerificacaoDisputa(espera = 120) {
-  if (!disputaAutomatica.ativo || disputaAutomatica.pausado || disputaAutomatica.agendamento) return;
-  disputaAutomatica.agendamento = setTimeout(() => {
-    disputaAutomatica.agendamento = null;
-    verificarDisputaAutomatica().catch((erro) => {
-      pararDisputaAutomatica(`Erro durante o monitoramento: ${erro?.message || "falha desconhecida"}.`);
-    });
-  }, Math.max(0, espera));
-}
-
-function verificarConfirmacaoLancePendente(cartoes) {
-  const pendente = disputaAutomatica.pendente;
-  if (!pendente) return false;
-  const atual = cartoes.find((cartao) => cartao.numeroItem === pendente.numeroItem);
-  if (atual && atual.meu !== null && atual.meu <= pendente.valorEnviado) {
-    disputaAutomatica.pendente = null;
-    disputaAutomatica.ultimasTentativas.set(pendente.numeroItem, { meu: atual.meu, melhor: atual.melhor });
-    const mensagem = `Lance do item ${pendente.numeroItem} confirmado na página: ${formatarValorDisputa(atual.meu)}.`;
-    if (pendente.piso !== null && (atual.meu <= pendente.piso || pendente.valorEnviado <= pendente.piso)) {
-      encerrarLancesDoItemNoPiso(pendente.numeroItem, pendente.piso, `${mensagem} O item atingiu o piso;`);
-    } else {
-      mostrarStatusDisputa(mensagem, "success");
-      registrarNoPainel(`✅ ${mensagem}`);
-    }
-    agendarVerificacaoDisputa(250);
-    return true;
-  }
-  if (Date.now() - pendente.iniciadoEm >= DISPUTA_TIMEOUT_CONFIRMACAO_MS) {
-    pararDisputaAutomatica(`Não confirmei a atualização do item ${pendente.numeroItem}; parei para evitar repetir um lance. Confira o portal antes de reiniciar.`);
-    return true;
-  }
-  mostrarStatusDisputa(`Aguardando o portal confirmar o lance do item ${pendente.numeroItem} (${formatarValorDisputa(pendente.valorEnviado)}).`, "info");
-  return true;
-}
-
-async function verificarDisputaAutomatica() {
-  const monitoramento = disputaAutomatica;
-  if (!monitoramento.ativo || monitoramento.pausado || monitoramento.processando) return;
-  monitoramento.processando = true;
-  try {
-    const identificacao = extrairIdentificacaoDisputaPagina();
-    if (!identificacao.telaEnviarLance || identificacao.numeroDispensa !== disputaAutomatica.proposta?.numeroDispensa || identificacao.uasg !== disputaAutomatica.proposta?.uasg) {
-      pararDisputaAutomatica("A página mudou ou não corresponde mais à proposta selecionada; lances automáticos interrompidos.");
-      return;
-    }
-    const cartoes = encontrarCartoesDisputa();
-    if (verificarConfirmacaoLancePendente(cartoes)) return;
-    const esperaEntreEnvios = DISPUTA_INTERVALO_ENTRE_ENVIOS_MS - (Date.now() - disputaAutomatica.ultimaSubmissaoEm);
-    if (disputaAutomatica.ultimaSubmissaoEm && esperaEntreEnvios > 0) {
-      agendarVerificacaoDisputa(esperaEntreEnvios);
-      return;
-    }
-    for (const cartao of cartoes) {
-      if (!cartao.faseAberta) continue;
-      const itemLocal = disputaAutomatica.itensPorNumero.get(cartao.numeroItem);
-      if (!itemLocal) {
-        const chaveAviso = `${cartao.numeroItem}:sem-item-na-proposta`;
-        if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
-          disputaAutomatica.avisosRegistrados.add(chaveAviso);
-          registrarNoPainel(`⚠️ Item ${cartao.numeroItem} da página não existe na proposta selecionada; nenhum lance foi calculado para ele.`);
-        }
-        continue;
-      }
-      if (disputaAutomatica.itensNoPiso.has(cartao.numeroItem)) continue;
-      const sugestao = sugestaoDeLanceDisputa(cartao, itemLocal);
-      if (!sugestao.ok) {
-        if (sugestao.pararItemNoPiso) {
-          encerrarLancesDoItemNoPiso(cartao.numeroItem, sugestao.piso, sugestao.motivo);
-          continue;
-        }
-        const chaveAviso = `${cartao.numeroItem}:${sugestao.motivo}`;
-        if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
-          disputaAutomatica.avisosRegistrados.add(chaveAviso);
-          registrarNoPainel(`ℹ️ Item ${cartao.numeroItem}: ${sugestao.motivo}`);
-        }
-        continue;
-      }
-      if (!cartao.input || !cartao.botao || !cartao.input.isConnected || !cartao.botao.isConnected) {
-        const chaveAviso = `${cartao.numeroItem}:controles`;
-        if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
-          disputaAutomatica.avisosRegistrados.add(chaveAviso);
-          registrarNoPainel(`⚠️ Item ${cartao.numeroItem}: não identifiquei com segurança o campo ou botão de lance; não enviei.`);
-        }
-        continue;
-      }
-      const tentativaAnterior = disputaAutomatica.ultimasTentativas.get(cartao.numeroItem);
-      if (tentativaAnterior?.meu === cartao.meu && tentativaAnterior?.melhor === cartao.melhor) continue;
-      if (!campoDeLanceVazio(cartao.input)) {
-        const chaveAviso = `${cartao.numeroItem}:campo-preenchido`;
-        if (!disputaAutomatica.avisosRegistrados.has(chaveAviso)) {
-          disputaAutomatica.avisosRegistrados.add(chaveAviso);
-          const mensagem = `Item ${cartao.numeroItem}: o campo “Novo lance” já contém ${String(cartao.input.value).trim()}; não sobrescrevi nem enviei.`;
-          mostrarStatusDisputa(`⚠️ ${mensagem}`, "warning");
-          registrarNoPainel(`⚠️ ${mensagem}`);
-        }
-        continue;
-      }
-
-      const intervaloCalculado = formatarIntervaloDisputa(sugestao.intervalo, sugestao.decremento);
-      mostrarStatusDisputa(`Preparando item ${cartao.numeroItem}: ${formatarValorDisputa(sugestao.unidades)} (melhor − intervalo ${intervaloCalculado}; piso ${formatarValorDisputa(sugestao.piso)}).`, "info");
-      const preenchido = await setInputValue(cartao.input, formatarInputDisputa(sugestao.unidades), true);
-      // Uma autorização antiga não pode sobreviver a Parar → Iniciar com novos pisos.
-      if (disputaAutomatica !== monitoramento || !monitoramento.ativo || monitoramento.pausado) {
-        if (parseValorUnidadesDisputa(cartao.input.value) === sugestao.unidades) {
-          const view = cartao.input.ownerDocument.defaultView || window;
-          aplicarValor(cartao.input, "", view);
-          disparar(cartao.input, "input", view, { data: null, inputType: "deleteContentBackward" });
-          disparar(cartao.input, "change", view, {});
-        }
-        if (disputaAutomatica === monitoramento && monitoramento.ativo) mostrarStatusDisputa("Automação pausada antes do envio; nenhum lance foi enviado.", "warning");
-        return;
-      }
-      if (!preenchido || parseValorUnidadesDisputa(cartao.input.value) !== sugestao.unidades) {
-        disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
-        pararDisputaAutomatica(`O portal não manteve o lance calculado do item ${cartao.numeroItem}; não cliquei em “Enviar lance”.`);
-        return;
-      }
-
-      const desfazerPreparacao = () => {
-        // Se o portal remontou a linha, limpa também o campo que está na tela.
-        const alvos = new Set([cartao.input]);
-        if (!cartao.input.isConnected) {
-          const vivo = encontrarCartoesDisputa().find((c) => c.numeroItem === cartao.numeroItem);
-          if (vivo?.input) alvos.add(vivo.input);
-        }
-        for (const campo of alvos) {
-          if (!campo || parseValorUnidadesDisputa(campo.value) !== sugestao.unidades) continue;
-          const view = campo.ownerDocument.defaultView || window;
-          aplicarValor(campo, "", view);
-          disparar(campo, "input", view, { data: null, inputType: "deleteContentBackward" });
-          disparar(campo, "change", view, {});
-        }
-      };
-
-      const identificacaoAntesEnvio = extrairIdentificacaoDisputaPagina();
-      if (!identificacaoAntesEnvio.telaEnviarLance || identificacaoAntesEnvio.numeroDispensa !== identificacao.numeroDispensa || identificacaoAntesEnvio.uasg !== identificacao.uasg) {
-        desfazerPreparacao();
-        pararDisputaAutomatica("A compra ou UASG mudou durante a preparação; lances automáticos interrompidos. Esta preparação não foi enviada.");
-        return;
-      }
-
-      // O portal valida o valor fora do evento de digitação e só então habilita
-      // “Enviar lance”: aguarda a releitura concordar antes de decidir pelo clique.
-      const aceito = await aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, monitoramento });
-      if (aceito.motivo === "interrompido") {
-        desfazerPreparacao();
-        if (disputaAutomatica === monitoramento && monitoramento.ativo) mostrarStatusDisputa("Automação pausada antes do envio; nenhum lance foi enviado.", "warning");
-        return;
-      }
-      const lance = aceito.cartao || cartao;
-      if (aceito.motivo !== "ok") {
-        desfazerPreparacao();
-        if (aceito.motivo === "valor_perdido" || aceito.motivo === "valor_alterado") {
-          disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
-          pararDisputaAutomatica(`O portal não manteve o lance calculado do item ${cartao.numeroItem}; não cliquei em “Enviar lance”.`);
-          return;
-        }
-        if (aceito.motivo === "pagina_mudou") {
-          pararDisputaAutomatica("A compra ou UASG mudou durante a preparação; lances automáticos interrompidos. Esta preparação não foi enviada.");
-          return;
-        }
-        // Não repete uma preparação bloqueada com os mesmos preços nem trava os demais itens.
-        disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
-        const mensagem = aceito.motivo === "enviar_bloqueado"
-          ? `O portal não habilitou “Enviar lance” do item ${cartao.numeroItem} com o valor preparado (${formatarValorDisputa(sugestao.unidades)}); lance não enviado.`
-          : `Os campos, o estado de envio ou os valores do item ${cartao.numeroItem} não passaram na releitura; lance não enviado.`;
-        mostrarStatusDisputa(mensagem, "warning");
-        registrarNoPainel(`⚠️ ${mensagem}`);
-        return;
-      }
-      if (lance.botao.disabled || lance.botao.getAttribute("aria-disabled") === "true" || !isVisible(lance.botao)) {
-        desfazerPreparacao();
-        pararDisputaAutomatica(`O botão “Enviar lance” do item ${cartao.numeroItem} ficou indisponível; automação interrompida.`);
-        return;
-      }
-
-      disputaAutomatica.pendente = {
-        numeroItem: cartao.numeroItem,
-        valorEnviado: sugestao.unidades,
-        piso: sugestao.piso,
-        iniciadoEm: Date.now(),
-      };
-      disputaAutomatica.ultimasTentativas.set(cartao.numeroItem, { meu: cartao.meu, melhor: cartao.melhor });
-      disputaAutomatica.ultimaSubmissaoEm = Date.now();
-      registrarNoPainel(`📤 Enviando automaticamente o item ${cartao.numeroItem}: ${formatarValorDisputa(sugestao.unidades)}.`);
-      mostrarStatusDisputa(`Lance do item ${cartao.numeroItem} enviado ao portal; aguardando confirmação da página.`, "info");
-      try {
-        lance.botao.click();
-      } catch (erro) {
-        disputaAutomatica.pendente = null;
-        pararDisputaAutomatica(`Não consegui acionar “Enviar lance” no item ${cartao.numeroItem}: ${erro?.message || "erro"}.`);
-        return;
-      }
-      return; // um lance de cada vez; aguarda o portal atualizar “Meu valor”.
-    }
-    const totalNoPiso = disputaAutomatica.itensNoPiso.size;
-    const avisoPiso = totalNoPiso ? ` ${totalNoPiso} item(ns) encerrado(s) no Valor Mínimo; sem novos lances nesses itens.` : "";
-    mostrarStatusDisputa(`Monitorando ${cartoes.length} item(ns) visível(is). Nenhum novo lance abaixo do Valor Mínimo será enviado.${avisoPiso}`, totalNoPiso ? "warning" : "info");
-  } finally {
-    // Não desbloqueia a preparação de uma sessão nova quando a antiga termina.
-    monitoramento.processando = false;
-  }
-}
-
-async function iniciarDisputaAutomatica(propostaId) {
-  if (disputaAutomatica.ativo) return { ok: false, error: "Já existe um monitoramento de disputa ativo nesta página." };
-  if (rodandoAgora || rodandoPeloPainel) return { ok: false, error: "Pare o Modo Proposta antes de iniciar os lances automáticos." };
-  const id = String(propostaId || "").trim();
-  if (!/^\d+$/.test(id)) return { ok: false, error: "Selecione uma proposta válida antes de iniciar." };
-
-  const identificacao = extrairIdentificacaoDisputaPagina();
-  if (!identificacao.telaEnviarLance || !identificacao.numeroDispensa || !identificacao.uasg) {
-    return { ok: false, error: "Abra a tela real “Enviar lance” e confira se o número da dispensa e a UASG estão visíveis." };
-  }
-  const apiUrl = await lerApiUrl();
-  if (!apiUrl) return { ok: false, error: "Configure a URL do sistema na extensão antes de iniciar o Modo Disputa." };
-
-  let propostaDados;
-  let itensDados;
-  try {
-    const [respostaProposta, respostaItens] = await Promise.all([
-      chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(id)}/script`),
-      chamarApi(`${apiUrl}/api/propostas/${encodeURIComponent(id)}/itens`),
-    ]);
-    if (!respostaProposta.ok) throw new Error(`proposta HTTP ${respostaProposta.status}`);
-    if (!respostaItens.ok) throw new Error(`itens HTTP ${respostaItens.status}`);
-    propostaDados = respostaProposta.dados?.proposta;
-    itensDados = respostaItens.dados;
-  } catch (erro) {
-    return { ok: false, error: `Não consegui validar a proposta e seus limites: ${erro?.message || "falha na API"}.` };
-  }
-
-  const propostaUasg = String(propostaDados?.uasg || "").replace(/\D/g, "");
-  const propostaNumero = normalizarNumeroDispensaDisputa(propostaDados?.numeroDispensa, propostaUasg);
-  if (propostaNumero !== identificacao.numeroDispensa || propostaUasg !== identificacao.uasg) {
-    return {
-      ok: false,
-      error: `A proposta selecionada não corresponde à página. Página: ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}; proposta: ${propostaNumero || String(propostaDados?.numeroDispensa || "").trim() || "sem número"} · UASG ${propostaUasg || "sem UASG"}. Nenhum lance foi enviado.`,
-    };
-  }
-
-  const registros = Array.isArray(itensDados) ? itensDados : [];
-  const itensPorNumero = new Map();
-  for (const item of registros) {
-    const numero = normalizeItemNumber(item.numeroItem ?? item.item);
-    if (!numero) continue;
-    if (itensPorNumero.has(numero)) return { ok: false, error: `A proposta tem o número de item ${numero} duplicado; não iniciei para evitar aplicar um Valor Mínimo errado.` };
-    itensPorNumero.set(numero, item);
-  }
-  const comPiso = [...itensPorNumero.values()].filter((item) => parseValorUnidadesDisputa(item.valorMinimo) !== null).length;
-  if (comPiso === 0) return { ok: false, error: "Nenhum item da proposta tem “Valor Mínimo” válido. Cadastre os pisos antes de iniciar a automação." };
-
-  const diagnostico = {};
-  const cartoes = encontrarCartoesDisputa(diagnostico);
-  const cartoesValidos = cartoes.filter((cartao) => cartao.faseAberta && cartao.criterioPreco && cartao.input && cartao.botao && cartao.melhor !== null && cartao.meu !== null && cartao.intervalo?.unidades > 0);
-  if (cartoesValidos.length === 0) {
-    return { ok: false, error: `Não consegui validar com segurança preços, intervalo e campo de lance dos itens. ${resumoLeituraCamposDisputa(diagnostico, cartoes)} Use “Diagnosticar campos (sem enviar)” para conferir a leitura. Nenhum lance foi enviado.` };
-  }
-
-  const resumo = resumoDisputaParaConfirmacao(cartoesValidos, itensPorNumero);
-  const mensagem = [
-    "ATENÇÃO: o Modo Disputa enviará lances reais automaticamente após iniciar.",
-    `Disputa: Dispensa ${identificacao.numeroDispensa} · UASG ${identificacao.uasg}.`,
-    "Regra: melhor valor menos o intervalo mínimo do portal, em reais ou em percentual do melhor valor atual; nunca abaixo do “Valor Mínimo” cadastrado. Ao atingir o piso, os lances automáticos daquele item são encerrados. Sem preço legível, item sem piso ou tela diferente, não envia.",
-    "Será enviado um lance por vez e a automação aguardará a atualização de “Meu valor” antes de continuar. Use ⏹ Parar no painel para interromper toda a automação.",
-    "Confira a proposta selecionada e os valores antes de autorizar:",
-    resumo,
-    "\nIniciar monitoramento e envio automático?",
-  ].join("\n\n");
-  if (typeof window.confirm !== "function" || !window.confirm(mensagem)) {
-    return { ok: false, canceled: true, error: "Início cancelado; nenhum lance foi enviado." };
-  }
-
-  disputaAutomatica = {
-    ativo: true,
-    pausado: false,
-    status: "Monitoramento iniciado; verificando os itens da disputa.",
-    propostaId: id,
-    proposta: { numeroDispensa: propostaNumero, uasg: propostaUasg },
-    itensPorNumero,
-    observer: null,
-    intervalo: null,
-    agendamento: null,
-    processando: false,
-    ultimaSubmissaoEm: 0,
-    pendente: null,
-    ultimasTentativas: new Map(),
-    avisosRegistrados: new Set(),
-    itensNoPiso: new Set(),
-  };
-
-  if (!document.getElementById(PAINEL_ID)) mostrarPainel("disputa");
-  else definirModoPainel("disputa");
-  const select = document.getElementById(`${PAINEL_ID}_proposta`);
-  if (select) {
-    await carregarPropostasNoPainel();
-    select.value = id;
-    await carregarItensDisputaNoPainel();
-  }
-  mostrarStatusDisputa("Monitorando a disputa. Os lances automáticos respeitam o Valor Mínimo de cada item.", "success");
-  registrarNoPainel(`⚔️ Automação iniciada para ${propostaNumero} · UASG ${propostaUasg}.`);
-
-  if (typeof MutationObserver === "function" && document.body) {
-    disputaAutomatica.observer = new MutationObserver((registrosMutacao) => {
-      const relevantes = registrosMutacao.some((registro) => {
-        const dentroDoPainel = (no) => {
-          const elemento = no?.nodeType === 1 ? no : no?.parentElement;
-          return Boolean(elemento?.id === PAINEL_ID || elemento?.closest?.(`#${PAINEL_ID}`));
-        };
-        if (dentroDoPainel(registro.target)) return false;
-        const alterados = [...(registro.addedNodes || []), ...(registro.removedNodes || [])];
-        return alterados.length === 0 || alterados.some((no) => !dentroDoPainel(no));
-      });
-      if (relevantes) agendarVerificacaoDisputa(120);
-    });
-    disputaAutomatica.observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-  }
-  disputaAutomatica.intervalo = setInterval(() => agendarVerificacaoDisputa(0), DISPUTA_INTERVALO_VERIFICACAO_MS);
-  agendarVerificacaoDisputa(0);
-  atualizarPainel();
-  return { ok: true, active: true, message: `Monitorando ${propostaNumero} · UASG ${propostaUasg}; intervalo em R$ ou % e piso obrigatório por item.` };
-}
-
-/** Mostra itens e valores de referência e executa lances só após confirmação explícita. */
+/** Mostra itens e valores de referência, sem executar nenhuma ação de disputa. */
 async function carregarItensDisputaNoPainel() {
   const select = document.getElementById(`${PAINEL_ID}_proposta`);
   const lista = document.getElementById(`${PAINEL_ID}_lista_disputa`);
@@ -5524,11 +4379,9 @@ function escapeHtml(texto) {
 /** O botão "▶ Iniciar" do painel: preenche os itens da proposta escolhida. */
 async function iniciarPeloPainel() {
   if (painelModo === "disputa") {
-    const propostaId = document.getElementById(`${PAINEL_ID}_proposta`)?.value;
-    const resultado = await iniciarDisputaAutomatica(propostaId);
-    const mensagem = resultado?.message || resultado?.error || "Não consegui iniciar o Modo Disputa.";
-    mostrarStatusDisputa(mensagem, resultado?.ok ? "success" : "warning");
-    if (!resultado?.ok) registrarNoPainel(`⚠️ ${mensagem}`);
+    definirStatusDoPainel("Modo Disputa ainda não envia lances. Aguardando dados da licitação ativa.");
+    registrarNoPainel("⏳ Nenhum lance foi enviado; a integração está em preparação.");
+    atualizarPainel();
     return;
   }
 

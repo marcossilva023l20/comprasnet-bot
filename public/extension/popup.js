@@ -33,10 +33,6 @@ document.addEventListener("DOMContentLoaded", async () => {
  * Funciona mesmo com a janela do popup fechada — o painel na página continua.
  */
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.action === "disputa_progress") {
-    setDisputaStatus(msg.tipo || "info", msg.status || "Monitoramento atualizado.");
-    return;
-  }
   if (msg?.action !== "progresso") return;
   if (msg.status === "preenchendo") {
     setProgress((msg.indice || 1) - 1, msg.total || 1);
@@ -95,10 +91,6 @@ function bindEvents() {
   on("float-btn", "click", () => abrirJanelaFlutuante("bot"));
   on("disputa-pin-btn", "click", fixarPainelDisputaNaPagina);
   on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
-  on("disputa-start-btn", "click", iniciarDisputaAutomaticaPopup);
-  on("disputa-stop-btn", "click", pararDisputaAutomaticaPopup);
-  on("disputa-diagnostico-btn", "click", diagnosticarCamposDisputaPopup);
-  on("disputa-copy-diagnostico-btn", "click", copiarDiagnosticoDisputaPopup);
   on("copy-log-btn", "click", copiarRelatorio);
   on("btn-read-items", "click", readItemsFromPage);
   on("btn-send-items", "click", sendItemsToApp);
@@ -672,7 +664,7 @@ function syncDisputaPropostas() {
 
 function atualizarVelocidadeDisputa() {
   const label = document.getElementById("disputa-speed");
-  if (label) label.textContent = "Modo Disputa acompanha as atualizações da página; não altera a velocidade do Modo Proposta.";
+  if (label) label.textContent = `Usa a mesma velocidade do Modo Proposta: ${formatarSegundos(delayDaTela())} entre itens.`;
 }
 
 function renderDisputaItems() {
@@ -724,115 +716,6 @@ function renderDisputaItems() {
   });
 }
 
-function setDisputaStatus(tipo, mensagem) {
-  const el = document.getElementById("disputa-availability");
-  if (!el) return;
-  const classe = ["info", "warning", "success"].includes(tipo) ? tipo : "info";
-  el.className = `alert alert-${classe}`;
-  el.textContent = String(mensagem || "");
-}
-
-async function diagnosticarCamposDisputaPopup() {
-  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
-    setDisputaStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de diagnosticar.");
-    return;
-  }
-  const botao = document.getElementById("disputa-diagnostico-btn");
-  const area = document.getElementById("disputa-diagnostico-area");
-  const texto = document.getElementById("disputa-diagnostico-texto");
-  if (botao) botao.disabled = true;
-  area?.classList.add("hidden");
-  if (texto) texto.value = "";
-  setDisputaStatus("info", "Lendo os campos da tela, sem preencher nem enviar lances…");
-  try {
-    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_diagnosticar" });
-    if (!resultado?.ok || !resultado?.diagnostico) {
-      setDisputaStatus("warning", resultado?.error || "Não consegui ler o diagnóstico da página.");
-      return;
-    }
-    if (texto) texto.value = JSON.stringify({ versaoExtensao: VERSAO_INSTALADA, abaAlvo: currentTab.id, ...resultado.diagnostico }, null, 2);
-    area?.classList.remove("hidden");
-    setDisputaStatus("info", resultado.message || "Diagnóstico somente leitura concluído. Use Copiar diagnóstico para compartilhar a leitura.");
-  } catch (erro) {
-    setDisputaStatus("warning", `Não consegui diagnosticar. Recarregue a página (F5) depois de atualizar a extensão (${erro?.message || "erro"}).`);
-  } finally {
-    if (botao) botao.disabled = false;
-  }
-}
-
-async function copiarDiagnosticoDisputaPopup() {
-  const area = document.getElementById("disputa-diagnostico-texto");
-  if (!area?.value) return;
-  try {
-    await navigator.clipboard.writeText(area.value);
-    setDisputaStatus("success", "Diagnóstico copiado. Pode colá-lo no suporte; copiar não inicia nem envia lances.");
-  } catch (_) {
-    area.focus();
-    area.select();
-    let copiado = false;
-    try { copiado = typeof document.execCommand === "function" && document.execCommand("copy"); } catch (_) { /* usa Ctrl+C manualmente */ }
-    setDisputaStatus(copiado ? "success" : "warning", copiado ? "Diagnóstico copiado." : "Selecione o texto do diagnóstico e use Ctrl+C para copiar manualmente.");
-  }
-}
-
-async function iniciarDisputaAutomaticaPopup() {
-  const propostaId = document.getElementById("disputa-proposta-select")?.value;
-  if (!propostaId) {
-    setDisputaStatus("warning", "Selecione a proposta correspondente à dispensa e à UASG desta página.");
-    return;
-  }
-  if (!currentTab?.id) {
-    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
-    return;
-  }
-  if (!isComprasNetPage(currentTab.url || "")) {
-    setDisputaStatus("warning", "Abra no navegador a tela “Enviar lance” do Compras.gov.br/ComprasNet antes de iniciar.");
-    return;
-  }
-
-  const botao = document.getElementById("disputa-start-btn");
-  if (botao) {
-    botao.disabled = true;
-    botao.textContent = "⏳ Validando disputa…";
-  }
-  setDisputaStatus("info", "Validando número da dispensa, UASG, itens e Valores Mínimos. O portal pedirá confirmação antes de iniciar.");
-  try {
-    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_start", propostaId });
-    if (!resultado?.ok) {
-      setDisputaStatus(resultado?.canceled ? "info" : "warning", resultado?.error || "Não consegui iniciar o Modo Disputa.");
-      if (resultado?.error) addLog("warn", `Modo Disputa: ${resultado.error}`);
-      return;
-    }
-    setDisputaStatus("success", resultado.message || "Monitoramento e envio automático iniciados.");
-    addLog("success", `⚔️ ${resultado.message || "Modo Disputa iniciado."}`);
-  } catch (erro) {
-    setDisputaStatus("warning", `Não consegui conversar com a página. Recarregue a tela “Enviar lance” e tente novamente (${erro?.message || "erro"}).`);
-  } finally {
-    if (botao) {
-      botao.disabled = false;
-      botao.textContent = "▶ Iniciar envio automático";
-    }
-  }
-}
-
-async function pararDisputaAutomaticaPopup() {
-  if (!currentTab?.id) {
-    setDisputaStatus("warning", "Não encontrei a aba de disputa ativa.");
-    return;
-  }
-  const botao = document.getElementById("disputa-stop-btn");
-  if (botao) botao.disabled = true;
-  try {
-    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_stop" });
-    setDisputaStatus(resultado?.stopped ? "warning" : "info", resultado?.message || "Comando de parada enviado.");
-    if (resultado?.stopped) addLog("warn", "⏹ Monitoramento de disputa parado pelo usuário.");
-  } catch (erro) {
-    setDisputaStatus("warning", `Não consegui parar pela extensão (${erro?.message || "erro"}). Use ⏹ Parar no painel da página.`);
-  } finally {
-    if (botao) botao.disabled = false;
-  }
-}
-
 async function fixarPainelDisputaNaPagina() {
   if (!currentTab?.id) {
     addLog("warn", "Abra a página do ComprasNet primeiro.");
@@ -840,7 +723,7 @@ async function fixarPainelDisputaNaPagina() {
   }
   try {
     await chrome.tabs.sendMessage(currentTab.id, { action: "painel_mostrar", modo: "disputa" });
-    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Inicie somente após conferir proposta, UASG e Valor Mínimo.");
+    addLog("info", "📌 Painel flutuante do Modo Disputa aberto. Monitoramento e lances ainda estão desativados.");
   } catch (_) {
     addLog("error", "Não consegui abrir o painel: recarregue a página do ComprasNet (F5) e tente de novo.");
   }

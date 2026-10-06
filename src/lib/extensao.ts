@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.8.6";
+export const VERSAO_EXTENSAO = "1.7.19";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,59 +18,6 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
-  {
-    versao: "1.8.6",
-    itens: [
-      "Preenche o campo “Novo lance” mesmo quando a máscara do portal o deixa com zeros (0,0000): zero não é valor digitado e deixa de bloquear o lance",
-      "Espera o portal validar o valor digitado e habilitar “Enviar lance” (a validação não acontece no evento de digitação); se o portal não habilitar, explica o bloqueio em vez de apagar o valor em silêncio",
-      "Um valor realmente digitado por você continua intocado e aparece agora no status do painel quando a automação não pode sobrescrevê-lo",
-    ],
-  },
-  {
-    versao: "1.8.5",
-    itens: [
-      "Lê melhor/meu preço e intervalo na região do respectivo rótulo, tolerando links de informação e moeda decorativa visível; não usa cópias ocultas para leitores de tela nem escolhe entre valores ambíguos",
-      "Distingue campo associado de preço validado e detalha o motivo do bloqueio por rótulo no diagnóstico; prioriza os botões reais dos itens, sem coletar HTML completo ou valores digitados",
-      "Não confunde ajuda sobre maior desconto com critério explícito de menor preço; maior desconto atual ou contexto conflitante continuam bloqueados, preservando piso e autorização por monitoramento",
-    ],
-  },
-  {
-    versao: "1.8.4",
-    itens: [
-      "Inclui a correção dos campos de lance em colunas da 1.8.3 e bloqueia maior desconto indicado fora do cartão, mesmo que existam valores em R$; também revalida o critério antes de clicar",
-      "Relê compra/UASG após digitar e descarta preparações antigas ao parar/reiniciar, para não reaproveitar autorização ou pisos de outro monitoramento",
-    ],
-  },
-  {
-    versao: "1.8.3",
-    itens: [
-      "Associa a coluna de Novo lance à linha completa do item, mesmo sem data-item e com rótulos em spans separados; não mistura campos/preços de itens diferentes",
-      "Exige preços em R$, campo associado e fase aberta; reconhece Enviar inicialmente bloqueado e só clica se o portal habilitar e a releitura confirmar o mesmo item e controles",
-      "Adiciona diagnóstico dos campos somente leitura, copiável para suporte, sem consultar a API, preencher ou enviar lances",
-    ],
-  },
-  {
-    versao: "1.8.2",
-    itens: [
-      "Reconhece o código completo da compra no cadastro e o compara com o número/ano da dispensa, sem precisar renomear a proposta",
-      "Confere também a UASG embutida no código e a modalidade; compra, ano ou UASG divergentes e identificadores ambíguos continuam bloqueados antes de preencher ou enviar",
-    ],
-  },
-  {
-    versao: "1.8.1",
-    itens: [
-      "Ao atingir o Valor Mínimo cadastrado, encerra definitivamente os lances automáticos daquele item; se o próximo lance cruzaria o piso, o item também é protegido",
-      "Para lances unitários em reais, lê intervalo mínimo em R$ ou % do melhor preço, mostra a conversão na confirmação e aplica o piso antes de enviar",
-    ],
-  },
-  {
-    versao: "1.8.0",
-    itens: [
-      "Ativa o Modo Disputa na tela “Enviar lance”: identifica a dispensa/UASG, monitora itens com fase aberta e calcula melhor valor menos o intervalo mínimo",
-      "Só envia após sua confirmação explícita, um lance por vez, e nunca abaixo do Valor Mínimo; pausa/parada e divergência ou falta de confirmação interrompem a automação",
-      "O Modo Disputa não altera o controle de velocidade nem o tempo de resposta do Modo Proposta",
-    ],
-  },
   {
     versao: "1.7.19",
     itens: [

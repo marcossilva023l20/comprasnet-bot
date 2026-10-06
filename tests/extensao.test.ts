@@ -149,14 +149,14 @@ test("o pacote reflete exatamente os arquivos publicados da extensão", () => {
 });
 
 
-for (const instalada of ["1.7.19", "1.8.1", "1.8.2", "1.8.3", "1.8.4"]) {
-  test(`a instalação ${instalada} recebe a atualização com a mesma versão do pacote`, () => {
+for (const instalada of ["1.8.1", "1.8.2", "1.8.3", "1.8.4", "1.8.5", "1.8.6"]) {
+  test(`a instalação ${instalada} recebe o pacote 1.7.19 sem anunciar upgrade automático`, () => {
     const estado = montarEstadoAtualizacao(instalada);
-    assert.ok(estado.precisaAtualizar);
-    assert.ok(!estado.adiantada);
-    assert.equal(estado.versao, manifest.version);
-    assert.equal(estado.zip.nome, `comprasnet-bot-extensao-${manifest.version}.zip`);
-    assert.ok(estado.novidades.some((novidade) => novidade.versao === manifest.version));
+    assert.equal(estado.versao, "1.7.19");
+    assert.equal(estado.precisaAtualizar, false);
+    assert.equal(estado.adiantada, true);
+    assert.equal(estado.zip.nome, "comprasnet-bot-extensao-1.7.19.zip");
+    assert.equal(estado.novidades.length, 0);
   });
 }
 
