@@ -422,7 +422,9 @@
           <option value="">-- Selecione a proposta --</option>
         </select>
       </div>
-      <div class="text-xs" id="disputa-speed">O Modo Disputa usa as atualizações da página; a velocidade do Modo Proposta não é alterada.</div>
+      <div class="text-xs" id="disputa-speed">O Modo Disputa usa as atualizações da página; a velocidade do Modo Proposta não é alterada. Clique em "Ler página" depois de abrir a tela "Enviar lance" para confirmar os campos antes de iniciar.</div>
+      <button class="btn btn-primary btn-sm mt-2" id="disputa-read-page-btn" type="button">📖 Ler página</button>
+      <div id="disputa-read-status" class="alert alert-info hidden mt-2" role="status" aria-live="polite"></div>
       <button class="btn btn-outline btn-sm mt-2" id="disputa-refresh-btn" type="button">🔄 Atualizar Valor Mínimo</button>
       <button class="btn btn-outline btn-sm mt-2" id="disputa-diagnostico-btn" type="button">🔎 Diagnosticar campos (sem enviar)</button>
       <div class="hidden mt-2" id="disputa-diagnostico-area">

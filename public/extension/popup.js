@@ -131,6 +131,7 @@ function bindEvents() {
   on("disputa-pin-btn", "click", fixarPainelDisputaNaPagina);
   on("disputa-float-btn", "click", () => abrirJanelaFlutuante("disputa"));
   on("disputa-start-btn", "click", iniciarDisputaAutomaticaPopup);
+  on("disputa-read-page-btn", "click", lerPaginaDisputaPopup);
   on("disputa-refresh-btn", "click", () => atualizarMinimosDisputaPopup(true));
   on("disputa-stop-btn", "click", pararDisputaAutomaticaPopup);
   on("disputa-diagnostico-btn", "click", diagnosticarCamposDisputaPopup);
@@ -830,6 +831,51 @@ async function atualizarMinimosDisputaPopup(manual = false) {
   } finally {
     disputaPollEmCurso = false;
     if (botao) botao.disabled = false;
+  }
+}
+
+function setDisputaReadStatus(tipo, mensagem) {
+  const statusEl = document.getElementById("disputa-read-status");
+  if (!statusEl) return;
+  statusEl.classList.remove("hidden", "alert-info", "alert-warning", "alert-success");
+  const classe = tipo === "warning" ? "alert-warning" : tipo === "success" ? "alert-success" : "alert-info";
+  statusEl.classList.add(classe);
+  statusEl.textContent = mensagem;
+}
+
+async function lerPaginaDisputaPopup() {
+  if (!currentTab?.id || !isComprasNetPage(currentTab.url || "")) {
+    setDisputaReadStatus("warning", "Abra a tela “Enviar lance” do Compras.gov.br antes de ler a página.");
+    return;
+  }
+  const botao = document.getElementById("disputa-read-page-btn");
+  if (botao) {
+    botao.disabled = true;
+    botao.textContent = "⏳ Lendo...";
+  }
+  setDisputaReadStatus("info", "Analisando os campos de lance, polegares e botões de envio da página...");
+  try {
+    const resultado = await chrome.tabs.sendMessage(currentTab.id, { action: "disputa_ler_pagina" });
+    if (!resultado?.ok) {
+      setDisputaReadStatus("warning", resultado?.error || "Não consegui ler os campos da página.");
+      setDisputaStatus("warning", resultado?.error || "Falha na leitura da página.");
+      return;
+    }
+    // Atualiza as situações com o que foi lido
+    if (resultado.situacoes) {
+      disputaSituacoes = new Map(resultado.situacoes.map((s) => [String(s.numeroItem), s]));
+      renderDisputaItems();
+    }
+    setDisputaReadStatus("success", resultado.message || "Página lida com sucesso: campos de lance identificados.");
+    setDisputaStatus("success", resultado.message || "Página lida; campos de lance mapeados.");
+  } catch (erro) {
+    setDisputaReadStatus("warning", `Não consegui ler a página. Recarregue o ComprasNet e tente novamente (${erro?.message || "erro"}).`);
+    setDisputaStatus("warning", "Falha ao ler a página.");
+  } finally {
+    if (botao) {
+      botao.disabled = false;
+      botao.textContent = "📖 Ler página";
+    }
   }
 }
 

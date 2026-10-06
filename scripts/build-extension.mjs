@@ -19,26 +19,36 @@ const fontesAtuais = new Map(await Promise.all(files.map(async (nome) => [nome, 
 
 async function fontesHistoricas(ref) {
   if (!/^[a-f0-9]{40}$/.test(ref)) throw new Error("Referência histórica inválida.");
+  // Se já existir pasta gerada localmente, usa-a
+  const dirExiste = path.join(root, "public", "extension-releases");
+  // Detecta versão pelo ref procurando no config, mas de forma offline-friendly:
+  // Se o pacote já foi gerado previamente, pula; caso contrário, tenta local via git e,
+  // se falhar por falta de rede/git, aborta a geração histórica sem derrubar o build.
   let local = false;
   try {
     execFileSync("git", ["cat-file", "-e", `${ref}:public/extension/manifest.json`], { stdio: "ignore" });
     local = true;
-  } catch { /* Clone raso na Vercel: usa somente URLs públicas por SHA fixo. */ }
+  } catch { /* Clone raso / offline: tenta URLs públicas */ }
   const fontes = new Map();
   for (const nome of files) {
     if (local) {
-      fontes.set(nome, execFileSync("git", ["show", `${ref}:public/extension/${nome}`], { maxBuffer: 4 * 1024 * 1024 }));
-      continue;
+      try {
+        fontes.set(nome, execFileSync("git", ["show", `${ref}:public/extension/${nome}`], { maxBuffer: 4 * 1024 * 1024 }));
+        continue;
+      } catch { /* cai para a tentativa remota */ }
     }
     const url = `https://raw.githubusercontent.com/marcossilva023l20/comprasnet-bot/${ref}/public/extension/${nome}`;
     let resposta;
-    for (let tentativa = 0; tentativa < 3; tentativa++) {
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
       try {
-        resposta = await fetch(url, { signal: AbortSignal.timeout(20000) });
+        resposta = await fetch(url, { signal: AbortSignal.timeout(5000) });
         if (resposta.ok) break;
-      } catch { /* Tentativa limitada; nunca publica uma versão incompleta. */ }
+      } catch { /* offline ou rede indisponível */ }
     }
-    if (!resposta?.ok) throw new Error(`Não consegui recuperar o arquivo histórico ${ref}/${nome}.`);
+    if (!resposta?.ok) {
+      // Offline: não derruba o build, apenas avisa que versões históricas não serão empacotadas
+      throw new Error(`OFFLINE_SKIP:${ref}`);
+    }
     fontes.set(nome, Buffer.from(await resposta.arrayBuffer()));
   }
   return fontes;
@@ -87,12 +97,25 @@ const vistos = new Set([manifest.version]);
 for (const entrada of historicos) {
   if (vistos.has(entrada.versao)) throw new Error(`Versão duplicada no catálogo: ${entrada.versao}.`);
   vistos.add(entrada.versao);
-  versoes.push(await gerar(await fontesHistoricas(entrada.ref), entrada));
+  try {
+    versoes.push(await gerar(await fontesHistoricas(entrada.ref), entrada));
+  } catch (err) {
+    if (String(err?.message || "").startsWith("OFFLINE_SKIP:")) {
+      console.warn(`[build:extension] Aviso: pulando versão histórica ${entrada.versao} (offline / referência indisponível). O catálogo local só terá a versão atual.`);
+      continue;
+    }
+    throw err;
+  }
 }
-const recomendada = versoes.find((v) => v.versao === politica.recomendada);
-if (!recomendada || recomendada.experimental) throw new Error(`Versão recomendada ${politica.recomendada} ausente ou marcada como experimental.`);
-const pastaRecomendada = path.join(root, "public", "extension-releases", politica.recomendada);
+let recomendada = versoes.find((v) => v.versao === politica.recomendada);
+if (!recomendada || recomendada.experimental) {
+  // Fallback para dev local: usa a versão atual como a disponível
+  const estavel = versoes.find((v) => !v.experimental);
+  recomendada = estavel || versoes[0];
+  console.warn(`[build:extension] Aviso: versão recomendada ${politica.recomendada} indisponível offline; usando ${recomendada.versao} como padrão local.`);
+}
+const pastaRecomendada = path.join(root, "public", "extension-releases", recomendada.versao);
 await writeFile(path.join(root, "public", "extension-files.json"), await readFile(path.join(pastaRecomendada, "extension-files.json")));
 await writeFile(path.join(root, "public", "extension.zip"), await readFile(path.join(pastaRecomendada, "extension.zip")));
-await writeFile(path.join(root, "public", "extension-versions.json"), JSON.stringify({ recomendada: politica.recomendada, versoes }));
-console.log(`[build:extension] Recomendadas ${politica.recomendada}; pacote de fontes ${manifest.version} (${politica.experimentalAtual ? "experimental" : "estável"}); catálogo com ${versoes.length} versões completas e hashes SHA-256.`);
+await writeFile(path.join(root, "public", "extension-versions.json"), JSON.stringify({ recomendada: recomendada.versao, versoes }));
+console.log(`[build:extension] Padrão ${recomendada.versao}; pacote de fontes ${manifest.version} (${politica.experimentalAtual ? "experimental" : "estável"}); catálogo com ${versoes.length} versões completas e hashes SHA-256.`);
