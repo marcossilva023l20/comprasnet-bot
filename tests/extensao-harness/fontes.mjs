@@ -248,6 +248,16 @@ export async function rodarFontes() {
     window.close();
   }
 
+  console.log("\n── 7) CNET: a rota segura de fornecedor não é classificada como fonte pública ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
+    const { window } = montarPagina("<!doctype html><html><body></body></html>", { url });
+    const fonte = window.eval("detectarFonteItens()");
+    checar(fonte.id === "comprasnet", `classificou cadastro seguro como ComprasNet (${fonte.id})`);
+    checar(fonte.nome === "ComprasNet", `nome da fonte corresponde à tela segura (${fonte.nome})`);
+    window.close();
+  }
+
   if (falhas) throw new Error(`${falhas} verificação(ões) de leitura das fontes falharam`);
   console.log("\n🎉 Leitura de fontes adicionais OK");
 }

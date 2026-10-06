@@ -7,30 +7,38 @@ const html = readFileSync(new URL("../public/extension/popup.html", import.meta.
 const script = readFileSync(new URL("../public/extension/popup.js", import.meta.url), "utf8");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-function popup({ estado, itens }) {
+function popup({ estado, itens, tabUrl, preloadedItems = [], selectedItemIds = [] }) {
   const dom = new JSDOM(html, { url: "chrome-extension://id/popup.html", runScripts: "outside-only" });
   const { window } = dom;
   const listeners = [];
   const mensagens = [];
+  const mensagensDetalhadas = [];
   const requisicoes = [];
   const registrar = window.document.addEventListener.bind(window.document);
   window.document.addEventListener = (tipo, fn, opcoes) => { if (tipo !== "DOMContentLoaded") registrar(tipo, fn, opcoes); };
   window.chrome = {
-    runtime: { getManifest: () => ({ version: "1.8.8" }), onMessage: { addListener: (fn) => listeners.push(fn) } },
-    tabs: { sendMessage: async (_id, msg) => { mensagens.push(msg.action); return msg.action === "disputa_status" ? estado : { ok: true }; } },
+    runtime: { getManifest: () => ({ version: "1.8.9" }), onMessage: { addListener: (fn) => listeners.push(fn) } },
+    tabs: { sendMessage: async (_id, msg) => { mensagens.push(msg.action); mensagensDetalhadas.push(msg); return msg.action === "disputa_status" ? estado : { ok: true }; } },
   };
   window.fetch = async (url, options) => {
     requisicoes.push({ url: String(url), cache: options?.cache });
     return { ok: true, json: async () => itens };
   };
-  window.eval(`${script}\ncurrentTab = { id: 99, url: 'https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa' };\napiUrl = 'https://comprasnet-bot.vercel.app';\nbindEvents();`);
+  const endereco = tabUrl || "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa";
+  window.eval(`${script}
+currentTab = { id: 99, url: ${JSON.stringify(endereco)} };
+apiUrl = 'https://comprasnet-bot.vercel.app';
+allItems = ${JSON.stringify(preloadedItems)};
+selectedIds = new Set(${JSON.stringify(selectedItemIds)});
+window.__runBot = () => runBot();
+bindEvents();`);
   const select = window.document.getElementById("disputa-proposta-select");
   select.innerHTML = '<option value="7">53/2026</option><option value="8">54/2026</option>';
   select.value = "7";
   const principal = window.document.getElementById("proposta-select");
   principal.innerHTML = select.innerHTML;
   principal.value = "7";
-  return { window, listeners, mensagens, requisicoes };
+  return { window, listeners, mensagens, mensagensDetalhadas, requisicoes };
 }
 async function aguardar(fn) {
   for (let i = 0; i < 30; i++) { if (fn()) return; await tick(); }
@@ -72,6 +80,31 @@ test("o botão 📖 Ler página pede uma leitura somente informativa ao content 
   assert.deepEqual(env.mensagens, ["disputa_ler_pagina"]);
   assert.deepEqual(env.requisicoes, []);
   assert.match(env.window.document.getElementById("disputa-read-status").textContent, /Página lida com sucesso/);
+});
+
+test("o cadastro seguro do CNET não é bloqueado como fonte pública e inicia o preenchimento", async (t) => {
+  const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
+  const env = popup({
+    estado: { ok: true, ativo: false, situacoes: [] },
+    itens: [],
+    tabUrl: url,
+    preloadedItems: [{ id: 1, numeroItem: "1", valorUnitario: "50.0000", marcaFabricante: "ACME", modeloVersao: "A1" }],
+    selectedItemIds: [1],
+  });
+  t.after(() => env.window.close());
+  assert.equal(env.window.isComprasNetPage(url), true);
+  assert.equal(env.window.isCnetMobilePage(url), false);
+  assert.equal(env.window.isSourceOnlyPage(url), false);
+  const urlPublico = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras";
+  assert.equal(env.window.isSourceOnlyPage(urlPublico), true);
+  assert.equal(env.window.nomeFonteItens(urlPublico), "CNET Mobile");
+  await env.window.__runBot();
+
+  assert.ok(env.mensagens.includes("ping"), "o popup verificou a página do Compras.gov.br");
+  assert.ok(env.mensagens.includes("scan_page"), "o popup fez a leitura inicial da tela segura");
+  assert.ok(env.mensagens.includes("fill_items"), "o popup enviou os dados para preencher e salvar");
+  const envio = env.mensagensDetalhadas.find((msg) => msg.action === "fill_items");
+  assert.deepEqual(JSON.parse(JSON.stringify(envio?.items)), [{ item: "1", valorUnitario: "50,0000", marcaFabricante: "ACME", modeloVersao: "A1" }]);
 });
 
 test("o refresh manual não exibe pisos de outra proposta enquanto o monitoramento está ativo", async (t) => {

@@ -2801,7 +2801,10 @@ function detectarFonteItens() {
   if (host === "marcossilva023l20.github.io" && /^\/radar-licitacoes-v2(?:\/|$)/.test(pathname)) {
     return { id: "radar-pncp", nome: "Radar de Licitações PNCP" };
   }
-  if (host === "cnetmobile.estaleiro.serpro.gov.br") {
+  if (
+    host === "cnetmobile.estaleiro.serpro.gov.br" &&
+    /^\/comprasnet-web\/public(?:\/|$)/i.test(pathname)
+  ) {
     return { id: "cnetmobile", nome: "Compras.gov.br / CNET Mobile" };
   }
   return { id: "comprasnet", nome: "ComprasNet" };

@@ -18,6 +18,12 @@
     "experimental": false
   },
   {
+    "versao": "1.8.8",
+    "ref": "5839450cd44d216f53671942411c9ace60eb224a",
+    "descricao": "BETA anterior: inclui leitura da tela e detecção ampliada dos controles de lance. Envio de lances reais ainda não foi validado no portal.",
+    "experimental": true
+  },
+  {
     "versao": "1.8.7",
     "ref": "cd93275ada8079046b6b750bb655608bebe530d4",
     "descricao": "BETA: Modo Disputa com bloqueio por polegar vermelho e Valor Mínimo por item. Envio de lances reais não foi validado no portal.",

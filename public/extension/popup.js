@@ -247,7 +247,9 @@ function isRadarLicitacoesPage(rawUrl) {
 
 function isCnetMobilePage(rawUrl) {
   try {
-    return new URL(rawUrl).hostname.toLowerCase() === "cnetmobile.estaleiro.serpro.gov.br";
+    const url = new URL(rawUrl);
+    return url.hostname.toLowerCase() === "cnetmobile.estaleiro.serpro.gov.br" &&
+      /^\/comprasnet-web\/public(?:\/|$)/i.test(url.pathname);
   } catch (_) {
     return false;
   }
@@ -264,8 +266,7 @@ function isSourceOnlyPage(rawUrl) {
 function nomeFonteItens(rawUrl) {
   if (isRadarLicitacoesPage(rawUrl)) return "Radar PNCP";
   try {
-    const host = new URL(rawUrl).hostname.toLowerCase();
-    if (host === "cnetmobile.estaleiro.serpro.gov.br") return "CNET Mobile";
+    if (isCnetMobilePage(rawUrl)) return "CNET Mobile";
   } catch (_) {
     // URL da aba indisponível.
   }

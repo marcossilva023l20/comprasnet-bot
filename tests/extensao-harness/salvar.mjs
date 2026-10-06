@@ -31,10 +31,11 @@
  * 27) Entrada 61,41 com zeros iniciais e máscara assíncrona não duplica keydown/keypress
  * 28) Prefixo numérico é escalado antes do input, impedindo 674.100,0000
  * 29) Máscara de texto que inicia em 6,0000 recebe a vírgula e preserva 67,4100
+ * 30) Cadastro seguro do CNET: expande “Mostrar detalhes do item”, preenche e salva
  *
  * Uso: node tests/extensao-harness/salvar.mjs
  */
-import { montarPagina, conferir } from "./harness.mjs";
+import { montarPagina, conferir, paginaPortal } from "./harness.mjs";
 
 function pagina({ salvar = "normal", shadow = false, reacao = true, mascara = false, itens = 2 } = {}) {
   const botao = (id) =>
@@ -87,9 +88,10 @@ function pagina({ salvar = "normal", shadow = false, reacao = true, mascara = fa
   </body></html>`;
 }
 
-function ambiente(html, { mascara = false, habilitarDepois = false } = {}) {
+function ambiente(html, { mascara = false, habilitarDepois = false, url, prepararExtra } = {}) {
   const eventos = { salvos: [] };
   const { window, cliques, enviar } = montarPagina(html, {
+    url,
     preparar: (w, c) => {
       w.document.querySelectorAll("input.entrada").forEach((input) => {
         if (mascara && input.dataset.mascara === "1") {
@@ -117,6 +119,7 @@ function ambiente(html, { mascara = false, habilitarDepois = false } = {}) {
         });
       });
       w.document.querySelectorAll(".favoritar").forEach((b) => b.addEventListener("click", () => { c.favoritos += 1; }));
+      prepararExtra?.(w, c);
     },
   });
   return { window, cliques, eventos, enviar };
@@ -1852,6 +1855,34 @@ export async function rodarSalvar() {
     checar(window.document.getElementById("total1").textContent === "R$ 1.011,1500", `total correto (${window.document.getElementById("total1").textContent})`);
     checar(eventos.salvos.length === 1 && eventos.salvos[0] === "67,4100", `salvou só o valor correto (${JSON.stringify(eventos.salvos)})`);
     checar(r.filled === 1 && r.salvamentos[0]?.confirmado, "item confirmado");
+  }
+
+  console.log("\n── 30) Cadastro seguro do CNET: expande o item, preenche os três campos e salva ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
+    const { window, cliques, eventos, enviar } = ambiente(paginaPortal({ itens: 1 }), {
+      url,
+      prepararExtra: (w, c) => {
+        w.document.querySelector(".seta").addEventListener("click", (event) => {
+          event.currentTarget.setAttribute("aria-expanded", "true");
+          c.setas += 1;
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+      },
+    });
+    const resultado = await enviar({
+      action: "fill_items",
+      delay: 20,
+      items: [{ item: 1, valorUnitario: "44,0000", marcaFabricante: "ACME", modeloVersao: "Modelo 1" }],
+    });
+    checar(resultado.ok && resultado.filled === 1, `preencheu o item na rota segura (${resultado.error || resultado.filled})`);
+    checar(cliques.setas === 1, `clicou em “Mostrar detalhes do item” (${cliques.setas})`);
+    checar(window.document.getElementById("vu1").value === "44,0000", "preencheu Valor unitário");
+    checar(window.document.getElementById("mf1").value === "ACME", "preencheu Marca/Fabricante");
+    checar(window.document.getElementById("mv1").value === "Modelo 1", "preencheu Modelo/Versão");
+    checar(eventos.salvos.length === 1 && eventos.salvos[0] === "salvar1", `clicou em Salvar uma vez (${JSON.stringify(eventos.salvos)})`);
+    checar(resultado.salvamentos?.[0]?.confirmado, "o site de teste confirmou que salvou");
+    window.close();
   }
 
   return falhas;

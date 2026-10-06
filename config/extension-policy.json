@@ -1,5 +1,5 @@
 {
   "recomendada": "1.7.20",
-  "descricaoAtual": "BETA 1.8.8: corrigida a chamada do clique em Enviar lance e incluído o botão “📖 Ler página” para verificar a tela e os controles. Detecção do campo mais flexível. O envio real no portal ainda não foi validado ao vivo. Só opera com polegar para baixo vermelho, confirma a compra/UASG e confere o Valor Mínimo antes de cada clique.",
+  "descricaoAtual": "BETA 1.8.9: classifica somente /comprasnet-web/public/ do CNET como fonte pública e não bloqueia o cadastro seguro do fornecedor. Preserva a leitura por número do item, expansão de “Mostrar detalhes do item”, preenchimento de valor unitário, marca/fabricante e modelo/versão e clique em Salvar. O Modo Disputa continua BETA: envio real de lances ainda não foi validado ao vivo; só opera com polegar para baixo vermelho, confirma compra/UASG e confere o Valor Mínimo antes de cada clique.",
   "experimentalAtual": true
 }
