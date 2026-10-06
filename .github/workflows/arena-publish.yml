@@ -3,7 +3,8 @@
 # ---------------------------------------------------------------------------
 #
 # O que este workflow faz
-#   1. Em cada push numa branch `arena/**`, roda lint, typecheck, testes e build.
+#   1. Em cada push numa branch `arena/**`, audita dependências de produção,
+#      roda lint, typecheck, testes, harnesses da extensão e build.
 #   2. Se tudo passar, publica AQUELA MESMA REVISÃO em `main` por fast-forward
 #      (nenhum commit novo, nenhum force-push, nada sobrescrito).
 #   3. O push em `main` dispara o deploy de produção pela integração Git da
@@ -53,7 +54,7 @@ jobs:
   # 1) Verificações
   # -------------------------------------------------------------------------
   verificacoes:
-    name: Verificações (lint, typecheck, testes, build)
+    name: Verificações (audit de produção, lint, typecheck, testes e build)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -72,6 +73,9 @@ jobs:
 
       - name: Instalar dependências (npm ci)
         run: npm ci
+
+      - name: Auditoria de dependências de produção
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
@@ -107,7 +111,7 @@ jobs:
             echo ""
             echo "| etapa | branch | revisão |"
             echo "| --- | --- | --- |"
-            echo "| lint, typecheck, testes e harnesses, build | \`${BRANCH}\` | \`${REVISAO}\` |"
+            echo "| audit de produção, lint, typecheck, testes e harnesses, build | \`${BRANCH}\` | \`${REVISAO}\` |"
             echo ""
             echo "Sem credenciais do banco: URLs vazias e \`SKIP_DB_MIGRATIONS=1\`; nenhuma migração no CI."
           } >> "$GITHUB_STEP_SUMMARY"

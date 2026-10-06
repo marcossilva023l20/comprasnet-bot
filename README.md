@@ -56,7 +56,8 @@ O deploy de produção é automático e **sem pull request**:
 
 1. cada push numa branch `arena/**` dispara o workflow
    [`.github/workflows/arena-publish.yml`](.github/workflows/arena-publish.yml), que roda
-   **lint, typecheck, `npm test`, os harnesses `npm run teste:extensao` e build**;
+   **auditoria de dependências de produção, lint, typecheck, `npm test`, os harnesses
+   `npm run teste:extensao` e build**;
 2. se tudo passar, a **mesma revisão** (o mesmo commit validado) é publicada em `main` por
    *fast-forward* — sem commit novo, sem force-push, sem sobrescrever nada;
 3. o push em `main` dispara o **deploy de produção na Vercel** pela integração Git do projeto
