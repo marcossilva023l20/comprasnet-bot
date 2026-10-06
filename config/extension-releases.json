@@ -1,0 +1,50 @@
+[
+  {
+    "versao": "1.7.19",
+    "ref": "37f537c3fb17dcac7effe6892e470c3dd40997bf",
+    "descricao": "Versão restaurada: leitura do Radar com contador colado. Disputa sem envio automático.",
+    "experimental": false
+  },
+  {
+    "versao": "1.7.7",
+    "ref": "b55ce193e9a2cfe643c66d26726f269fb47c34bf",
+    "descricao": "Histórica: preenchimento de propostas com quatro casas decimais. Não inclui as correções posteriores do Radar.",
+    "experimental": false
+  },
+  {
+    "versao": "1.8.6",
+    "ref": "e0bb9a1130f2a559b7336230a9cd8f310416c637",
+    "descricao": "Experimental: Modo Disputa com máscara e espera pelo botão Enviar. Envio de lances reais não validado no portal.",
+    "experimental": true
+  },
+  {
+    "versao": "1.8.5",
+    "ref": "d5c5ca24976526ef08cf4c125637581850bd03dd",
+    "descricao": "Experimental: leitura de preços por rótulo e diagnóstico. Envio de lances reais não validado no portal.",
+    "experimental": true
+  },
+  {
+    "versao": "1.8.4",
+    "ref": "6d5a3e68e37d16cd383510431197a04bf9e01982",
+    "descricao": "Experimental: revalidação da compra, UASG e critério antes dos lances. Não validada no portal real.",
+    "experimental": true
+  },
+  {
+    "versao": "1.8.3",
+    "ref": "7cdeb89f22c618a10cae121e301821b593bb6124",
+    "descricao": "Experimental: associação de campos em colunas e diagnóstico dos lances. Não validada no portal real.",
+    "experimental": true
+  },
+  {
+    "versao": "1.8.2",
+    "ref": "8147cdcb45f079b338165bb806176a9f0469c6c4",
+    "descricao": "Experimental: identificação do código completo da compra no Modo Disputa. Não validada no portal real.",
+    "experimental": true
+  },
+  {
+    "versao": "1.8.1",
+    "ref": "4198558056c5061f93f9f679a59423f3f7055594",
+    "descricao": "Experimental: piso por item e intervalo percentual no Modo Disputa. Não validada no portal real.",
+    "experimental": true
+  }
+]

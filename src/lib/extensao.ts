@@ -9,7 +9,7 @@
  * `version` do manifest e acrescente uma entrada em `NOVIDADES_EXTENSAO`.
  */
 
-export const VERSAO_EXTENSAO = "1.7.19";
+export const VERSAO_EXTENSAO = "1.7.20";
 
 export type NovidadeExtensao = {
   versao: string;
@@ -18,6 +18,13 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.7.20",
+    itens: [
+      "Permite escolher a versão exata no atualizador, inclusive voltar para uma anterior; a escolha só é instalada após confirmação",
+      "Disponibiliza pacotes históricos completos e identifica versões experimentais; mantém a base 1.7.19, sem ativar lances automáticos",
+    ],
+  },
   {
     versao: "1.7.19",
     itens: [

@@ -17,11 +17,21 @@ const originais = {
   "popup.js": "8c97c85b2dbbf4dc7aa39636beba9085206f5edc8d84780b23f3263eb7cd9e5f"
 };
 
-test("rollback: todos os arquivos da extensão são idênticos à 1.7.19 solicitada", () => {
+test("a base de propostas continua a 1.7.19; só o atualizador e manifesto evoluem", () => {
   const pasta = new URL("../public/extension/", import.meta.url);
   assert.deepEqual(readdirSync(pasta).sort(), Object.keys(originais).sort());
   for (const [nome, hash] of Object.entries(originais)) {
+    if (["atualizar.html", "atualizar.js", "manifest.json"].includes(nome)) continue;
     assert.equal(createHash("sha256").update(readFileSync(new URL(nome, pasta))).digest("hex"), hash, nome);
   }
-  assert.equal(JSON.parse(readFileSync(new URL("manifest.json", pasta), "utf8")).version, "1.7.19");
+});
+
+test("o pacote histórico 1.7.19 permanece idêntico aos dez arquivos restaurados", () => {
+  const pacote = JSON.parse(readFileSync(new URL("../public/extension-releases/1.7.19/extension-files.json", import.meta.url), "utf8"));
+  assert.equal(pacote.versao, "1.7.19");
+  assert.deepEqual(pacote.arquivos.map((a) => a.caminho).sort(), Object.keys(originais).sort());
+  for (const arquivo of pacote.arquivos) {
+    const bytes = arquivo.texto !== undefined ? Buffer.from(arquivo.texto, "utf8") : Buffer.from(arquivo.base64, "base64");
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), originais[arquivo.caminho], arquivo.caminho);
+  }
 });

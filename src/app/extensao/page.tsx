@@ -1,4 +1,5 @@
 import Link from "next/link";
+import VersoesExtensao from "@/components/VersoesExtensao";
 
 export default function ExtensaoPage() {
   return (
@@ -38,6 +39,8 @@ export default function ExtensaoPage() {
             Compatível com Google Chrome, Microsoft Edge e Brave · <strong>instalação única</strong>: depois disso, a própria extensão avisa e atualiza
           </p>
         </div>
+
+        <VersoesExtensao />
 
         {/* Install Steps */}
         <div className="grid md:grid-cols-2 gap-6">
