@@ -1,5 +1,5 @@
 {
   "recomendada": "1.7.20",
-  "descricaoAtual": "BETA 1.8.9: classifica somente /comprasnet-web/public/ do CNET como fonte pública e não bloqueia o cadastro seguro do fornecedor. Preserva a leitura por número do item, expansão de “Mostrar detalhes do item”, preenchimento de valor unitário, marca/fabricante e modelo/versão e clique em Salvar. O Modo Disputa continua BETA: envio real de lances ainda não foi validado ao vivo; só opera com polegar para baixo vermelho, confirma compra/UASG e confere o Valor Mínimo antes de cada clique.",
+  "descricaoAtual": "BETA 1.8.10: na leitura pública do CNET, expande lista e detalhes sem enviar o formulário nem seguir links de navegação. A regressão usa a compra 93224206000072026 e confirma leitura sem submit, navegação ou fechamento da página. Mantém 1.7.20 como estável recomendada. O Modo Disputa continua BETA: envio real de lances ainda não foi validado ao vivo; só opera com polegar vermelho para baixo, confirma compra/UASG e confere o Valor Mínimo antes de cada clique.",
   "experimentalAtual": true
 }

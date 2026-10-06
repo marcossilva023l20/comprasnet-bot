@@ -49,6 +49,14 @@ export type NovidadeExtensao = {
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
   {
+    versao: "1.8.10",
+    itens: [
+      "Expande a lista e os detalhes dos itens no CNET público sem enviar formulários nem seguir links de navegação durante a leitura",
+      "Adiciona regressão para a compra 93224206000072026: itens importados sem submit, navegação ou fechamento da página no harness",
+      "Mantém a estável recomendada 1.7.20; o Modo Disputa permanece BETA e o envio real de lances ainda não foi validado ao vivo",
+    ],
+  },
+  {
     versao: "1.8.9",
     itens: [
       "Corrige a classificação do host CNET: páginas públicas de consulta continuam sendo fontes de itens, enquanto a rota segura /comprasnet-web/seguro/fornecedor/ passa a permitir o preenchimento de propostas",

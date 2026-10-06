@@ -839,11 +839,7 @@ async function tryExpandItem(itemNumber) {
   const melhor = candidatos[0]?.el;
   if (!melhor) return false;
 
-  try {
-    melhor.click();
-  } catch (_) {
-    return false;
-  }
+  if (!clicarExpansaoSemNavegar(melhor)) return false;
   await pausa(400);
   return true;
 }
@@ -2765,6 +2761,48 @@ function ehRotuloDeUI(el) {
 }
 
 /**
+ * Aciona somente o comportamento de expansão, sem executar o default do
+ * controle. No CNET, alguns botões de accordion estão dentro de forms e são
+ * submit por padrão; deixá-los submeter pode navegar/fechar a compra em vez de
+ * abrir os itens. Links que levam a outra rota nunca são clicados.
+ */
+function clicarExpansaoSemNavegar(el) {
+  if (!el || !el.isConnected || typeof el.click !== "function" || el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+  const ehLink = el.matches?.("a[href]");
+  if (ehLink) {
+    const href = String(el.getAttribute("href") || "").trim();
+    const hrefSeguro = !href || href === "#" || href.startsWith("#") || /^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href);
+    if (!hrefSeguro) return false;
+  }
+
+  // Preserva os handlers do accordion sem deixar o default de submit/reset do
+  // botão atuar sobre o form. Para links locais, só cancela hash/navegação;
+  // detalhes nativos (<summary>) mantêm o comportamento padrão de expansão.
+  let restaurarTipo = null;
+  if (el.form && el.matches?.("button, input") && ["submit", "reset", "image"].includes(String(el.type).toLowerCase())) {
+    const tinhaTipo = el.hasAttribute("type");
+    const tipoOriginal = el.getAttribute("type");
+    el.setAttribute("type", "button");
+    restaurarTipo = () => {
+      if (tinhaTipo) el.setAttribute("type", tipoOriginal);
+      else el.removeAttribute("type");
+    };
+  }
+
+  const prevenirNavegacao = (event) => event.preventDefault();
+  if (ehLink) el.addEventListener("click", prevenirNavegacao, { capture: true, once: true });
+  try {
+    el.click();
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    if (ehLink) el.removeEventListener("click", prevenirNavegacao, true);
+    restaurarTipo?.();
+  }
+}
+
+/**
  * "Expandir/Mostrar todos os itens": algumas telas do ComprasNet só montam a
  * lista depois desse clique. Só é usado quando a busca normal não achou item
  * nenhum — assim não interfere na leitura item a item.
@@ -2778,7 +2816,9 @@ async function expandirTodos(delay) {
       const rotulo = `${textoDoBotao(el)} ${pistasDoBotao(el)}`;
       if (!/(expandir|mostrar|abrir|ver)\s+(todos|tudo|todas)/.test(rotulo)) continue;
       if (BOTAO_EXPANDIR_BLOQUEADO.test(rotulo)) continue;
-      candidatos.push({ el, pontos: pontuarBotaoExpandir(el) + 20 });
+      const pontos = pontuarBotaoExpandir(el);
+      if (pontos <= 0) continue;
+      candidatos.push({ el, pontos: pontos + 20 });
     }
   }
 
@@ -2786,11 +2826,7 @@ async function expandirTodos(delay) {
   const botao = candidatos[0]?.el;
   if (!botao) return false;
 
-  try {
-    botao.click();
-  } catch (_) {
-    return false;
-  }
+  if (!clicarExpansaoSemNavegar(botao)) return false;
   await sleep(delay + 300);
   return true;
 }
@@ -2989,13 +3025,9 @@ function botoesMostrarDetalhesDaLinha(linha) {
 async function expandirDetalhesDaLinha(linha, delay) {
   for (const botao of botoesMostrarDetalhesDaLinha(linha)) {
     if (botao.getAttribute("aria-expanded") === "true") continue;
-    try {
-      botao.click();
-      await sleep(Math.max(0, Number(delay) || 0));
-      return true;
-    } catch (_) {
-      // Se o controle não for clicável, a leitura ainda usa os dados resumidos.
-    }
+    if (!clicarExpansaoSemNavegar(botao)) continue;
+    await sleep(Math.max(0, Number(delay) || 0));
+    return true;
   }
   return false;
 }
@@ -3049,12 +3081,7 @@ function fecharModalDetalheFonte(modal) {
     return rotulos.some((rotulo) => /^(?:fechar|close)(?:\s+(?:detalhes|janela|modal))?$/.test(rotulo) || /^(?:×|x)$/.test(rotulo.trim()));
   });
   if (!botaoFechar) return false;
-  try {
-    botaoFechar.click();
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return clicarExpansaoSemNavegar(botaoFechar);
 }
 
 function extrairDescricaoDetalhadaFonte(texto) {
@@ -3812,13 +3839,33 @@ function pontuarBotaoExpandir(el) {
   const texto = textoDoBotao(el);
   const pistas = pistasDoBotao(el);
   const rotulo = `${texto} ${pistas}`;
+  const toggle = `${el.getAttribute("data-toggle") || ""} ${el.getAttribute("data-bs-toggle") || ""}`;
 
   if (BOTAO_EXPANDIR_BLOQUEADO.test(rotulo)) return -1000;
-  if (el.matches?.('input[type="submit"], button[type="submit"], [aria-disabled="true"]')) return -500;
+  if (el.matches?.('[aria-disabled="true"]')) return -500;
+
+  // Não siga links para outras páginas durante uma leitura. Hash-links e o
+  // void(0) convencional podem atuar como toggles; o default deles também é
+  // cancelado por clicarExpansaoSemNavegar.
+  if (el.matches?.("a[href]")) {
+    const href = String(el.getAttribute("href") || "").trim();
+    const hrefSeguro = !href || href === "#" || href.startsWith("#") || /^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href);
+    if (!hrefSeguro) return -1000;
+  }
+
+  // Algumas telas põem “Mostrar detalhes” dentro de um form e marcam o botão
+  // como submit (ou deixam o tipo implícito). Só aceitamos submit se houver
+  // uma pista clara de expansão; o clique cancela o envio padrão.
+  const submit = el.matches?.('input[type="submit"], button[type="submit"]');
+  const expansaoExplicita =
+    el.getAttribute("aria-expanded") === "false" ||
+    /collapse/.test(toggle) ||
+    BOTAO_EXPANDIR_PISTAS.test(pistas) ||
+    BOTAO_EXPANDIR_TEXTO.test(texto);
+  if (submit && !expansaoExplicita) return -500;
 
   let pontos = 0;
   if (el.getAttribute("aria-expanded") === "false") pontos += 60;
-  const toggle = `${el.getAttribute("data-toggle") || ""} ${el.getAttribute("data-bs-toggle") || ""}`;
   if (/collapse/.test(toggle)) pontos += 45;
   if (BOTAO_EXPANDIR_PISTAS.test(pistas)) pontos += 30;
   if (BOTAO_EXPANDIR_TEXTO.test(texto)) pontos += 25;
@@ -3881,11 +3928,7 @@ async function expandItemBlock(escopo, delay) {
   const alturaAntes = escopo.getBoundingClientRect?.().height || 0;
   const paineisAntes = contarPaineisVisiveis(escopo);
 
-  try {
-    botao.click();
-  } catch (_) {
-    return false;
-  }
+  if (!clicarExpansaoSemNavegar(botao)) return false;
   await sleep(delay);
 
   const tamanhoDepois = (escopo.textContent || "").length;

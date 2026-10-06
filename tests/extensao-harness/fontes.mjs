@@ -248,7 +248,64 @@ export async function rodarFontes() {
     window.close();
   }
 
-  console.log("\n── 7) CNET: a rota segura de fornecedor não é classificada como fonte pública ──");
+  console.log("\n── 7) CNET público: expandir dentro de form não envia o formulário nem fecha a página ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra?compra=93224206000072026";
+    const eventos = { mostrarTodos: 0, detalhes: 0, submits: 0, navegou: 0, fechou: false };
+    const html = `<!doctype html><html><body>
+      <form id="form-compra">
+        <button id="mostrar-todos" aria-expanded="false">Mostrar todos os itens</button>
+        <a id="link-de-navegacao" href="/comprasnet-web/public/outra-compra" aria-expanded="false">Mostrar todos os itens</a>
+        <div id="lista-itens" style="display:none">
+          <section class="item" data-item="1">
+            <div class="cabecalho">
+              <div class="numero">1</div><div class="titulo">FONE OUVIDO</div>
+              <div class="resumo">
+                <span class="rotulo">Quantidade solicitada</span><span class="valor">2</span>
+                <span class="rotulo">Valor estimado (unitário)</span><span class="valor">R$ 67,4100</span>
+              </div>
+              <button id="mostrar-detalhes" type="submit" class="seta" aria-expanded="false" title="Mostrar detalhes do item">Mostrar detalhes do item</button>
+            </div>
+            <div class="detalhes" style="display:none"><span>Descrição detalhada: fone intra auricular com microfone</span></div>
+          </section>
+        </div>
+      </form>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url,
+      preparar: (w) => {
+        w.document.getElementById("form-compra").addEventListener("submit", (event) => {
+          eventos.submits += 1;
+          eventos.fechou = true;
+          event.preventDefault();
+        });
+        w.document.getElementById("mostrar-todos").addEventListener("click", (event) => {
+          eventos.mostrarTodos += 1;
+          event.currentTarget.setAttribute("aria-expanded", "true");
+          w.document.getElementById("lista-itens").style.display = "block";
+        });
+        w.document.getElementById("link-de-navegacao").addEventListener("click", (event) => {
+          eventos.navegou += 1;
+          event.preventDefault();
+        });
+        w.document.getElementById("mostrar-detalhes").addEventListener("click", (event) => {
+          eventos.detalhes += 1;
+          event.currentTarget.setAttribute("aria-expanded", "true");
+          w.document.querySelector(".detalhes").style.display = "block";
+        });
+      },
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: true, delay: 1 });
+    checar(resultado.ok, `leitura do CNET concluiu (${resultado.error || "sem erro"})`);
+    checar(resultado.itens?.length === 1 && resultado.itens[0]?.numeroItem === "1", "associou a descrição e os valores ao item 1");
+    checar(eventos.mostrarTodos === 1 && eventos.detalhes === 1, `expandiu a lista e o cartão sem disparar o default (${JSON.stringify(eventos)})`);
+    checar(eventos.submits === 0 && eventos.navegou === 0 && !eventos.fechou, `não submeteu, navegou nem fechou a compra (${JSON.stringify(eventos)})`);
+    checar(window.location.href === url, `permaneceu na URL da compra (${window.location.href})`);
+    window.close();
+  }
+
+  console.log("\n── 8) CNET: a rota segura de fornecedor não é classificada como fonte pública ──");
   {
     const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
     const { window } = montarPagina("<!doctype html><html><body></body></html>", { url });

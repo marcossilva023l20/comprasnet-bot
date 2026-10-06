@@ -18,6 +18,12 @@
     "experimental": false
   },
   {
+    "versao": "1.8.9",
+    "ref": "9926263dab68b59743a908b0a9f21734f7880bb0",
+    "descricao": "BETA anterior: classifica a rota pública do CNET para leitura e permite o cadastro seguro do fornecedor. Envio de lances reais ainda não foi validado ao vivo.",
+    "experimental": true
+  },
+  {
     "versao": "1.8.8",
     "ref": "5839450cd44d216f53671942411c9ace60eb224a",
     "descricao": "BETA anterior: inclui leitura da tela e detecção ampliada dos controles de lance. Envio de lances reais ainda não foi validado no portal.",
