@@ -10,10 +10,9 @@
 #      Vercel. Nenhum token da Vercel é necessário aqui.
 #
 # Garantias de segurança
-#   - O CI NÃO fala com o banco de produção: `DATABASE_URL` nunca é definida
-#     (as migrações do build ficam desligadas com SKIP_DB_MIGRATIONS=1 e há uma
-#     guarda que falha caso alguém torne um secret DATABASE_URL visível ao CI).
-#     As migrações continuam sendo aplicadas apenas no build da Vercel.
+#   - Nenhuma credencial do banco é lida ou passada ao CI. No build, as URLs do
+#     banco são explicitamente vazias e SKIP_DB_MIGRATIONS=1 impede qualquer
+#     migração. As migrações continuam sendo aplicadas apenas no build da Vercel.
 #   - `GITHUB_TOKEN` com permissões mínimas: `contents: read` no CI e
 #     `contents: write` somente no job de publicação (nenhum outro escopo).
 #   - Nunca faz force-push nem reescreve `main`. O push é rejeitado pelo próprio
@@ -23,7 +22,7 @@
 #     meio.
 #   - Nenhum token, senha ou credencial vive neste arquivo. O único secret
 #     opcional (VERCEL_DEPLOY_HOOK) é cadastrado pelo dono do repositório no
-#     GitHub e usado apenas no job de publicação.
+#     GitHub e injetado somente na etapa que dispara esse hook.
 #
 # Observação sobre `.github/workflows/**`
 #   O GitHub recusa push do `GITHUB_TOKEN` quando o commit é CRIADO DENTRO do
@@ -74,16 +73,6 @@ jobs:
       - name: Instalar dependências (npm ci)
         run: npm ci
 
-      - name: Guarda — o CI não pode falar com o banco de produção
-        env:
-          CI_DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          if [ -n "${CI_DATABASE_URL:-}" ]; then
-            echo "::error title=CI conectado ao banco::O secret DATABASE_URL está visível para este workflow. Este CI não deve conectar no banco de produção nem aplicar migrações. Remova o secret DATABASE_URL do repositório (ele deve existir apenas na Vercel) ou ajuste este workflow."
-            exit 1
-          fi
-          echo "OK: nenhuma DATABASE_URL disponível para o CI — build e testes rodam sem banco."
-
       - name: Lint
         run: npm run lint
 
@@ -93,9 +82,16 @@ jobs:
       - name: Testes
         run: npm test
 
+      - name: Testes da extensão (harnesses)
+        run: npm run teste:extensao
+
       - name: Build (sem banco de dados e sem migrações)
         env:
-          # Reforço da garantia acima: o build não aplica migrações aqui.
+          # Nunca injeta secrets do banco. As URLs vazias protegem o build mesmo
+          # se variáveis forem adicionadas ao runner por outra configuração.
+          DATABASE_URL: ""
+          POSTGRES_URL: ""
+          POSTGRES_PRISMA_URL: ""
           SKIP_DB_MIGRATIONS: "1"
           NEXT_TELEMETRY_DISABLED: "1"
         run: npm run build
@@ -111,9 +107,9 @@ jobs:
             echo ""
             echo "| etapa | branch | revisão |"
             echo "| --- | --- | --- |"
-            echo "| lint, typecheck, testes, build | \`${BRANCH}\` | \`${REVISAO}\` |"
+            echo "| lint, typecheck, testes e harnesses, build | \`${BRANCH}\` | \`${REVISAO}\` |"
             echo ""
-            echo "Sem banco de dados: \`DATABASE_URL\` não é definida e \`SKIP_DB_MIGRATIONS=1\`."
+            echo "Sem credenciais do banco: URLs vazias e \`SKIP_DB_MIGRATIONS=1\`; nenhuma migração no CI."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # -------------------------------------------------------------------------
@@ -129,15 +125,10 @@ jobs:
     # Único escopo de escrita do workflow, e só neste job.
     permissions:
       contents: write
-    # Serializa as publicações: uma por vez, sem cancelar a que está rodando.
+    # Serializa as publicações e preserva até 100 execuções pendentes em FIFO.
     concurrency:
       group: publicar-main
-      cancel-in-progress: false
-    env:
-      # Secret OPCIONAL. Sem ele, a integração Git da Vercel já dispara o deploy
-      # ao receber o push em main. Com ele, o deploy é disparado explicitamente
-      # (útil se a Vercel recusar commits automáticos — ver README).
-      VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+      queue: max
     steps:
       - name: Checkout da revisão validada
         uses: actions/checkout@v5
@@ -250,10 +241,21 @@ jobs:
       # pela integração Git da Vercel. Com ele, garantimos o disparo também nos
       # casos em que a Vercel recusa commits automáticos.
       - name: Disparar deploy de produção na Vercel (opcional)
-        if: steps.push.outputs.publicado == 'true' && env.VERCEL_DEPLOY_HOOK != ''
+        id: vercel
+        if: steps.push.outputs.publicado == 'true'
+        env:
+          # O hook é opcional e fica acessível apenas nesta etapa.
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
         run: |
           set -euo pipefail
 
+          if [ -z "${VERCEL_DEPLOY_HOOK:-}" ]; then
+            echo "modo=integração Git da Vercel (push em main)" >> "$GITHUB_OUTPUT"
+            echo "Sem Deploy Hook configurado; a integração Git da Vercel recebe o push em main."
+            exit 0
+          fi
+
+          echo "modo=Deploy Hook explícito" >> "$GITHUB_OUTPUT"
           STATUS="$(curl -sS -o /tmp/vercel-hook.json -w '%{http_code}' -X POST "$VERCEL_DEPLOY_HOOK" || true)"
           echo "Resposta da Vercel (HTTP $STATUS): $(cat /tmp/vercel-hook.json 2>/dev/null || true)"
 
@@ -270,7 +272,7 @@ jobs:
           REVISAO_VALIDADA: ${{ steps.revisao.outputs.revisao }}
           MAIN_ANTES: ${{ steps.revisao.outputs.main_antes }}
           MAIN_DEPOIS: ${{ steps.push.outputs.main_depois }}
-          MODO_DEPLOY: ${{ env.VERCEL_DEPLOY_HOOK != '' && 'Deploy Hook explícito' || 'integração Git da Vercel (push em main)' }}
+          MODO_DEPLOY: ${{ steps.vercel.outputs.modo || 'não executado (nenhum novo push em main)' }}
         run: |
           {
             echo "## Publicação (Arena → main → Vercel)"

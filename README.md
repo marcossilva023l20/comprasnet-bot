@@ -56,26 +56,30 @@ O deploy de produção é automático e **sem pull request**:
 
 1. cada push numa branch `arena/**` dispara o workflow
    [`.github/workflows/arena-publish.yml`](.github/workflows/arena-publish.yml), que roda
-   **lint, typecheck, testes e build**;
+   **lint, typecheck, `npm test`, os harnesses `npm run teste:extensao` e build**;
 2. se tudo passar, a **mesma revisão** (o mesmo commit validado) é publicada em `main` por
    *fast-forward* — sem commit novo, sem force-push, sem sobrescrever nada;
 3. o push em `main` dispara o **deploy de produção na Vercel** pela integração Git do projeto
    (Project Settings → Git, branch de produção `main`). Nenhum token da Vercel é necessário no
    GitHub.
 
-As publicações são **serializadas** (uma de cada vez). Se `main` tiver divergido, se o `git push`
-for recusado ou se qualquer verificação falhar, **nada é publicado** e o resumo do job explica o
-motivo. Conflitos de histórico exigem decisão humana: o workflow nunca resolve conflitos sozinho.
+As publicações são **serializadas** (uma de cada vez); o Actions preserva uma fila de até 100
+publicações pendentes. Cada publicação verifica `main` novamente ao adquirir a vez. Se `main` tiver
+divergido, se o `git push` for recusado ou se qualquer verificação falhar, **nada é publicado** e o
+resumo do job explica o motivo. Conflitos de histórico exigem decisão humana: o workflow nunca
+resolve conflitos sozinho.
 
 #### O que o CI nunca faz (configuração segura)
 
-- **Não conecta no banco de produção**: `DATABASE_URL` não é definida em lugar nenhum do CI e o
-  build roda com `SKIP_DB_MIGRATIONS=1`, então **nenhuma migração é aplicada**. As migrações
-  continuam rodando apenas no build da Vercel, como sempre (`npm run build` → `db:migrate`).
-- Há uma **guarda** que falha o workflow se algum dia o secret `DATABASE_URL` ficar visível ao CI.
+- **Não recebe credenciais do banco de produção**: nenhum secret de banco é lido ou passado às
+  verificações. No build, `DATABASE_URL`, `POSTGRES_URL` e `POSTGRES_PRISMA_URL` são explicitamente
+  vazias e `SKIP_DB_MIGRATIONS=1`; portanto, **nenhuma migração SQL é executada no CI**. As
+  migrações continuam rodando apenas no build da Vercel, como sempre (`npm run build` → `db:migrate`).
+- Os testes que constroem uma conexão usam apenas URL local fictícia; não se conectam a um banco.
 - `GITHUB_TOKEN` com o mínimo necessário: `contents: read` em todo o workflow e
   `contents: write` **apenas** no job de publicação. Nenhum outro escopo é pedido.
-- Nenhum token, senha ou credencial fica no código ou é solicitado por aqui.
+- Nenhum token, senha ou credencial fica no código ou é solicitado por aqui. O `VERCEL_DEPLOY_HOOK`
+  é opcional, fica em GitHub Actions Secrets e é injetado somente na etapa que o usa.
 
 #### Configuração necessária no GitHub (uma vez)
 
@@ -152,6 +156,7 @@ npm run dev                 # http://localhost:3000
 | `npm run db:push` | envia o schema direto (atalho, sem arquivo de migração) |
 | `npm run db:studio` | abre o Drizzle Studio |
 | `npm run typecheck` / `npm run lint` / `npm test` | validações e testes automatizados |
+| `npm run teste:extensao` | harnesses de leitura, salvamento, paginação, painel e fontes da extensão |
 | `scripts/publish-main.sh` | publicação manual (legado) — só funciona com a branch local `main`. O fluxo normal é o workflow `arena/**` → `main` descrito acima |
 
 ## Extensão Chrome
