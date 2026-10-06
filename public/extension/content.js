@@ -96,6 +96,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "disputa_ler_pagina") {
+    if (rodandoAgora || rodandoPeloPainel) {
+      sendResponse({ ok: false, error: "Pare o preenchimento de proposta antes de ler a página de disputa." });
+      return true;
+    }
+    try {
+      const resultado = lerPaginaDisputa();
+      sendResponse(resultado);
+      // Se já tem monitoramento ativo, agenda uma verificação imediata
+      if (resultado.ok && disputaAutomatica?.ativo) agendarVerificacaoDisputa(0);
+    } catch (err) {
+      sendResponse({ ok: false, error: `Falha ao ler a página da disputa: ${err?.message || "erro"}.` });
+    }
+    return true;
+  }
+
   if (msg.action === "disputa_start") {
     iniciarDisputaAutomatica(msg.propostaId)
       .then(sendResponse)
@@ -4078,6 +4094,8 @@ function atualizarPainel() {
   }
   const itensDisputa = document.getElementById(`${PAINEL_ID}_itens_disputa`);
   if (itensDisputa) itensDisputa.style.display = emDisputa ? "block" : "none";
+  const lerAreaDisputa = document.getElementById(`${PAINEL_ID}_ler_area_disputa`);
+  if (lerAreaDisputa) lerAreaDisputa.style.display = emDisputa ? "block" : "none";
   const rodape = document.getElementById(`${PAINEL_ID}_rodape`);
   if (rodape) {
     rodape.textContent = emDisputa
@@ -4173,6 +4191,9 @@ function mostrarPainel(modo) {
         <button id="${PAINEL_ID}_recarregar" title="Recarregar propostas" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;cursor:pointer;">🔄</button>
       </div>
       <div id="${PAINEL_ID}_status" style="font-weight:600;margin-bottom:8px;">Pronto.</div>
+      <div id="${PAINEL_ID}_ler_area_disputa" style="display:none; margin-bottom:8px;">
+        <button id="${PAINEL_ID}_ler_pagina" style="width:100%;padding:6px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1e40af;font:inherit;font-weight:600;cursor:pointer;font-size:11px;">📖 Ler página de disputa</button>
+      </div>
       <div style="display:flex;gap:6px;">
         <button id="${PAINEL_ID}_iniciar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#168821;color:#fff;font:inherit;font-weight:700;cursor:pointer;">▶ Iniciar</button>
         <button id="${PAINEL_ID}_pausar" style="flex:1;padding:8px;border:0;border-radius:8px;background:#6d28d9;color:#fff;font:inherit;font-weight:700;cursor:pointer;">⏸ Pausar</button>
@@ -4225,6 +4246,28 @@ function mostrarPainel(modo) {
     registrarNoPainel("⏹ Parando depois do item atual...");
     atualizarPainel();
   });
+  const botaoLerPainel = document.getElementById(`${PAINEL_ID}_ler_pagina`);
+  if (botaoLerPainel) {
+    botaoLerPainel.addEventListener("click", () => {
+      botaoLerPainel.disabled = true;
+      const textoOriginal = botaoLerPainel.textContent;
+      botaoLerPainel.textContent = "⏳ Lendo...";
+      try {
+        const resultado = lerPaginaDisputa();
+        if (!resultado.ok) {
+          mostrarStatusDisputa(resultado.error, "warning");
+          registrarNoPainel(`⚠️ ${resultado.error}`);
+        } else {
+          registrarNoPainel(`📖 ${resultado.message}`);
+        }
+      } catch (erro) {
+        mostrarStatusDisputa(`Erro na leitura: ${erro?.message || "erro"}`, "warning");
+      } finally {
+        botaoLerPainel.disabled = false;
+        botaoLerPainel.textContent = textoOriginal;
+      }
+    });
+  }
 
   // Arrastar pelo cabeçalho.
   const topo = document.getElementById(`${PAINEL_ID}_topo`);
@@ -4708,12 +4751,88 @@ async function aguardarLanceAceitoDisputa({ cartao, sugestao, identificacao, mon
 }
 
 function encontrarControlesEnviarLance({ incluirDesabilitados = false } = {}) {
-  const seletores = 'button, a, [role="button"], input[type="button"], input[type="submit"]';
-  return [...document.querySelectorAll(seletores)].filter((el) => {
+  const seletores = 'button, a, [role="button"], input[type="button"], input[type="submit"], p-button, p-button > button, button.p-button, [class*="enviar-lance"]';
+  const candidatos = [...document.querySelectorAll(seletores)].filter((el) => {
     if (!isVisible(el) || el.closest(`#${PAINEL_ID}, [inert], [aria-hidden="true"], [hidden]`)) return false;
-    if (!incluirDesabilitados && !controleDisputaHabilitado(el)) return false;
-    return rotulosControleDisputa(el).some((rotulo) => /^enviar\s+lance(?:\s|$)/.test(rotulo));
+    if (!incluirDesabilitados && !controleDisputaHabilitado(el)) {
+      // Se for um wrapper p-button desabilitado, checa se tem um botão filho habilitado
+      const btnFilho = el.querySelector("button");
+      if (!btnFilho || !controleDisputaHabilitado(btnFilho)) return false;
+    }
+    return true;
   });
+  return candidatos.map((el) => {
+    // Se é um p-button wrapper, retorna o botão real dentro dele
+    if (el.tagName.toLowerCase() === "p-button") {
+      const btnFilho = el.querySelector("button");
+      if (btnFilho) return btnFilho;
+    }
+    return el;
+  }).filter((el, idx, arr) => arr.indexOf(el) === idx).filter((el) => {
+    const rotulos = rotulosControleDisputa(el);
+    // Checa também texto do wrapper pai
+    let rotuloPai = "";
+    let p = el.parentElement;
+    for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+      rotuloPai += " " + textoVisivelDisputa(p);
+    }
+    const classes = String(el.className || el.parentElement?.className || "").toLowerCase();
+    const todosRotulos = [...rotulos, normalizarTextoDisputa(rotuloPai)];
+    // Reconhece "Enviar lance", "Enviar", "Confirmar lance"
+    return todosRotulos.some((rotulo) => /^enviar\s+lance(?:\s|$)|confirmar\s*lance/.test(rotulo)) ||
+           rotulos.some((rotulo) => /^enviar\s*$/.test(rotulo)) ||
+           /enviar.*lance|btn.*enviar/.test(classes);
+  });
+}
+
+// Cache dos últimos mapeamentos de campos feitos pela leitura manual
+let cacheCamposDisputa = new Map();
+
+function lerPaginaDisputa() {
+  const identificacao = extrairIdentificacaoDisputaPagina();
+  if (!identificacao.telaEnviarLance) {
+    return { ok: false, error: "Abra a tela real “Enviar lance” antes de ler a página." };
+  }
+  const criterioPagina = lerCriterioPaginaDisputa();
+  if (criterioPagina.bloqueado) {
+    return { ok: false, error: "Critério de julgamento não é menor preço (maior desconto detectado). O Modo Disputa só opera em menor preço." };
+  }
+  // Força uma varredura completa da página sem pular nada
+  const controles = encontrarControlesEnviarLance({ incluirDesabilitados: true });
+  if (controles.length === 0) {
+    return { ok: false, error: "Nenhum botão “Enviar lance” encontrado na página. Abra o item para enviar lance e tente novamente." };
+  }
+  const cartoes = encontrarCartoesDisputa();
+  cacheCamposDisputa.clear();
+  for (const cartao of cartoes) {
+    if (cartao.numeroItem && cartao.input && cartao.botao) {
+      cacheCamposDisputa.set(cartao.numeroItem, { input: cartao.input, botao: cartao.botao, escopoLance: cartao.escopoLance, lidoEm: Date.now() });
+    }
+  }
+  const abertos = cartoes.filter((c) => c.faseAberta).length;
+  const perdendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "perdendo").length;
+  const vencendo = cartoes.filter((c) => c.situacaoCompetitiva.estado === "vencendo").length;
+  const incertos = cartoes.length - perdendo - vencendo;
+  const camposEncontrados = cartoes.filter((c) => c.campoAssociado).length;
+  const botoesEncontrados = cartoes.filter((c) => c.botao).length;
+  const comPrecoValido = cartoes.filter((c) => c.criterioPreco && c.intervalo?.unidades > 0).length;
+  const mensagem = `Leitura concluída: ${cartoes.length} item(ns) identificados, ${abertos} em fase aberta, ${camposEncontrados} campo(s) de novo lance, ${botoesEncontrados} botão(ões) Enviar, ${comPrecoValido} com preço/intervalo legíveis. Situação: ${perdendo} perdendo, ${vencendo} vencendo, ${incertos} incerto(s).`;
+
+  // Atualiza o status do monitoramento se estiver ativo
+  if (disputaAutomatica?.ativo) {
+    disputaAutomatica.situacoesPorNumero = new Map(cartoes.map((c) => [c.numeroItem, c.situacaoCompetitiva]));
+    mostrarStatusDisputa(mensagem, "info");
+  }
+
+  return {
+    ok: true,
+    message: mensagem,
+    identificacao,
+    totalCartoes: cartoes.length,
+    camposEncontrados,
+    botoesEncontrados,
+    situacoes: cartoes.map((c) => ({ numeroItem: c.numeroItem, ...c.situacaoCompetitiva })),
+  };
 }
 
 /** O formulário está numa coluna; o número e a fase pertencem à linha completa do item. */
@@ -4748,48 +4867,91 @@ function cartaoDaAcaoDeLance(botao, controles, diagnostico = null) {
 }
 
 function encontrarInputNovoLance(escopo) {
-  const seletores = 'input:not([type="hidden"]), textarea, [role="textbox"]';
+  const seletores = 'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, [role="textbox"], [contenteditable="true"], [contenteditable=""]';
   const campos = [...escopo.querySelectorAll(seletores)].filter(isVisible);
   const compativel = (el) => {
-    const sinais = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title")].filter(Boolean).join(" ");
+    const sinais = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name")].filter(Boolean).join(" ");
     return isFillable(el) && !el.closest('fieldset[disabled], [aria-disabled="true"], [inert], [aria-hidden="true"], [hidden]') &&
-      !/%|desconto|percent|quantidade|marca|modelo|senha|password|email|cpf|cnpj/i.test(normalizeText(sinais)) &&
-      !/%/.test(String(el.value ?? el.textContent ?? ""));
+      !/%|desconto|percent|quantidade|marca|modelo|senha|password|email|cpf|cnpj|observa/i.test(normalizeText(sinais)) &&
+      !/%/.test(String(el.value ?? el.textContent ?? "")) &&
+      // É um campo numérico/monetário
+      (/(moeda|valor|preco|lance|r\$|decimal|number)/i.test(normalizeText(sinais)) || el.type === "number" || el.inputMode === "decimal" || el.classList.contains("p-inputnumber-input") || el.classList.contains("money") || el.classList.contains("moeda"));
   };
-  const nomeadas = campos.filter((el) => {
-    // O conteúdo digitado nunca é o nome do campo (nem é usado como preço do portal).
-    const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent);
-    return [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), ...referenciados].filter(Boolean).some((texto) => /novo\s*lance/i.test(normalizeText(texto)));
-  });
-  if (nomeadas.length === 1) return compativel(nomeadas[0]) ? nomeadas[0] : null;
-  if (nomeadas.length > 1) return null;
+  const textoEscopo = normalizarTextoDisputa(textoVisivelDisputa(escopo));
+  const temNovoLanceRotulo = /novo\s*lance/i.test(textoEscopo);
 
+  // 1. Procura campos nomeados explicitamente com "novo lance" ou "lance"
+  const nomeadas = campos.filter((el) => {
+    const referenciados = String(el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => el.ownerDocument.getElementById(id)?.textContent).filter(Boolean);
+    const labelsVisiveis = [];
+    if (el.id) {
+      document.querySelectorAll(`label[for="${el.id}"]`).forEach((l) => labelsVisiveis.push(textoVisivelDisputa(l)));
+    }
+    let elAtual = el.parentElement;
+    for (let i = 0; i < 4 && elAtual && escopo.contains(elAtual); i++, elAtual = elAtual.parentElement) {
+      const t = textoVisivelDisputa(elAtual);
+      if (t) labelsVisiveis.push(t);
+    }
+    const todosTextos = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"), el.getAttribute("title"), el.getAttribute("formcontrolname"), el.getAttribute("ng-reflect-name"), ...referenciados, ...labelsVisiveis].filter(Boolean).join(" ");
+    return /novo\s*lance|lance\s*unitario|novo\s*valor/i.test(normalizeText(todosTextos));
+  });
+  if (nomeadas.length === 1 && compativel(nomeadas[0])) return nomeadas[0];
+  if (nomeadas.length === 1) return nomeadas[0];
+  if (nomeadas.length > 1) {
+    const compativeisNomeadas = nomeadas.filter(compativel);
+    if (compativeisNomeadas.length === 1) return compativeisNomeadas[0];
+  }
+
+  // 2. Procura rótulos "Novo lance (unitário)" e associa
   const rotulos = [...escopo.querySelectorAll("*")].filter((label) =>
-    isVisible(label) && /^novo lance \(unitario\)\s*:?$/.test(normalizarTextoDisputa(textoVisivelDisputa(label))),
+    isVisible(label) && /novo\s*lance\s*(?:\(?unitario\)?)?\s*:?$/i.test(normalizarTextoDisputa(textoVisivelDisputa(label))),
   );
   const associadas = new Set();
   for (const label of rotulos) {
     const id = label.getAttribute("for");
     if (id) {
       const entrada = label.ownerDocument.getElementById(id);
-      if (!campos.includes(entrada) || !compativel(entrada)) return null;
-      associadas.add(entrada);
-      continue;
+      if (campos.includes(entrada)) {
+        associadas.add(entrada);
+        continue;
+      }
     }
     let atual = label;
-    for (let nivel = 0; atual && nivel < 5 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
+    for (let nivel = 0; atual && nivel < 6 && escopo.contains(atual); nivel += 1, atual = atual.parentElement) {
       const encontradas = [...atual.querySelectorAll(seletores)].filter((el) => campos.includes(el));
-      if (encontradas.length > 1) return null;
       if (encontradas.length === 1) {
-        if (!compativel(encontradas[0])) return null;
         associadas.add(encontradas[0]);
+        break;
+      }
+      if (encontradas.length > 1) {
+        const comp = encontradas.filter(compativel);
+        if (comp.length === 1) associadas.add(comp[0]);
         break;
       }
       if (atual === escopo) break;
     }
   }
-  // Exige associação com o rótulo ou nome do campo; não escolhe um input genérico.
-  return associadas.size === 1 ? [...associadas][0] : null;
+  if (associadas.size === 1) return [...associadas][0];
+
+  // 3. Fallback: se só existe UM campo numérico compatível no escopo e tem rótulo de novo lance no escopo, usa ele
+  if (temNovoLanceRotulo) {
+    const camposCompativeis = campos.filter(compativel);
+    if (camposCompativeis.length === 1) return camposCompativeis[0];
+    // Ou pega o campo que está imediatamente após/ao lado do texto "novo lance"
+    if (camposCompativeis.length > 1) {
+      // Prioriza input que esteja mais próximo do rótulo
+      for (const el of camposCompativeis) {
+        let anterior = el.previousElementSibling;
+        let dist = 0;
+        while (anterior && dist < 3) {
+          if (/novo\s*lance/i.test(normalizarTextoDisputa(textoVisivelDisputa(anterior)))) return el;
+          anterior = anterior.previousElementSibling;
+          dist++;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /** Medida explícita e única: texto de botões/ícones não vira preço. */
@@ -5399,7 +5561,15 @@ async function verificarDisputaAutomatica() {
       mon.ultimasTentativas.set(cartao.numeroItem, { meu: atual.meu, melhor: atual.melhor });
       mon.ultimaSubmissaoEm = Date.now();
       mostrarStatusDisputa(`Enviando item ${cartao.numeroItem} perdendo: ${formatarValorDisputa(sugestao.unidades)}; aguardando confirmação.`, "info");
-      try { atual.botao.click(); }
+      try {
+        atual.botao.scrollIntoView({ behavior: "instant", block: "center" });
+        const clicou = clicarDeVerdade(atual.botao);
+        if (!clicou) {
+          mon.pendente = null;
+          mon.ultimaSubmissaoEm = 0;
+          pararDisputaAutomatica(`Falha ao clicar no botão Enviar lance do item ${cartao.numeroItem} (elemento inacessível). Tente “📖 Ler página” novamente depois de abrir o item.`);
+        }
+      }
       catch (e) { pararDisputaAutomatica(`Falha ao confirmar o clique em Enviar no item ${cartao.numeroItem}: ${e.message}`); }
       return;
     }
@@ -5454,11 +5624,13 @@ async function iniciarDisputaAutomatica(propostaId) {
   const comPiso = [...itensPorNumero.values()].filter((item) => parseValorUnidadesDisputa(item.valorMinimo) !== null).length;
   if (comPiso === 0) return { ok: false, error: "Nenhum item da proposta tem “Valor Mínimo” válido. Cadastre os pisos antes de iniciar a automação." };
 
+  // Faz uma leitura prévia para mapear campos
+  const leituraPrevia = lerPaginaDisputa();
   const diagnostico = {};
   const cartoes = encontrarCartoesDisputa(diagnostico);
   const cartoesValidos = cartoes.filter((cartao) => cartao.faseAberta && cartao.criterioPreco && cartao.input && cartao.botao && cartao.melhor !== null && cartao.meu !== null && cartao.intervalo?.unidades > 0);
   if (cartoesValidos.length === 0) {
-    return { ok: false, error: `Não consegui validar com segurança preços, intervalo e campo de lance dos itens. ${resumoLeituraCamposDisputa(diagnostico, cartoes)} Use “Diagnosticar campos (sem enviar)” para conferir a leitura. Nenhum lance foi enviado.` };
+    return { ok: false, error: `Não consegui validar com segurança preços, intervalo e campo de lance dos itens. ${resumoLeituraCamposDisputa(diagnostico, cartoes)} Dica: abra a tela "Enviar lance" de cada item, clique em "📖 Ler página" no Modo Disputa para mapear os campos e tente novamente. Use também "🔎 Diagnosticar campos" para ver o relatório. Nenhum lance foi enviado.` };
   }
 
   const resumo = resumoDisputaParaConfirmacao(cartoesValidos, itensPorNumero);

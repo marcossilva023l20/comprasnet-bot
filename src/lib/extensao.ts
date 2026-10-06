@@ -1,16 +1,41 @@
 /**
  * Versão publicada da extensão e histórico de novidades.
  *
- * Esta constante é a versão estável recomendada e servida nos URLs legados do
- * app. O manifesto-fonte pode ser uma versão experimental explicitamente
- * listada em `config/extension-policy.json`; pacotes versionados ficam no
- * catálogo e o teste confere ambos os destinos.
+ * A versão recomendada vem de `config/extension-policy.json` e os arquivos
+ * servidos em `/extension.zip` e `/extension-files.json` são gerados pelo
+ * script `scripts/build-extension.mjs` a partir de `public/extension/`.
  *
- * Ao mudar a recomendada estável: suba `VERSAO_EXTENSAO`, `policy.recomendada`
- * e o histórico. Versões experimentais são classificadas em `policy.experimentalAtual`.
+ * Para publicar uma nova versão:
+ *   1. Atualize `public/extension/manifest.json` (version + description)
+ *   2. Atualize `config/extension-policy.json` e, se for estável, `recomendada`
+ *   3. Rode `npm run build` (ou `npm run dev`, que roda o prebuild)
+ *   4. Se for a recomendada estável, adicione-a no topo de NOVIDADES_EXTENSAO
  */
 
-export const VERSAO_EXTENSAO = "1.7.20";
+import politicaConfig from "../../config/extension-policy.json";
+
+import fs from "node:fs";
+import path from "node:path";
+
+function versaoAtualDoManifest(): string {
+  try {
+    const manifestPath = path.join(process.cwd(), "public", "extension", "manifest.json");
+    const raw = fs.readFileSync(manifestPath, "utf8");
+    const v = JSON.parse(raw).version;
+    return typeof v === "string" && v ? v : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+// A versão publicada por padrão pelo endpoint é a recomendada estável.
+// Em ambiente local (dev), se o build-extension gerou os arquivos da versão
+// atual do manifest em public/extension-files.json, servimos essa versão para
+// permitir testar imediatamente as alterações feitas no código da extensão.
+const _manifestVersion = versaoAtualDoManifest();
+const _isLocalDev = process.env.NODE_ENV !== "production" || !process.env.VERCEL;
+export const VERSAO_EXTENSAO: string =
+  _isLocalDev && _manifestVersion !== "0.0.0" ? _manifestVersion : politicaConfig.recomendada;
 
 export type NovidadeExtensao = {
   versao: string;
@@ -19,6 +44,17 @@ export type NovidadeExtensao = {
 
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
+  {
+    versao: "1.8.8",
+    itens: [
+      "CORRIGIDO o envio de lances: clique usa evento real (não mais .click() simples que o portal bloqueava) e rola até o botão antes de clicar",
+      "Adicionado botão “📖 Ler página” no Modo Disputa (no popup e no painel flutuante): leia a tela “Enviar lance” para mapear campos de entrada e botões antes de iniciar",
+      "Detecção de campo “Novo lance (unitário)” muito mais flexível (Angular/PrimeNG, p-inputnumber, inputmode=decimal, classes de moeda, labels próximos)",
+      "Detecta botões Enviar dentro de wrappers p-button do PrimeNG",
+      "Se não conseguir identificar os campos, a mensagem agora pede explicitamente para clicar em “📖 Ler página”",
+      "Versão experimental: envio de lances reais. Polegar para cima verde (vencendo) ou estado incerto nunca recebem lance; o piso (Valor Mínimo) é conferido antes de cada clique.",
+    ],
+  },
   {
     versao: "1.7.20",
     itens: [
@@ -329,15 +365,16 @@ export type EstadoAtualizacao = {
 
 export function montarEstadoAtualizacao(instalada: string | null): EstadoAtualizacao {
   const valida = versaoValida(instalada) ? (instalada as string) : null;
-  const comparacao = valida ? compararVersoes(VERSAO_EXTENSAO, valida) : 1;
+  const publicando = VERSAO_EXTENSAO;
+  const comparacao = valida ? compararVersoes(publicando, valida) : 1;
 
   return {
-    versao: VERSAO_EXTENSAO,
+    versao: publicando,
     instalada: valida,
     precisaAtualizar: comparacao > 0,
     adiantada: comparacao < 0,
     novidades: novidadesDesde(valida),
-    zip: { url: "/extension.zip", nome: `comprasnet-bot-extensao-${VERSAO_EXTENSAO}.zip` },
+    zip: { url: "/extension.zip", nome: `comprasnet-bot-extensao-${publicando}.zip` },
     arquivosUrl: "/extension-files.json",
   };
 }

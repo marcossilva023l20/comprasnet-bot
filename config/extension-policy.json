@@ -1,5 +1,5 @@
 {
   "recomendada": "1.7.20",
-  "descricaoAtual": "Experimental 1.8.7: Disputa só envia quando confirma polegar para baixo vermelho; polegar verde/incerto não envia. Relê o Valor Mínimo antes de clicar e suspende o item no piso até alterar o limite. Envio em disputa real ainda não validado.",
+  "descricaoAtual": "Experimental 1.8.8: CORRIGIDO envio de lances. Adicionado botão “📖 Ler página” no Modo Disputa: leia a página de “Enviar lance” antes de iniciar para mapear corretamente os campos de entrada e botões de cada item. Detecção de campo numérico mais flexível. Só envia quando confirma polegar para baixo vermelho; confere piso antes de cada clique.",
   "experimentalAtual": true
 }
