@@ -1,5 +1,5 @@
 {
   "recomendada": "1.7.20",
-  "descricaoAtual": "BETA 1.8.13: corrige a leitura dos preços em cartões responsivos do CNET quando rótulos e valores aparecem em nós irmãos. Só aceita valor explícito no trecho do mesmo item até o próximo rótulo; associação ausente ou ambígua continua bloqueada. Preserva a leitura de todas as páginas CNET e 1.7.20 como estável recomendada. O Modo Disputa segue BETA: envio real ainda não foi validado ao vivo; exige polegar vermelho para baixo, valida compra/UASG e reconfere o Valor Mínimo antes do clique.",
+  "descricaoAtual": "BETA 1.8.14: lê Melhor valor e Meu valor no cartão CNET quando os rótulos aparecem agrupados antes dos preços, exigindo alinhamento visual exclusivo entre cada rótulo e um único valor explícito no mesmo item. Sem geometria ou associação inequívoca, continua bloqueado. Preserva 1.7.20 como estável recomendada e as salvaguardas de compra/UASG, polegar vermelho e Valor Mínimo; o envio real ainda não foi validado ao vivo.",
   "experimentalAtual": true
 }

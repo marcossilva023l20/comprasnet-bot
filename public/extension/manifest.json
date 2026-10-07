@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ComprasNet - Preenchedor de Propostas",
-  "version": "1.8.13",
+  "version": "1.8.14",
   "description": "Lê itens do Compras.gov.br, CNET e Radar PNCP; preenche e salva propostas. Modo Disputa BETA.",
   "permissions": [
     "activeTab",

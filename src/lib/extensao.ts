@@ -49,11 +49,18 @@ export type NovidadeExtensao = {
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
   {
+    versao: "1.8.14",
+    itens: [
+      "Corrige o layout real do CNET com “Melhor valor” e “Meu valor” agrupados antes dos preços: cada rótulo só recebe um valor monetário explícito alinhado visualmente em uma linha exclusiva do mesmo cartão",
+      "Geometria ausente, valores duplicados, desalinhados ou associação não única mantêm preços ilegíveis e bloqueiam o campo; o intervalo mínimo continua sendo lido separadamente",
+      "Preserva as salvaguardas de compra/UASG, polegar vermelho para baixo e Valor Mínimo; mantém 1.7.20 como estável recomendada e não declara lances reais validados",
+    ],
+  },
+  {
     versao: "1.8.13",
     itens: [
-      "Corrige a leitura dos cartões CNET responsivos quando o rótulo e o preço aparecem em nós irmãos; associa apenas o valor explícito até o próximo rótulo do mesmo item",
-      "Se a disposição não comprovar uma associação única, o preço continua ilegível e nenhum lance é preparado; o diagnóstico distingue campo encontrado/associado de campo disponível para interação",
-      "Mantém 1.7.20 como estável recomendada; o Modo Disputa continua BETA e envio real ainda não foi validado ao vivo",
+      "Versão BETA anterior: a leitura por trechos não cobriu o layout real com rótulos agrupados antes dos preços, portanto permanece no histórico e não é a correção para esse caso",
+      "Mantém 1.7.20 como estável recomendada; lances reais ainda não foram validados ao vivo",
     ],
   },
   {

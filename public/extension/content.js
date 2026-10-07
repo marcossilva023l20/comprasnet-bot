@@ -5143,8 +5143,83 @@ function analisarMedidaDisputa(texto, finalidade = "preco") {
   return { ...resultado, unidades, tipo: monetario ? "valor" : "percentual", motivo: "ok" };
 }
 
+/** Texto de preço explícito que pertence a um nó visível, sem somar regiões vizinhas. */
+function candidatosValorVisualDisputa(escopo) {
+  const candidatos = [];
+  for (const el of escopo.querySelectorAll("*")) {
+    if (!isVisible(el) || el.matches('input, textarea, [role="textbox"]') || el.closest(`#${PAINEL_ID}`)) continue;
+    const texto = normalizarTextoDisputa(textoVisivelDisputa(el));
+    if (!/^r\$\s*-?\d[\d.,]*$/.test(texto)) continue;
+    const leitura = analisarMedidaDisputa(texto, "preco");
+    if (leitura.motivo !== "ok" || leitura.moedas !== 1 || !Number.isSafeInteger(leitura.unidades)) continue;
+    candidatos.push({ elemento: el, leitura });
+  }
+  // Se o mesmo preço está repartido em nós aninhados, fica só com o nó mais
+  // específico. Duas ocorrências visíveis independentes continuam ambíguas.
+  return candidatos.filter(({ elemento }) => !candidatos.some((outro) =>
+    outro.elemento !== elemento && elemento.contains(outro.elemento),
+  ));
+}
+
+function caixaVisualDisputa(elemento) {
+  if (!elemento || !isVisible(elemento)) return null;
+  const rect = elemento.getBoundingClientRect();
+  const esquerda = Number(rect.left);
+  const direita = Number(rect.right);
+  const topo = Number(rect.top);
+  const base = Number(rect.bottom);
+  const largura = Number(rect.width);
+  const altura = Number(rect.height);
+  if (![esquerda, direita, topo, base, largura, altura].every(Number.isFinite) || largura <= 0 || altura <= 0 || direita <= esquerda || base <= topo) return null;
+  return { centroY: (topo + base) / 2, topo, base, altura };
+}
+
+function mesmaLinhaVisualDisputa(a, b) {
+  if (!a || !b) return false;
+  const sobreposicao = Math.min(a.base, b.base) - Math.max(a.topo, b.topo);
+  const tolerancia = Math.max(2, Math.min(a.altura, b.altura) * 0.6);
+  return sobreposicao > 0 && Math.abs(a.centroY - b.centroY) <= tolerancia;
+}
+
+/** Associa rótulo e preço apenas quando cada linha visual contém um valor único. */
+function lerPrecosAlinhadosVisualmenteDisputa(escopo) {
+  const rotulos = new Map();
+  for (const rotulo of ROTULOS_PRECO_DISPUTA.slice(0, 2)) {
+    const exato = (el) => normalizarTextoDisputa(textoVisivelDisputa(el)).replace(/\s*:\s*$/, "") === rotulo;
+    const todos = [...escopo.querySelectorAll("*")].filter((el) => isVisible(el) && exato(el));
+    const folhas = todos.filter((el) => ![...el.children].some(exato));
+    if (folhas.length !== 1) return null;
+    const caixa = caixaVisualDisputa(folhas[0]);
+    if (!caixa) return null;
+    rotulos.set(rotulo, caixa);
+  }
+
+  const valores = candidatosValorVisualDisputa(escopo).map((candidato) => ({
+    ...candidato,
+    caixa: caixaVisualDisputa(candidato.elemento),
+  })).filter((candidato) => candidato.caixa);
+  if (!valores.length) return null;
+
+  const associados = new Map();
+  const elementosUsados = new Set();
+  for (const [rotulo, caixaRotulo] of rotulos) {
+    const alinhados = valores.filter((candidato) => mesmaLinhaVisualDisputa(caixaRotulo, candidato.caixa));
+    if (alinhados.length !== 1 || elementosUsados.has(alinhados[0].elemento)) return null;
+    elementosUsados.add(alinhados[0].elemento);
+    associados.set(rotulo, {
+      ...alinhados[0].leitura,
+      origem: "alinhamento_visual",
+      tagRegiao: alinhados[0].elemento.tagName,
+    });
+  }
+  return {
+    melhor: associados.get("melhor valor (unitario)"),
+    meu: associados.get("meu valor (unitario)"),
+  };
+}
+
 /** Localiza a região mínima que contém um único rótulo financeiro do próprio item. */
-function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco") {
+function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco", alternativaAlinhada = null) {
   const texto = normalizarTextoDisputa(textoVisivelDisputa(escopo));
   const outrosRotulos = ROTULOS_PRECO_DISPUTA.filter((outro) => outro !== rotulo);
   const exato = (el) => normalizarTextoDisputa(textoVisivelDisputa(el)).replace(/\s*:\s*$/, "") === rotulo;
@@ -5176,13 +5251,15 @@ function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco") {
       }
       if (atual === escopo) break;
     }
-    // Alguns cartões responsivos separam o rótulo e o valor em nós irmãos.
-    // Nesse caso, só aceita o trecho do mesmo item entre este rótulo e o próximo
-    // rótulo financeiro — nunca a primeira moeda encontrada na coluna vizinha.
+    // Quando rótulos e preços são nós irmãos em colunas separadas, só aceita
+    // a associação se a geometria visível ligar este rótulo a um único preço.
+    if (finalidade === "preco" && alternativaAlinhada?.motivo === "ok") {
+      return { ...base, ...alternativaAlinhada };
+    }
     const trechoRotulado = trechoAposRotuloDisputa(texto, rotulo, [...outrosRotulos, "enviar lance"]);
     const leituraTrecho = analisarMedidaDisputa(trechoRotulado, finalidade);
     if (leituraTrecho.motivo === "ok") {
-      return { ...base, ...leituraTrecho, origem: "segmento_rotulado", tagRegiao: null };
+      return { ...base, unidades: null, tipo: null, motivo: "sem_associacao_visual_unica", moedas: leituraTrecho.moedas, percentuais: leituraTrecho.percentuais, origem: "segmento_rotulado" };
     }
     const motivoTrecho = leituraTrecho.motivo === "moeda_ausente" && !moedaAusente
       ? "sem_regiao_exclusiva"
@@ -5247,12 +5324,13 @@ function lerCartaoDisputa({ cartao, escopoLance, botao, criterioPagina }) {
   const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
   const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
   const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["melhor valor (unitario)", "meu valor (unitario)", "intervalo minimo entre lances", "enviar lance"]);
-  // Rótulos e valores podem ocupar colunas responsivas distintas. Lê as medidas
-  // no cartão já identificado de um único item; o campo e o botão continuam
-  // restritos ao escopo do formulário.
+  // Rótulos e valores podem ocupar colunas responsivas distintas. Primeiro
+  // localiza pares visuais exclusivos no cartão de um único item; cada leitura
+  // preserva o bloqueio se o DOM não fornecer geometria inequívoca.
+  const alinhamentoVisual = lerPrecosAlinhadosVisualmenteDisputa(cartao);
   const leituras = {
-    melhor: lerMedidaRotuladaDisputa(cartao, "melhor valor (unitario)"),
-    meu: lerMedidaRotuladaDisputa(cartao, "meu valor (unitario)"),
+    melhor: lerMedidaRotuladaDisputa(cartao, "melhor valor (unitario)", "preco", alinhamentoVisual?.melhor),
+    meu: lerMedidaRotuladaDisputa(cartao, "meu valor (unitario)", "preco", alinhamentoVisual?.meu),
     intervalo: lerMedidaRotuladaDisputa(cartao, "intervalo minimo entre lances", "intervalo"),
   };
   const bloqueioLocal = /maior\s*desconto/.test(texto) || /%|desconto|percentual/.test(novoLance);

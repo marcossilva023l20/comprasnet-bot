@@ -17,7 +17,7 @@ function popup({ estado, itens, tabUrl, preloadedItems = [], selectedItemIds = [
   const registrar = window.document.addEventListener.bind(window.document);
   window.document.addEventListener = (tipo, fn, opcoes) => { if (tipo !== "DOMContentLoaded") registrar(tipo, fn, opcoes); };
   window.chrome = {
-    runtime: { getManifest: () => ({ version: "1.8.13" }), onMessage: { addListener: (fn) => listeners.push(fn) } },
+    runtime: { getManifest: () => ({ version: "1.8.14" }), onMessage: { addListener: (fn) => listeners.push(fn) } },
     tabs: { sendMessage: async (_id, msg) => { mensagens.push(msg.action); mensagensDetalhadas.push(msg); return msg.action === "disputa_status" ? estado : { ok: true }; } },
   };
   window.fetch = async (url, options) => {

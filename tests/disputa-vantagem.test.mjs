@@ -26,12 +26,12 @@ function htmlDaDisputa(itens) {
   </body></html>`;
 }
 
-function htmlDaDisputaCnetResponsiva({ colunasSeparadas = false } = {}) {
+function htmlDaDisputaCnetResponsiva({ colunasSeparadas = false, melhor = "499,0000", meu = "500,0000" } = {}) {
   const precos = colunasSeparadas
-    ? `<div class="rotulos-preco"><span>Melhor valor (unitário)</span><span>Meu valor (unitário)</span></div>
-       <div class="valores-preco"><span id="melhor-1">R$ 499,0000</span><span id="meu-1">R$ 500,0000</span></div>`
-    : `<span>Melhor valor (unitário)</span><span id="melhor-1">R$ 499,0000</span>
-       <span>Meu valor (unitário)</span><span id="meu-1">R$ 500,0000</span>`;
+    ? `<div class="rotulos-preco"><span id="rotulo-melhor-1">Melhor valor (unitário)</span><span id="rotulo-meu-1">Meu valor (unitário)</span></div>
+       <div class="valores-preco"><span id="melhor-1">R$ ${melhor}</span><span id="meu-1">R$ ${meu}</span></div>`
+    : `<span id="rotulo-melhor-1">Melhor valor (unitário)</span><span id="melhor-1">R$ ${melhor}</span>
+       <span id="rotulo-meu-1">Meu valor (unitário)</span><span id="meu-1">R$ ${meu}</span>`;
   return `<!doctype html><html><body>
     <h1>Enviar lance</h1>
     <p>Dispensa Eletrônica Nº 135/2026 (Lei 14.133/2021)</p><p>UASG 929214</p>
@@ -59,8 +59,21 @@ function htmlDaDisputaCnetResponsiva({ colunasSeparadas = false } = {}) {
   </body></html>`;
 }
 
+function alinharPrecosCnet(window) {
+  const retangulo = (id, left, top, width = 90, height = 18) => {
+    const el = window.document.getElementById(id);
+    const rect = { x: left, y: top, left, top, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) };
+    el.getBoundingClientRect = () => rect;
+  };
+  retangulo("rotulo-melhor-1", 20, 100, 90);
+  retangulo("melhor-1", 140, 100, 85);
+  retangulo("rotulo-meu-1", 20, 126, 90);
+  retangulo("meu-1", 140, 126, 85);
+}
+
 function ambiente(itens, {
   pisos = {},
+  prepararPagina = null,
   confirmar = true,
   falharItens = false,
   aoInput = null,
@@ -78,6 +91,7 @@ function ambiente(itens, {
   const conteudo = montarPagina(html ?? htmlDaDisputa(itens), {
     url,
     preparar: (w) => {
+      prepararPagina?.(w);
       w.confirm = (texto) => { confirmacoes.push(texto); return confirmar; };
       w.document.querySelectorAll('[id^="enviar-"]').forEach((botao) => botao.addEventListener("click", (evento) => {
         evento.preventDefault();
@@ -148,9 +162,10 @@ for (const [nome, situacao, esperado] of [
   });
 }
 
-test("o diagnóstico lê os valores do CNET quando cada rótulo e preço é texto irmão na coluna responsiva", async (t) => {
-  const { window, enviar } = montarPagina(htmlDaDisputaCnetResponsiva(), {
+test("o diagnóstico associa rótulos agrupados aos preços pela linha visual exclusiva no cartão CNET", async (t) => {
+  const { window, enviar } = montarPagina(htmlDaDisputaCnetResponsiva({ colunasSeparadas: true }), {
     url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+    preparar: alinharPrecosCnet,
   });
   t.after(() => window.close());
 
@@ -164,8 +179,8 @@ test("o diagnóstico lê os valores do CNET quando cada rótulo e preço é text
   assert.equal(item.criterioPreco, true);
   assert.equal(item.melhor, "R$ 499,0000");
   assert.equal(item.meu, "R$ 500,0000");
-  assert.equal(item.leitura.melhor.origem, "segmento_rotulado");
-  assert.equal(item.leitura.meu.origem, "segmento_rotulado");
+  assert.equal(item.leitura.melhor.origem, "alinhamento_visual");
+  assert.equal(item.leitura.meu.origem, "alinhamento_visual");
   assert.match(item.intervalo, /R\$ 0,0050/);
   assert.equal(item.motivoBloqueio, null);
   assert.equal(item.campoEncontrado, true);
@@ -174,10 +189,28 @@ test("o diagnóstico lê os valores do CNET quando cada rótulo e preço é text
   assert.equal(window.document.getElementById("novo-1").value, "");
 });
 
-test("calcula melhor menos intervalo para a confirmação, mas cancelar não preenche nem clica no CNET", async (t) => {
-  const env = ambiente([base(1, vermelho, { melhor: "499,0000", meu: "500,0000", intervalo: "0,0050" })], {
+test("trecho textual isolado não autoriza preço quando a geometria não prova a associação", async (t) => {
+  const env = ambiente([base(1, vermelho)], {
     html: htmlDaDisputaCnetResponsiva(),
     url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+  });
+  t.after(() => env.window.close());
+
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
+  const item = resultado.diagnostico.itens[0];
+  assert.equal(item.criterioPreco, false);
+  assert.equal(item.leitura.melhor.motivo, "sem_associacao_visual_unica");
+  assert.equal(item.leitura.meu.motivo, "sem_associacao_visual_unica");
+  assert.equal(item.campoDisponivel, false);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+  assert.deepEqual(env.cliques, []);
+});
+
+test("calcula melhor menos intervalo para a confirmação, mas cancelar não preenche nem clica no CNET", async (t) => {
+  const env = ambiente([base(1, vermelho, { melhor: "499,0000", meu: "500,0000", intervalo: "0,0050" })], {
+    html: htmlDaDisputaCnetResponsiva({ colunasSeparadas: true }),
+    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+    prepararPagina: alinharPrecosCnet,
     propostaNumeroDispensa: "92921406001352026",
     propostaUasg: "929214",
     pisos: { 1: "400.0000" },
@@ -193,22 +226,37 @@ test("calcula melhor menos intervalo para a confirmação, mas cancelar não pre
   assert.equal(env.window.document.getElementById("novo-1").value, "");
 });
 
-test("rótulos e preços em colunas sem associação estrutural continuam ambíguos e bloqueados", async (t) => {
-  const { window, enviar } = montarPagina(htmlDaDisputaCnetResponsiva({ colunasSeparadas: true }), {
+test("rótulos e preços agrupados sem geometria única continuam bloqueados sem confirmar ou enviar", async (t) => {
+  const env = ambiente([base(1, vermelho)], {
+    html: htmlDaDisputaCnetResponsiva({ colunasSeparadas: true }),
     url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+    propostaNumeroDispensa: "92921406001352026",
+    propostaUasg: "929214",
+    pisos: { 1: "400.0000" },
   });
-  t.after(() => window.close());
+  t.after(() => env.window.close());
 
-  const resultado = await enviar({ action: "disputa_diagnosticar" });
+  const resultado = await env.enviar({ action: "disputa_diagnosticar" });
   const item = resultado.diagnostico.itens[0];
   assert.equal(item.criterioPreco, false);
   assert.equal(item.motivoBloqueio, "precos_ilegíveis");
-  assert.notEqual(item.leitura.melhor.motivo, "ok");
-  assert.notEqual(item.leitura.meu.motivo, "ok");
+  assert.equal(item.leitura.melhor.motivo, "sem_regiao_exclusiva");
+  assert.equal(item.leitura.melhor.moedas, 0);
+  assert.equal(item.leitura.meu.motivo, "valores_ambiguos");
+  assert.equal(item.leitura.meu.moedas, 2);
+  assert.equal(item.leitura.intervalo.motivo, "ok");
+  assert.equal(item.leitura.intervalo.valor, "R$ 0,0050");
   assert.equal(item.campoEncontrado, true);
   assert.equal(item.campoAssociado, true);
   assert.equal(item.campoDisponivel, false);
-  assert.equal(window.document.getElementById("novo-1").value, "");
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+
+  const inicio = await env.enviar({ action: "disputa_start", propostaId: "7" });
+  assert.equal(inicio.ok, false);
+  assert.match(inicio.error, /preços, intervalo e campo de lance dos itens/);
+  assert.equal(env.confirmacoes.length, 0);
+  assert.deepEqual(env.cliques, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
 });
 
 test("📖 Ler página mapeia controles sem preencher, consultar a API ou enviar", async (t) => {

@@ -1,5 +1,11 @@
 [
   {
+    "versao": "1.8.13",
+    "ref": "09b9a388596647686fd26fd5bbf3ef60bf49594a",
+    "descricao": "BETA anterior: a leitura por trechos não cobriu o layout real com rótulos agrupados antes dos preços; o envio real ainda não foi validado ao vivo.",
+    "experimental": true
+  },
+  {
     "versao": "1.8.12",
     "ref": "271dc4a191ab2588b75fe25d1254e45d7525befc",
     "descricao": "BETA anterior: percorre as páginas da compra CNET sem voltar à pesquisa; o Modo Disputa continua BETA e o envio real de lances ainda não foi validado ao vivo.",
