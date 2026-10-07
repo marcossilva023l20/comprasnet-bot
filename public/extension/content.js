@@ -2530,13 +2530,14 @@ function controlesDePagina() {
       if (!rotulo || TEXTO_PROIBIDO_PAGINACAO.test(rotulo)) continue;
 
       const emPaginacao = Boolean(el.closest?.(SELETOR_PAGINACAO));
+      // Fora de um paginador conhecido, "Anterior"/"Voltar" pode ser o botão
+      // que sai da compra e retorna à busca. Nunca o trate como paginação.
+      if (!emPaginacao) continue;
+
       const numero = /^\d+$/.test(rotulo) ? rotulo : "";
       const proximo = TEXTO_PROXIMO.test(rotulo);
       const anterior = !proximo && TEXTO_ANTERIOR.test(rotulo);
       if (!numero && !proximo && !anterior) continue;
-      // Fora de um contêiner de paginação, só aceita as setas de avançar/voltar.
-      if (!emPaginacao && !proximo && !anterior) continue;
-
       const ativo =
         el.getAttribute("aria-current") === "page" ||
         /\b(active|current|selected|ativo|selecionado)\b/i.test(String(el.className || "")) ||
@@ -2869,7 +2870,10 @@ async function readPageItems(options = {}) {
 
     // Algumas telas do CNET Mobile mostram os itens como cartões em vez de tabela.
     // Mantém o leitor do ComprasNet como fallback para esses layouts.
-    const resultado = await readLegacyComprasNetItems({ expandir, delay });
+    // Acompanhamento público do CNET não usa a paginação do formulário de
+    // propostas. Não clique em controles genéricos de "Voltar"/"Próximo":
+    // eles podem sair da compra e voltar à pesquisa durante a importação.
+    const resultado = await readLegacyComprasNetItems({ expandir, delay, paginar: false });
     if (resultado.ok) return { ...resultado, origem: fonte.nome };
     return {
       ...resultado,
@@ -3190,7 +3194,7 @@ function readRadarIdentificacao() {
   };
 }
 
-async function readLegacyComprasNetItems({ expandir = true, delay = 400 } = {}) {
+async function readLegacyComprasNetItems({ expandir = true, delay = 400, paginar = true } = {}) {
   const identificacao = readPageIdentificacao();
   rodandoAgora = true;
   mostrarPainel();
@@ -3201,7 +3205,7 @@ async function readLegacyComprasNetItems({ expandir = true, delay = 400 } = {}) 
   const vistos = new Set();
   abortRequested = false;
 
-  const controles = controlesDePagina();
+  const controles = paginar ? controlesDePagina() : null;
   const temPaginacao = Boolean(controles?.paginas?.size || controles?.proximo);
   let paginasLidas = 0;
   let expandidos = 0;

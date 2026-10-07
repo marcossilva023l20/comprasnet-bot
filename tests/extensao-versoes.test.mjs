@@ -11,7 +11,7 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 test("o catálogo tem somente versões completas, únicas, com hashes e downloads correspondentes", () => {
   assert.equal(catalogo.recomendada, "1.7.20");
-  assert.equal(catalogo.versoes[0].versao, "1.8.10");
+  assert.equal(catalogo.versoes[0].versao, "1.8.11");
   assert.equal(catalogo.versoes[0].experimental, true);
   assert.equal(catalogo.versoes.find((v) => v.versao === catalogo.recomendada).experimental, false);
   assert.equal(new Set(catalogo.versoes.map((v) => v.versao)).size, catalogo.versoes.length);
@@ -37,15 +37,16 @@ test("o catálogo tem somente versões completas, únicas, com hashes e download
 
 test("versões BETA com automação de lances nunca são a recomendada", () => {
   const betas = catalogo.versoes.filter((v) => /^1\.8\./.test(v.versao));
-  assert.equal(betas.length, 10);
+  assert.equal(betas.length, 11);
   assert.ok(betas.every((v) => v.experimental && /não (?:foi )?validad/i.test(v.descricao)));
+  assert.equal(catalogo.versoes.find((v) => v.versao === "1.8.10").ref, "91b8a745ab8d5fa3a4ff1b448293b5f62ac8406a");
   assert.equal(catalogo.versoes.find((v) => v.versao === "1.8.9").ref, "9926263dab68b59743a908b0a9f21734f7880bb0");
   assert.equal(catalogo.versoes.find((v) => v.versao === "1.8.8").ref, "5839450cd44d216f53671942411c9ace60eb224a");
   assert.equal(catalogo.versoes.find((v) => v.versao === "1.7.19").experimental, false);
   const estavel = catalogo.versoes.find((v) => v.versao === catalogo.recomendada);
   assert.equal(estavel.ref, "cf1c579807b70144e4234e15ea80fef999f0b75d");
   const manifestoEmUso = JSON.parse(readFileSync(new URL("public/extension/manifest.json", root), "utf8"));
-  assert.equal(manifestoEmUso.version, "1.8.10");
+  assert.equal(manifestoEmUso.version, "1.8.11");
   assert.ok(manifestoEmUso.description.length <= 132, "a descrição do Chrome precisa respeitar o limite do manifesto");
   assert.equal(catalogo.versoes[0].versao, manifestoEmUso.version);
   const pacoteLegado = JSON.parse(readFileSync(new URL("public/extension-files.json", root), "utf8"));

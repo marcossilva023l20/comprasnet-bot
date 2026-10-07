@@ -123,8 +123,8 @@ test("falha de escrita restaura a cópia anterior sem declarar a nova versão ou
 });
 
 test("uma versão BETA tem aviso visível e exige confirmação explícita antes de instalar", async (t) => {
-  const env = montar({ confirmar: false }); t.after(() => env.window.close()); await inicializar(env); await conectar(env); await env.escolher("1.8.10");
-  const opcaoBeta = [...env.window.document.getElementById("versao-selecionada").options].find((opcao) => opcao.value === "1.8.10");
+  const env = montar({ confirmar: false }); t.after(() => env.window.close()); await inicializar(env); await conectar(env); await env.escolher("1.8.11");
+  const opcaoBeta = [...env.window.document.getElementById("versao-selecionada").options].find((opcao) => opcao.value === "1.8.11");
   assert.match(opcaoBeta.textContent, /BETA/);
   assert.doesNotMatch(opcaoBeta.textContent, /EXPERIMENTAL/i);
   assert.match(env.window.document.getElementById("versao-alerta").textContent, /BETA/);

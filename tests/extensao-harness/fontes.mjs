@@ -251,11 +251,15 @@ export async function rodarFontes() {
   console.log("\n── 7) CNET público: expandir dentro de form não envia o formulário nem fecha a página ──");
   {
     const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra?compra=93224206000072026";
-    const eventos = { mostrarTodos: 0, detalhes: 0, submits: 0, navegou: 0, fechou: false };
+    const eventos = { mostrarTodos: 0, detalhes: 0, voltar: 0, submits: 0, navegou: 0, fechou: false };
     const html = `<!doctype html><html><body>
-      <form id="form-compra">
+      <form id="form-compra" action="/comprasnet-web/public/compras">
         <button id="mostrar-todos" aria-expanded="false">Mostrar todos os itens</button>
         <a id="link-de-navegacao" href="/comprasnet-web/public/outra-compra" aria-expanded="false">Mostrar todos os itens</a>
+        <button id="voltar-pesquisa" type="submit">Voltar para pesquisa</button>
+        <nav class="pagination" aria-label="Paginação">
+          <button>2</button><button aria-label="Próxima página">›</button>
+        </nav>
         <div id="lista-itens" style="display:none">
           <section class="item" data-item="1">
             <div class="cabecalho">
@@ -288,6 +292,9 @@ export async function rodarFontes() {
           eventos.navegou += 1;
           event.preventDefault();
         });
+        w.document.getElementById("voltar-pesquisa").addEventListener("click", () => {
+          eventos.voltar += 1;
+        });
         w.document.getElementById("mostrar-detalhes").addEventListener("click", (event) => {
           eventos.detalhes += 1;
           event.currentTarget.setAttribute("aria-expanded", "true");
@@ -300,12 +307,47 @@ export async function rodarFontes() {
     checar(resultado.ok, `leitura do CNET concluiu (${resultado.error || "sem erro"})`);
     checar(resultado.itens?.length === 1 && resultado.itens[0]?.numeroItem === "1", "associou a descrição e os valores ao item 1");
     checar(eventos.mostrarTodos === 1 && eventos.detalhes === 1, `expandiu a lista e o cartão sem disparar o default (${JSON.stringify(eventos)})`);
-    checar(eventos.submits === 0 && eventos.navegou === 0 && !eventos.fechou, `não submeteu, navegou nem fechou a compra (${JSON.stringify(eventos)})`);
+    checar(eventos.voltar === 0 && eventos.submits === 0 && eventos.navegou === 0 && !eventos.fechou, `não clicou em “Voltar”, não submeteu, navegou nem fechou a compra (${JSON.stringify(eventos)})`);
     checar(window.location.href === url, `permaneceu na URL da compra (${window.location.href})`);
     window.close();
   }
 
-  console.log("\n── 8) CNET: a rota segura de fornecedor não é classificada como fonte pública ──");
+  console.log("\n── 8) Paginação: não interpreta “Voltar para pesquisa” fora do paginador como página anterior ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
+    const eventos = { voltar: 0, submits: 0 };
+    const html = `<!doctype html><html><body>
+      <form id="form-busca" action="/comprasnet-web/public/compras">
+        <button id="voltar-pesquisa" type="submit">Voltar para pesquisa</button>
+      </form>
+      <section class="item-card" data-item="1">
+        <div class="item-heading"><span>1</span><span>MÓDULO MEMÓRIA</span></div>
+        <div class="resumo">
+          <div><span>Qtde solicitada</span><span>8</span></div>
+          <div><span>Valor estimado (unitário)</span><span>R$ 176,0000</span></div>
+        </div>
+      </section>
+      <nav class="pagination" aria-label="Paginação"><button>2</button><button aria-label="Próxima página">›</button></nav>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url,
+      preparar: (w) => {
+        w.document.getElementById("form-busca").addEventListener("submit", (event) => {
+          eventos.submits += 1;
+          event.preventDefault();
+        });
+        w.document.getElementById("voltar-pesquisa").addEventListener("click", () => { eventos.voltar += 1; });
+      },
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: false, delay: 1 });
+    checar(resultado.ok && resultado.itens?.length === 1, `leu o item sem sair da proposta (${resultado.error || resultado.itens?.length})`);
+    checar(eventos.voltar === 0 && eventos.submits === 0, `ignorou o botão de retorno fora do paginador (${JSON.stringify(eventos)})`);
+    checar(window.location.href === url, `URL da página permaneceu igual (${window.location.href})`);
+    window.close();
+  }
+
+  console.log("\n── 9) CNET: a rota segura de fornecedor não é classificada como fonte pública ──");
   {
     const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/proposta/123";
     const { window } = montarPagina("<!doctype html><html><body></body></html>", { url });
