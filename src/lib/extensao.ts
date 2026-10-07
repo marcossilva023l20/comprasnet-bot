@@ -49,6 +49,14 @@ export type NovidadeExtensao = {
 /** Mais recente primeiro — a extensão mostra só o que é mais novo que ela. */
 export const NOVIDADES_EXTENSAO: NovidadeExtensao[] = [
   {
+    versao: "1.8.13",
+    itens: [
+      "Corrige a leitura dos cartões CNET responsivos quando o rótulo e o preço aparecem em nós irmãos; associa apenas o valor explícito até o próximo rótulo do mesmo item",
+      "Se a disposição não comprovar uma associação única, o preço continua ilegível e nenhum lance é preparado; o diagnóstico distingue campo encontrado/associado de campo disponível para interação",
+      "Mantém 1.7.20 como estável recomendada; o Modo Disputa continua BETA e envio real ainda não foi validado ao vivo",
+    ],
+  },
+  {
     versao: "1.8.12",
     itens: [
       "Lê todas as páginas da compra pública no CNET, incluindo os itens que aparecem na página 2, e devolve a lista à primeira página",

@@ -1,5 +1,11 @@
 [
   {
+    "versao": "1.8.12",
+    "ref": "271dc4a191ab2588b75fe25d1254e45d7525befc",
+    "descricao": "BETA anterior: percorre as páginas da compra CNET sem voltar à pesquisa; o Modo Disputa continua BETA e o envio real de lances ainda não foi validado ao vivo.",
+    "experimental": true
+  },
+  {
     "versao": "1.7.19",
     "ref": "37f537c3fb17dcac7effe6892e470c3dd40997bf",
     "descricao": "Versão restaurada: leitura do Radar com contador colado. Disputa sem envio automático.",

@@ -26,14 +26,57 @@ function htmlDaDisputa(itens) {
   </body></html>`;
 }
 
-function ambiente(itens, { pisos = {}, confirmar = true, falharItens = false, aoInput = null, aoClique = null } = {}) {
+function htmlDaDisputaCnetResponsiva({ colunasSeparadas = false } = {}) {
+  const precos = colunasSeparadas
+    ? `<div class="rotulos-preco"><span>Melhor valor (unitário)</span><span>Meu valor (unitário)</span></div>
+       <div class="valores-preco"><span id="melhor-1">R$ 499,0000</span><span id="meu-1">R$ 500,0000</span></div>`
+    : `<span>Melhor valor (unitário)</span><span id="melhor-1">R$ 499,0000</span>
+       <span>Meu valor (unitário)</span><span id="meu-1">R$ 500,0000</span>`;
+  return `<!doctype html><html><body>
+    <h1>Enviar lance</h1>
+    <p>Dispensa Eletrônica Nº 135/2026 (Lei 14.133/2021)</p><p>UASG 929214</p>
+    <div class="width-100 cp-itens-disputa p-1 justify-content-around ng-tns-c2064260805-31 ng-trigger ng-trigger-animationItem cp-item-">
+      <div class="cabecalho-item"><span class="numero-item">1</span><span>ITEM 1 — VESTUÁRIO</span>
+        <div>Fase de lances aberta</div><i id="sinal-1" class="fa fa-thumbs-down" style="color:rgb(220, 53, 69)"></i>
+      </div>
+      <div class="col-md-7 col-sm-12 col-12 row pl-1 pr-0 align-items-center ng-tns-c2064260805-31">
+        <div class="content col-md-11 col-sm-9 col-12 row pr-0 mr-1 ng-tns-c2064260805-31">
+          <div class="content col-md-9 col-sm-12 col-12 pr-0 ng-tns-c2064260805-31">
+            <div class="cp-texto-item conteudo-div-centralizado cp-valor-responsivo ng-tns-c2064260805-31">
+              ${precos}
+              <span>Novo lance (unitário)</span><input id="novo-1" type="text" value="" aria-label="Novo lance">
+              <small>Intervalo mínimo entre lances: R$ 0,0050</small>
+              <div class="row ng-tns-c2064260805-31 ng-star-inserted"><div class="col-auto ng-tns-c2064260805-31">
+                <div class="row m-0 ng-tns-c2064260805-31"><div class="ng-tns-c2064260805-31">
+                  <button id="enviar-1" class="br-button p-1 ng-tns-c2064260805-31" type="button">Enviar lance</button>
+                </div></div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body></html>`;
+}
+
+function ambiente(itens, {
+  pisos = {},
+  confirmar = true,
+  falharItens = false,
+  aoInput = null,
+  aoClique = null,
+  html = null,
+  url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=53-2026",
+  propostaNumeroDispensa = "78140206000532026",
+  propostaUasg = "781402",
+} = {}) {
   const cliques = [];
   const confirmacoes = [];
   const mensagens = [];
   const requisicoes = [];
   const pisosAtuais = pisos;
-  const conteudo = montarPagina(htmlDaDisputa(itens), {
-    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=53-2026",
+  const conteudo = montarPagina(html ?? htmlDaDisputa(itens), {
+    url,
     preparar: (w) => {
       w.confirm = (texto) => { confirmacoes.push(texto); return confirmar; };
       w.document.querySelectorAll('[id^="enviar-"]').forEach((botao) => botao.addEventListener("click", (evento) => {
@@ -62,7 +105,7 @@ function ambiente(itens, { pisos = {}, confirmar = true, falharItens = false, ao
     if (msg?.action !== "api_request") return Promise.resolve({});
     const u = new URL(msg.url);
     requisicoes.push(u.pathname);
-    if (u.pathname.endsWith("/script")) return Promise.resolve({ ok: true, status: 200, dados: { proposta: { id: 7, numeroDispensa: "78140206000532026", uasg: "781402" } } });
+    if (u.pathname.endsWith("/script")) return Promise.resolve({ ok: true, status: 200, dados: { proposta: { id: 7, numeroDispensa: propostaNumeroDispensa, uasg: propostaUasg } } });
     if (u.pathname.endsWith("/itens")) {
       if (falharItens) return Promise.resolve({ ok: false, status: 503, dados: null });
       return Promise.resolve({ ok: true, status: 200, dados: itens.map((item) => ({ numeroItem: item.numero, valorMinimo: pisosAtuais[item.numero] })) });
@@ -104,6 +147,69 @@ for (const [nome, situacao, esperado] of [
     assert.equal(env.window.document.getElementById("novo-1").value, "");
   });
 }
+
+test("o diagnóstico lê os valores do CNET quando cada rótulo e preço é texto irmão na coluna responsiva", async (t) => {
+  const { window, enviar } = montarPagina(htmlDaDisputaCnetResponsiva(), {
+    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+  });
+  t.after(() => window.close());
+
+  const resultado = await enviar({ action: "disputa_diagnosticar" });
+  assert.equal(resultado.ok, true);
+  assert.equal(resultado.diagnostico.itens.length, 1);
+  const item = resultado.diagnostico.itens[0];
+  assert.equal(item.numeroItem, "1");
+  assert.equal(item.faseAberta, true);
+  assert.equal(item.situacaoCompetitiva.estado, "perdendo");
+  assert.equal(item.criterioPreco, true);
+  assert.equal(item.melhor, "R$ 499,0000");
+  assert.equal(item.meu, "R$ 500,0000");
+  assert.equal(item.leitura.melhor.origem, "segmento_rotulado");
+  assert.equal(item.leitura.meu.origem, "segmento_rotulado");
+  assert.match(item.intervalo, /R\$ 0,0050/);
+  assert.equal(item.motivoBloqueio, null);
+  assert.equal(item.campoEncontrado, true);
+  assert.equal(item.campoAssociado, true);
+  assert.equal(item.campoDisponivel, true);
+  assert.equal(window.document.getElementById("novo-1").value, "");
+});
+
+test("calcula melhor menos intervalo para a confirmação, mas cancelar não preenche nem clica no CNET", async (t) => {
+  const env = ambiente([base(1, vermelho, { melhor: "499,0000", meu: "500,0000", intervalo: "0,0050" })], {
+    html: htmlDaDisputaCnetResponsiva(),
+    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+    propostaNumeroDispensa: "92921406001352026",
+    propostaUasg: "929214",
+    pisos: { 1: "400.0000" },
+    confirmar: false,
+  });
+  t.after(() => env.window.close());
+
+  const resultado = await env.enviar({ action: "disputa_start", propostaId: "7" });
+  assert.equal(resultado.canceled, true);
+  assert.match(env.confirmacoes[0], /Dispensa 135\/2026 · UASG 929214/);
+  assert.match(env.confirmacoes[0], /melhor R\$ 499,0000 − intervalo R\$ 0,0050 → lance R\$ 498,9950/);
+  assert.deepEqual(env.cliques, []);
+  assert.equal(env.window.document.getElementById("novo-1").value, "");
+});
+
+test("rótulos e preços em colunas sem associação estrutural continuam ambíguos e bloqueados", async (t) => {
+  const { window, enviar } = montarPagina(htmlDaDisputaCnetResponsiva({ colunasSeparadas: true }), {
+    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=135-2026",
+  });
+  t.after(() => window.close());
+
+  const resultado = await enviar({ action: "disputa_diagnosticar" });
+  const item = resultado.diagnostico.itens[0];
+  assert.equal(item.criterioPreco, false);
+  assert.equal(item.motivoBloqueio, "precos_ilegíveis");
+  assert.notEqual(item.leitura.melhor.motivo, "ok");
+  assert.notEqual(item.leitura.meu.motivo, "ok");
+  assert.equal(item.campoEncontrado, true);
+  assert.equal(item.campoAssociado, true);
+  assert.equal(item.campoDisponivel, false);
+  assert.equal(window.document.getElementById("novo-1").value, "");
+});
 
 test("📖 Ler página mapeia controles sem preencher, consultar a API ou enviar", async (t) => {
   const env = ambiente([base(1, vermelho)]);

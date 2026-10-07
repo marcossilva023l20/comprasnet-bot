@@ -5176,8 +5176,26 @@ function lerMedidaRotuladaDisputa(escopo, rotulo, finalidade = "preco") {
       }
       if (atual === escopo) break;
     }
-    // Sem uma região exclusiva/referência não usa a moeda de uma coluna vizinha.
-    return { ...base, unidades: null, tipo: null, motivo: moedaAusente ? "moeda_ausente" : "sem_regiao_exclusiva", moedas: 0, percentuais: 0 };
+    // Alguns cartões responsivos separam o rótulo e o valor em nós irmãos.
+    // Nesse caso, só aceita o trecho do mesmo item entre este rótulo e o próximo
+    // rótulo financeiro — nunca a primeira moeda encontrada na coluna vizinha.
+    const trechoRotulado = trechoAposRotuloDisputa(texto, rotulo, [...outrosRotulos, "enviar lance"]);
+    const leituraTrecho = analisarMedidaDisputa(trechoRotulado, finalidade);
+    if (leituraTrecho.motivo === "ok") {
+      return { ...base, ...leituraTrecho, origem: "segmento_rotulado", tagRegiao: null };
+    }
+    const motivoTrecho = leituraTrecho.motivo === "moeda_ausente" && !moedaAusente
+      ? "sem_regiao_exclusiva"
+      : leituraTrecho.motivo;
+    return {
+      ...base,
+      unidades: null,
+      tipo: null,
+      motivo: moedaAusente && motivoTrecho === "sem_regiao_exclusiva" ? "moeda_ausente" : motivoTrecho,
+      moedas: leituraTrecho.moedas,
+      percentuais: leituraTrecho.percentuais,
+      origem: "segmento_rotulado",
+    };
   }
   const trecho = trechoAposRotuloDisputa(texto, rotulo, [...outrosRotulos, "enviar lance"]);
   return { ...base, ...analisarMedidaDisputa(trecho, finalidade) };
@@ -5229,10 +5247,13 @@ function lerCartaoDisputa({ cartao, escopoLance, botao, criterioPagina }) {
   const texto = normalizarTextoDisputa(textoVisivelDisputa(cartao));
   const formulario = normalizarTextoDisputa(textoVisivelDisputa(escopoLance));
   const novoLance = trechoAposRotuloDisputa(formulario, "novo lance (unitario)", ["melhor valor (unitario)", "meu valor (unitario)", "intervalo minimo entre lances", "enviar lance"]);
+  // Rótulos e valores podem ocupar colunas responsivas distintas. Lê as medidas
+  // no cartão já identificado de um único item; o campo e o botão continuam
+  // restritos ao escopo do formulário.
   const leituras = {
-    melhor: lerMedidaRotuladaDisputa(escopoLance, "melhor valor (unitario)"),
-    meu: lerMedidaRotuladaDisputa(escopoLance, "meu valor (unitario)"),
-    intervalo: lerMedidaRotuladaDisputa(escopoLance, "intervalo minimo entre lances", "intervalo"),
+    melhor: lerMedidaRotuladaDisputa(cartao, "melhor valor (unitario)"),
+    meu: lerMedidaRotuladaDisputa(cartao, "meu valor (unitario)"),
+    intervalo: lerMedidaRotuladaDisputa(cartao, "intervalo minimo entre lances", "intervalo"),
   };
   const bloqueioLocal = /maior\s*desconto/.test(texto) || /%|desconto|percentual/.test(novoLance);
   const rotulosPreco = !criterioPagina.bloqueado && !bloqueioLocal;
@@ -5300,8 +5321,9 @@ function diagnosticarCamposDisputa() {
     melhor: formatarValorDisputa(cartao.melhor),
     meu: formatarValorDisputa(cartao.meu),
     intervalo: cartao.intervalo ? formatarIntervaloDisputa(cartao.intervalo, calcularDecrementoDisputa(cartao.melhor, cartao.intervalo)) : "não identificado",
-    campoEncontrado: Boolean(cartao.input),
+    campoEncontrado: Boolean(cartao.campoAssociado),
     campoAssociado: Boolean(cartao.campoAssociado),
+    campoDisponivel: Boolean(cartao.input),
     enviarHabilitado: cartao.enviarHabilitado,
     tipoCampo: cartao.campoAssociado?.type || cartao.campoAssociado?.getAttribute("role") || null,
     motivoBloqueio: cartao.motivoBloqueio,

@@ -2,7 +2,7 @@
 
 - O atualizador (`Config → Atualizar`) permite selecionar uma versão exata. A seleção apenas consulta o pacote: não grava arquivos nem inicia o bot.
 - A instalação exige confirmação, valida SHA-256, versão/nome do manifesto, arquivos e caminhos. Faz backup antes da escrita, grava o manifesto por último e restaura a cópia anterior se algo falhar.
-- A versão recomendada de produção permanece 1.7.20, configurada em `config/extension-policy.json`. A fonte 1.8.12 fica listada como BETA e nunca é selecionada automaticamente por ter número maior. As BETAs 1.8.11, 1.8.10, 1.8.9 e 1.8.8 continuam disponíveis no catálogo histórico; versões de Disputa exibem aviso sobre lances reais ainda não validados.
+- A versão recomendada de produção permanece 1.7.20, configurada em `config/extension-policy.json`. A fonte 1.8.13 fica listada como BETA e nunca é selecionada automaticamente por ter número maior. As BETAs 1.8.12, 1.8.11, 1.8.10, 1.8.9 e 1.8.8 continuam disponíveis no catálogo histórico; versões de Disputa exibem aviso sobre lances reais ainda não validados.
 - A página `/extensao` permite baixar o ZIP de qualquer versão disponível. Esse catálogo permanece acessível quando se instala uma versão antiga que não tem o seletor no próprio atualizador.
 - Pare toda automação antes de trocar. Depois confirme a versão, recarregue a extensão se necessário e dê F5 nas páginas do portal.
 
