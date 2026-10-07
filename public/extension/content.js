@@ -2508,57 +2508,154 @@ const SELETOR_PAGINACAO = [
   '[class*="pagination" i]',
   '[class*="paginacao" i]',
   '[class*="paginador" i]',
+  '[class*="paginator" i]',
   '[class*="paging" i]',
+  '[class*="pager" i]',
+  '[class*="page-item" i]',
+  '[class*="page-link" i]',
   'nav[aria-label*="pág" i]',
+  'nav[aria-label*="page" i]',
+  'nav[aria-label*="pagination" i]',
+  '[role="navigation"][aria-label*="pág" i]',
+  '[role="navigation"][aria-label*="page" i]',
   '[data-testid*="pagination" i]',
+  'mat-paginator',
+  'p-paginator',
 ].join(", ");
 
-const TEXTO_PROIBIDO_PAGINACAO = /favorit|salvar|imprimir|excluir|remover|sair|logout|voltar\s+ao\s+topo/i;
-const TEXTO_PROXIMO = /^(»|›|>|\u203a|pr[oó]xim[ao]|próxima\s+p[áa]gina|next|avan[çc]ar)/i;
-const TEXTO_ANTERIOR = /^(«|‹|<|\u2039|anterior|p[áa]gina\s+anterior|prev|voltar)/i;
+const TEXTO_PROIBIDO_PAGINACAO = /favorit|salvar|imprimir|excluir|remover|sair|logout|voltar\s+ao\s+topo|(?:voltar|retornar)\s+(?:para|a|à)\s+(?:pesquisa|busca)/i;
+const TEXTO_PROXIMO = /^(?:»|›|>|\u203a|pr[oó]xim[ao]|próxima\s+p[áa]gina|next|avan[çc]ar)/i;
+const TEXTO_ANTERIOR = /^(?:«|‹|<|\u2039|anterior|p[áa]gina\s+anterior|prev|voltar)/i;
+// No CNET público, «/» são primeira/última página; avançamos só pela página seguinte ou pelo chevron simples.
+const TEXTO_PROXIMO_CNET = /^(?:›|>|pr[oó]xima?(?:\s+p[áa]gina)?|next\b|go\s+to\s+next\s+page|avan[çc]ar\b)/i;
+const TEXTO_ANTERIOR_CNET = /^(?:‹|<|anterior\b|p[áa]gina\s+anterior\b|prev(?:ious)?\b|go\s+to\s+previous\s+page)/i;
+
+function controleDePaginaDesabilitado(el, paginador) {
+  for (let atual = el; atual; atual = atual.parentElement) {
+    const classe = String(atual.getAttribute?.("class") || "");
+    if (
+      atual.disabled ||
+      atual.getAttribute?.("aria-disabled") === "true" ||
+      /(?:^|\s)(?:disabled|ui-state-disabled|p-disabled)(?:\s|$)/i.test(classe)
+    ) return true;
+    if (atual === paginador) break;
+  }
+  return false;
+}
+
+function numeroDaPaginaDoControle(texto, ariaLabel, titulo) {
+  if (/^\d{1,4}$/.test(texto)) return texto;
+  const rotulos = normalizeText(`${ariaLabel} ${titulo}`);
+  const match = rotulos.match(/(?:^|\b)(?:p[aá]gina|page)\s*(?:n[uú]mero\s*)?[:#-]?\s*(\d{1,4})(?:\b|$)/i);
+  return match?.[1] || "";
+}
+
+function elementoDaPaginaAtivo(el, paginador) {
+  for (let atual = el, nivel = 0; atual && nivel < 4; atual = atual.parentElement, nivel += 1) {
+    const ariaCurrent = normalizeText(atual.getAttribute?.("aria-current") || "");
+    const ariaSelected = atual.getAttribute?.("aria-selected") === "true";
+    const classe = String(atual.getAttribute?.("class") || "");
+    if (
+      ariaCurrent === "page" || ariaCurrent === "true" || ariaSelected ||
+      /\b(active|current|selected|ativo|selecionado|p-highlight)\b/i.test(classe)
+    ) return true;
+    if (atual === paginador) break;
+  }
+  return false;
+}
 
 /** Botões de página (números, próximo e anterior) da lista de itens. */
-function controlesDePagina() {
+function controlesDePagina({ preservarCompra = false } = {}) {
   const candidatos = [];
+  const textoProximo = preservarCompra ? TEXTO_PROXIMO_CNET : TEXTO_PROXIMO;
+  const textoAnterior = preservarCompra ? TEXTO_ANTERIOR_CNET : TEXTO_ANTERIOR;
+  const seletorInterativo = 'button, a, [role="button"], [onclick], [tabindex]';
 
   for (const doc of collectDocuments()) {
-    for (const el of consultarProfundo(doc, `${SELETOR_PAGINACAO}, button, a, [role="button"]`)) {
-      if (!isVisible(el) || el.disabled) continue;
-      const rotulo = normalizeText(
-        `${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""}`,
-      );
+    for (const el of consultarProfundo(doc, `${SELETOR_PAGINACAO}, ${seletorInterativo}`)) {
+      if (!el.matches?.(seletorInterativo) || !isVisible(el)) continue;
+      const paginador = el.closest?.(SELETOR_PAGINACAO);
+      if (!paginador || controleDePaginaDesabilitado(el, paginador)) continue;
+
+      const texto = normalizeText(el.textContent || "");
+      const ariaLabel = el.getAttribute("aria-label") || "";
+      const titulo = el.getAttribute("title") || "";
+      const rotulo = normalizeText(`${texto} ${ariaLabel} ${titulo}`);
+      const classes = normalizeText(el.getAttribute("class") || "");
       if (!rotulo || TEXTO_PROIBIDO_PAGINACAO.test(rotulo)) continue;
 
-      const emPaginacao = Boolean(el.closest?.(SELETOR_PAGINACAO));
       // Fora de um paginador conhecido, "Anterior"/"Voltar" pode ser o botão
       // que sai da compra e retorna à busca. Nunca o trate como paginação.
-      if (!emPaginacao) continue;
-
-      const numero = /^\d+$/.test(rotulo) ? rotulo : "";
-      const proximo = TEXTO_PROXIMO.test(rotulo);
-      const anterior = !proximo && TEXTO_ANTERIOR.test(rotulo);
+      const numero = numeroDaPaginaDoControle(texto, ariaLabel, titulo);
+      const proximo = textoProximo.test(rotulo) || /(?:^|[\s_-])(?:next|proxima|avancar)(?:[\s_-]|$)/i.test(classes);
+      const anterior = !proximo && (
+        textoAnterior.test(rotulo) || /(?:^|[\s_-])(?:previous|prev|anterior)(?:[\s_-]|$)/i.test(classes)
+      );
       if (!numero && !proximo && !anterior) continue;
-      const ativo =
-        el.getAttribute("aria-current") === "page" ||
-        /\b(active|current|selected|ativo|selecionado)\b/i.test(String(el.className || "")) ||
-        (el.parentElement ? /\b(active|current|selected|ativo|selecionado)\b/i.test(String(el.parentElement.className || "")) : false);
 
-      candidatos.push({ el, numero, proximo, anterior, ativo, emPaginacao });
+      candidatos.push({ el, numero, proximo, anterior, ativo: numero ? elementoDaPaginaAtivo(el, paginador) : false });
     }
   }
 
   if (candidatos.length === 0) return null;
 
   const paginas = new Map();
-  for (const c of candidatos) if (c.numero) paginas.set(c.numero, c.el);
+  for (const candidato of candidatos) if (candidato.numero) paginas.set(candidato.numero, candidato.el);
 
-  const ativo = candidatos.find((c) => c.ativo && c.numero);
+  const ativo = candidatos.find((candidato) => candidato.ativo && candidato.numero);
   return {
     paginas,
-    proximo: candidatos.find((c) => c.proximo)?.el || null,
-    anterior: candidatos.find((c) => c.anterior)?.el || null,
+    proximo: candidatos.find((candidato) => candidato.proximo)?.el || null,
+    anterior: candidatos.find((candidato) => candidato.anterior)?.el || null,
     atual: ativo?.numero || "",
   };
+}
+
+/** Clique em paginação do CNET público sem submeter formulário ou sair da compra. */
+function clicarPaginacaoSemNavegar(el) {
+  if (!el || !el.isConnected || !isVisible(el)) return false;
+  const paginador = el.closest?.(SELETOR_PAGINACAO);
+  if (!paginador || controleDePaginaDesabilitado(el, paginador)) return false;
+  const form = el.form || el.closest?.("form");
+  const antes = String(el.ownerDocument?.location?.href || location.href);
+  const urlAntes = new URL(antes);
+  const href = el.matches?.("a[href]") ? String(el.getAttribute("href") || "").trim() : "";
+
+  if (href && href !== "#" && !href.startsWith("#") && !/^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href)) {
+    let destino;
+    try { destino = new URL(href, antes); } catch { return false; }
+    if (destino.origin !== urlAntes.origin || destino.pathname !== urlAntes.pathname) return false;
+    const compraAtual = urlAntes.searchParams.get("compra");
+    if (compraAtual && destino.searchParams.get("compra") !== compraAtual) return false;
+  }
+
+  const prevenirDefault = (evento) => evento.preventDefault();
+  let tipoAlterado = false;
+  let tinhaTipoOriginal = false;
+  let tipoOriginal = null;
+  if (form && el.matches?.("button, input") && ["submit", "reset", "image"].includes(String(el.type).toLowerCase())) {
+    tipoAlterado = true;
+    tinhaTipoOriginal = el.hasAttribute("type");
+    tipoOriginal = el.getAttribute("type");
+    el.setAttribute("type", "button");
+  }
+  el.addEventListener("click", prevenirDefault, true);
+  form?.addEventListener("submit", prevenirDefault, true);
+  try {
+    el.click();
+  } catch {
+    return false;
+  } finally {
+    el.removeEventListener("click", prevenirDefault, true);
+    form?.removeEventListener("submit", prevenirDefault, true);
+    if (tipoAlterado && tinhaTipoOriginal) el.setAttribute("type", tipoOriginal || "");
+    else if (tipoAlterado) el.removeAttribute("type");
+  }
+
+  const depois = new URL(String(el.ownerDocument?.location?.href || location.href));
+  const compraDepois = depois.searchParams.get("compra");
+  return depois.origin === urlAntes.origin && depois.pathname === urlAntes.pathname &&
+    (!urlAntes.searchParams.get("compra") || compraDepois === urlAntes.searchParams.get("compra"));
 }
 
 /** Os números dos itens que estão no DOM agora (para saber se a página mudou). */
@@ -2626,42 +2723,55 @@ async function esperarItemNaPagina(itemNumber, tempoMs = 2500) {
 }
 
 /** Vai para a página número `numero` (1, 2, 3...). */
-async function irParaPagina(numero) {
+async function irParaPagina(numero, { preservarCompra = false } = {}) {
   const alvo = String(numero);
-  const controles = controlesDePagina();
+  const controles = controlesDePagina({ preservarCompra });
   if (!controles || controles.atual === alvo) return Boolean(controles && controles.atual === alvo);
 
   const botao = controles.paginas.get(alvo);
   if (!botao) return false;
 
   const antes = assinaturaDaLista();
-  if (!clicarDeVerdade(botao)) return false;
+  const clicou = preservarCompra ? clicarPaginacaoSemNavegar(botao) : clicarDeVerdade(botao);
+  if (!clicou) return false;
   return esperarListaMudar(antes);
 }
 
-/** Avança uma página (seta "próxima"). */
-async function avancarPagina() {
-  const controles = controlesDePagina();
-  if (!controles?.proximo) return false;
-  const antes = assinaturaDaLista();
-  if (!clicarDeVerdade(controles.proximo)) return false;
-  return esperarListaMudar(antes);
+/** Avança uma página. Prefere o número seguinte antes de usar uma seta ambígua. */
+async function avancarPagina({ preservarCompra = false } = {}) {
+  const controles = controlesDePagina({ preservarCompra });
+  if (!controles) return false;
+
+  const paginaAtual = Number(controles.atual);
+  const paginaSeguinte = Number.isInteger(paginaAtual) && paginaAtual > 0
+    ? controles.paginas.get(String(paginaAtual + 1))
+    : null;
+  const alvos = [...new Set([paginaSeguinte, controles.proximo].filter(Boolean))];
+
+  for (const botao of alvos) {
+    const antes = assinaturaDaLista();
+    const clicou = preservarCompra ? clicarPaginacaoSemNavegar(botao) : clicarDeVerdade(botao);
+    if (clicou && await esperarListaMudar(antes)) return true;
+  }
+  return false;
 }
 
 /** Volta para a primeira página (para varrer a lista desde o começo). */
-async function irParaPrimeiraPagina() {
-  const controles = controlesDePagina();
+async function irParaPrimeiraPagina({ preservarCompra = false } = {}) {
+  const controles = controlesDePagina({ preservarCompra });
   if (!controles) return false;
   if (controles.atual === "1") return true;
-  if (await irParaPagina(1)) return true;
+  if (await irParaPagina(1, { preservarCompra })) return true;
 
   // Sem botão "1": volta com a seta de anterior até o começo.
   for (let i = 0; i < 50; i += 1) {
-    const atual = controlesDePagina();
+    const atual = controlesDePagina({ preservarCompra });
     if (!atual?.anterior || atual.atual === "1") break;
     const antes = assinaturaDaLista();
-    if (!clicarDeVerdade(atual.anterior)) break;
-    if (!(await esperarListaMudar(antes))) break;
+    const clicou = preservarCompra
+      ? clicarPaginacaoSemNavegar(atual.anterior)
+      : clicarDeVerdade(atual.anterior);
+    if (!clicou || !(await esperarListaMudar(antes))) break;
   }
   return true;
 }
@@ -2869,11 +2979,15 @@ async function readPageItems(options = {}) {
     if (tabela) return lerItensDaTabelaFonte(tabela, fonte, { expandir, delay });
 
     // Algumas telas do CNET Mobile mostram os itens como cartões em vez de tabela.
-    // Mantém o leitor do ComprasNet como fallback para esses layouts.
-    // Acompanhamento público do CNET não usa a paginação do formulário de
-    // propostas. Não clique em controles genéricos de "Voltar"/"Próximo":
-    // eles podem sair da compra e voltar à pesquisa durante a importação.
-    const resultado = await readLegacyComprasNetItems({ expandir, delay, paginar: false });
+    // Mantém o leitor legado nesses layouts e percorre as páginas somente por
+    // controles reconhecidos dentro do paginador. O clique cancela submits e
+    // rejeita links que sairiam da rota ou da compra atual.
+    const resultado = await readLegacyComprasNetItems({
+      expandir,
+      delay,
+      paginar: true,
+      preservarCompra: true,
+    });
     if (resultado.ok) return { ...resultado, origem: fonte.nome };
     return {
       ...resultado,
@@ -3194,7 +3308,7 @@ function readRadarIdentificacao() {
   };
 }
 
-async function readLegacyComprasNetItems({ expandir = true, delay = 400, paginar = true } = {}) {
+async function readLegacyComprasNetItems({ expandir = true, delay = 400, paginar = true, preservarCompra = false } = {}) {
   const identificacao = readPageIdentificacao();
   rodandoAgora = true;
   mostrarPainel();
@@ -3205,14 +3319,14 @@ async function readLegacyComprasNetItems({ expandir = true, delay = 400, paginar
   const vistos = new Set();
   abortRequested = false;
 
-  const controles = paginar ? controlesDePagina() : null;
+  const controles = paginar ? controlesDePagina({ preservarCompra }) : null;
   const temPaginacao = Boolean(controles?.paginas?.size || controles?.proximo);
   let paginasLidas = 0;
   let expandidos = 0;
   let expandiuTodos = false;
 
   // Navega pelas páginas (10 itens por página no ComprasNet) e junta tudo.
-  if (temPaginacao) await irParaPrimeiraPagina();
+  if (temPaginacao) await irParaPrimeiraPagina({ preservarCompra });
 
   for (let pagina = 1; pagina <= 50; pagina += 1) {
     if (abortRequested) break;
@@ -3245,11 +3359,11 @@ async function readLegacyComprasNetItems({ expandir = true, delay = 400, paginar
     }
 
     if (!temPaginacao || novos === 0) break;
-    if (!(await avancarPagina())) break;
+    if (!(await avancarPagina({ preservarCompra }))) break;
   }
 
   if (temPaginacao) {
-    await irParaPrimeiraPagina(); // devolve a página como estava (início)
+    await irParaPrimeiraPagina({ preservarCompra }); // devolve a página ao início
     avisos.push(`Páginas lidas: ${paginasLidas}.`);
   }
 

@@ -1,5 +1,5 @@
 {
   "recomendada": "1.7.20",
-  "descricaoAtual": "BETA 1.8.11: a leitura dos cartões do CNET público não navega por controles genéricos de paginação ou “Voltar para pesquisa”. Só reconhece paginação dentro de um contêiner próprio e mantém a URL da compra durante a importação. A regressão usa 93224206000072026 e confirma itens lidos sem submit, navegação ou retorno à busca. Mantém 1.7.20 como estável recomendada. O Modo Disputa continua BETA: envio real de lances ainda não foi validado ao vivo; só opera com polegar vermelho para baixo, confirma compra/UASG e confere o Valor Mínimo antes de cada clique.",
+  "descricaoAtual": "BETA 1.8.12: a leitura dos cartões do CNET público percorre as páginas da compra, incluindo a página 2, sem acionar “Voltar para pesquisa”. Só usa controles reconhecidos do paginador, cancela submit e rejeita destinos fora da mesma compra. A regressão usa 93224206000072026 e confirma itens das páginas 1 e 2 sem submit, navegação ou retorno à busca. Mantém 1.7.20 como estável recomendada. O Modo Disputa continua BETA: envio real de lances ainda não foi validado ao vivo; só opera com polegar vermelho para baixo, confirma compra/UASG e confere o Valor Mínimo antes de cada clique.",
   "experimentalAtual": true
 }

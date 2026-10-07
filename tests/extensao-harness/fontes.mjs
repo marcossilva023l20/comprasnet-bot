@@ -257,9 +257,6 @@ export async function rodarFontes() {
         <button id="mostrar-todos" aria-expanded="false">Mostrar todos os itens</button>
         <a id="link-de-navegacao" href="/comprasnet-web/public/outra-compra" aria-expanded="false">Mostrar todos os itens</a>
         <button id="voltar-pesquisa" type="submit">Voltar para pesquisa</button>
-        <nav class="pagination" aria-label="Paginação">
-          <button>2</button><button aria-label="Próxima página">›</button>
-        </nav>
         <div id="lista-itens" style="display:none">
           <section class="item" data-item="1">
             <div class="cabecalho">
@@ -327,7 +324,9 @@ export async function rodarFontes() {
           <div><span>Valor estimado (unitário)</span><span>R$ 176,0000</span></div>
         </div>
       </section>
-      <nav class="pagination" aria-label="Paginação"><button>2</button><button aria-label="Próxima página">›</button></nav>
+      <nav class="pagination" aria-label="Paginação">
+        <button aria-current="page">1</button><button aria-label="Próxima página" disabled>›</button>
+      </nav>
     </body></html>`;
     const { window, enviar } = montarPagina(html, {
       url,
@@ -354,6 +353,131 @@ export async function rodarFontes() {
     const fonte = window.eval("detectarFonteItens()");
     checar(fonte.id === "comprasnet", `classificou cadastro seguro como ComprasNet (${fonte.id})`);
     checar(fonte.nome === "ComprasNet", `nome da fonte corresponde à tela segura (${fonte.nome})`);
+    window.close();
+  }
+
+  console.log("\n── 10) CNET público: lê todas as páginas sem enviar formulário nem voltar à pesquisa ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra?compra=93224206000072026";
+    const eventos = { pagina1: 0, pagina2: 0, proxima: 0, primeira: 0, ultima: 0, voltar: 0, submits: 0 };
+    const card = (numero, descricao, valor) => `
+      <section class="item-card" data-item="${numero}">
+        <div class="item-heading"><span>${numero}</span><span>${descricao}</span></div>
+        <div class="resumo">
+          <div><span>Qtde solicitada</span><span>1</span></div>
+          <div><span>Unidade de fornecimento</span><span>Unidade</span></div>
+          <div><span>Valor estimado (unitário)</span><span>R$ ${valor}</span></div>
+        </div>
+      </section>`;
+    const html = `<!doctype html><html><body>
+      <form id="form-compra" action="/comprasnet-web/public/compras">
+        <button id="voltar-pesquisa" type="submit">Voltar para pesquisa</button>
+        <div id="lista-itens">${card(10, "FITA ISOLANTE ELÉTRICA", "14,1500")}</div>
+        <nav id="paginador" class="pagination" aria-label="Paginação">
+          <button id="primeira" aria-label="Primeira página" disabled>«</button>
+          <button id="anterior" aria-label="Página anterior" disabled>‹</button>
+          <button id="pagina-1" class="active" aria-current="page">1</button>
+          <button id="pagina-2" aria-label="Página 2">2</button>
+          <button id="proxima" aria-label="Próxima página">›</button>
+          <button id="ultima" aria-label="Última página">»</button>
+        </nav>
+      </form>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url,
+      preparar: (w) => {
+        let paginaAtual = 1;
+        const atualizarPagina = (pagina) => {
+          paginaAtual = pagina;
+          w.document.getElementById("lista-itens").innerHTML = pagina === 1
+            ? card(10, "FITA ISOLANTE ELÉTRICA", "14,1500")
+            : card(11, "CABO FLEXÍVEL", "22,9000");
+          w.document.getElementById("pagina-1").className = pagina === 1 ? "active" : "";
+          w.document.getElementById("pagina-1").setAttribute("aria-current", pagina === 1 ? "page" : "false");
+          w.document.getElementById("pagina-2").className = pagina === 2 ? "active" : "";
+          w.document.getElementById("pagina-2").setAttribute("aria-current", pagina === 2 ? "page" : "false");
+          w.document.getElementById("primeira").disabled = pagina === 1;
+          w.document.getElementById("anterior").disabled = pagina === 1;
+          w.document.getElementById("proxima").disabled = pagina === 2;
+          w.document.getElementById("ultima").disabled = pagina === 2;
+        };
+        w.document.getElementById("form-compra").addEventListener("submit", (event) => {
+          eventos.submits += 1;
+          event.preventDefault();
+        });
+        w.document.getElementById("voltar-pesquisa").addEventListener("click", () => { eventos.voltar += 1; });
+        w.document.getElementById("pagina-1").addEventListener("click", () => {
+          eventos.pagina1 += 1;
+          atualizarPagina(1);
+        });
+        w.document.getElementById("pagina-2").addEventListener("click", () => {
+          eventos.pagina2 += 1;
+          atualizarPagina(2);
+        });
+        w.document.getElementById("proxima").addEventListener("click", () => {
+          eventos.proxima += 1;
+          atualizarPagina(2);
+        });
+        w.document.getElementById("primeira").addEventListener("click", () => {
+          eventos.primeira += 1;
+          atualizarPagina(1);
+        });
+        w.document.getElementById("ultima").addEventListener("click", () => {
+          eventos.ultima += 1;
+          atualizarPagina(2);
+        });
+        w.__paginaAtual = () => paginaAtual;
+      },
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: false, delay: 0 });
+    checar(resultado.ok, `leitura paginada concluiu (${resultado.error || "sem erro"})`);
+    checar(
+      JSON.stringify(resultado.itens?.map((item) => item.numeroItem)) === JSON.stringify(["10", "11"]),
+      `juntou itens das páginas 1 e 2 (${JSON.stringify(resultado.itens?.map((item) => item.numeroItem))})`,
+    );
+    checar(resultado.paginas === 2, `confirmou duas páginas lidas (${resultado.paginas})`);
+    checar(window.__paginaAtual() === 1, `devolveu a lista à primeira página (${window.__paginaAtual()})`);
+    checar(eventos.pagina2 === 1 && eventos.pagina1 === 1, `usou os números 2 e 1 para percorrer e restaurar a paginação (${JSON.stringify(eventos)})`);
+    checar(eventos.proxima === 0 && eventos.ultima === 0, `não confundiu “próxima” com a seta de última página (${JSON.stringify(eventos)})`);
+    checar(eventos.voltar === 0 && eventos.submits === 0, `não clicou em “Voltar para pesquisa” nem submeteu o formulário (${JSON.stringify(eventos)})`);
+    checar(window.location.href === url, `permaneceu na URL da compra (${window.location.href})`);
+    window.close();
+  }
+
+  console.log("\n── 11) CNET público: rejeita um controle paginador cujo destino é a pesquisa ──");
+  {
+    const url = "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra?compra=93224206000072026";
+    const eventos = { pesquisa: 0, submits: 0 };
+    const html = `<!doctype html><html><body>
+      <form id="form-compra" action="/comprasnet-web/public/compras">
+        <button id="voltar-pesquisa" type="submit">Voltar para pesquisa</button>
+        <section class="item-card" data-item="10">
+          <div class="item-heading"><span>10</span><span>FITA ISOLANTE ELÉTRICA</span></div>
+          <div class="resumo"><div><span>Qtde solicitada</span><span>1</span></div><div><span>Valor estimado (unitário)</span><span>R$ 14,1500</span></div></div>
+        </section>
+        <nav class="pagination" aria-label="Paginação">
+          <button aria-current="page">1</button>
+          <a id="link-pesquisa" href="/comprasnet-web/public/compras" aria-label="Próxima página">›</a>
+        </nav>
+      </form>
+    </body></html>`;
+    const { window, enviar } = montarPagina(html, {
+      url,
+      preparar: (w) => {
+        w.document.getElementById("form-compra").addEventListener("submit", (event) => {
+          eventos.submits += 1;
+          event.preventDefault();
+        });
+        w.document.getElementById("link-pesquisa").addEventListener("click", () => { eventos.pesquisa += 1; });
+        w.document.getElementById("voltar-pesquisa").addEventListener("click", () => { eventos.pesquisa += 1; });
+      },
+    });
+
+    const resultado = await enviar({ action: "read_source_items", expandir: false, delay: 0 });
+    checar(resultado.ok && resultado.itens?.length === 1, `leu os itens visíveis sem seguir um destino inseguro (${resultado.itens?.length})`);
+    checar(eventos.pesquisa === 0 && eventos.submits === 0, `rejeitou o link para pesquisa sem clique ou submit (${JSON.stringify(eventos)})`);
+    checar(window.location.href === url, `continuou na compra original (${window.location.href})`);
     window.close();
   }
 

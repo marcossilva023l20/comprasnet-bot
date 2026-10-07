@@ -18,6 +18,12 @@
     "experimental": false
   },
   {
+    "versao": "1.8.11",
+    "ref": "6df414b9c86c5ac615ea082df30fdca13afa1a46",
+    "descricao": "BETA anterior: mantinha o leitor CNET na página da compra, mas lia somente a página atual. Envio de lances reais ainda não foi validado ao vivo.",
+    "experimental": true
+  },
+  {
     "versao": "1.8.10",
     "ref": "91b8a745ab8d5fa3a4ff1b448293b5f62ac8406a",
     "descricao": "BETA anterior: protege os cliques de expansão no CNET contra envio de formulário e links de navegação. Envio de lances reais ainda não foi validado ao vivo.",
